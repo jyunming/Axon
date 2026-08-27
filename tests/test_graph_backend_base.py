@@ -546,20 +546,13 @@ class TestDataTypes:
 
 
 class TestPhase2ShimRemoval:
-    @pytest.mark.xfail(
-        strict=False,
-        reason=(
-            "Phase 2 target: AxonBrain should not inherit from GraphRagMixin once "
-            "all graph ops are fully routed through self._graph_backend.*. "
-            "Flip to xfail(strict=True) or remove when Phase 2 is complete."
-        ),
-    )
     def test_axon_brain_does_not_inherit_graphragmixin(self):
         """Verify via AST (not grep) that AxonBrain no longer inherits GraphRagMixin.
 
-        This test is currently XFAIL — it marks the Phase 2 architectural goal.
-        When AxonBrain's GraphRagMixin inheritance is removed, this test will pass
-        and should be promoted to a strict (non-xfail) assertion.
+        M2 ownership-inversion target: AxonBrain no longer inherits GraphRagMixin
+        directly — GraphRagMixin now lives only on GraphRagEngine, reachable
+        through self._graph_backend._engine. This assertion is strict (no
+        longer xfail) now that the inversion has landed.
         """
         import ast
         from pathlib import Path

@@ -59,11 +59,12 @@ every occurrence of those four attribute names outside
 `src/axon/graph_rag.py`/`src/axon/graph_backends/graphrag_backend.py`, plus
 reading the `GraphBackend` Protocol, all four concrete backends, and the
 test infra) found ~176 occurrences across 12 files, of very different risk —
-so M2 is being landed in phases rather than one sweep. **`AxonBrain` still
-inherits `GraphRagMixin`** (`src/axon/main.py` class declaration) and the
+so M2 was landed in phases rather than one sweep. **M2 is now complete**:
+`AxonBrain` no longer inherits `GraphRagMixin` (`src/axon/main.py` class
+declaration), and the
 `test_graph_backend_base.py::TestPhase2ShimRemoval::test_axon_brain_does_not_inherit_graphragmixin`
-canary stays `@pytest.mark.xfail(strict=False)` until Phase 4 below lands —
-don't flip it early.
+canary — along with `test_architecture.py::TestFullComplianceTarget` — is
+strict (the `xfail` marker removed), not aspirational.
 
 ### Phase 1 — SHIPPED (this branch)
 
@@ -186,23 +187,125 @@ in `switch_project`, and all of `main.py::ingest()`; all of `query_router.py`;
   remains its own scoped follow-up (the "other half of v0.4" — see
   `docs/architecture/DYNAMIC_GRAPH_ROADMAP.md`).
 
-### Phase 4 — `main.py`'s load/init/switch paths + `ingest()` (biggest, riskiest)
+### Phase 4 — SHIPPED (`main.py`'s load/init/switch paths + `ingest()`, the ownership inversion)
 
-- `__init__`'s load block, `switch_project`'s reload-from-disk block, and
-  the ~140-line descendant-project graph-merge block in `switch_project`
-  (reads raw msgpack/JSON off disk and hand-merges into all four graph
-  dicts) — none of these have a backend method to redirect to yet; need new
-  `GraphBackend` Protocol methods (e.g. `load()`, `merge_descendants()`).
-- `main.py::ingest()`'s ~370-line entity/relation/claims extraction and
-  merge pipeline — `GraphRagBackend.ingest()` today is a confirmed no-op
-  (bookkeeping only; real extraction happens entirely inside
-  `AxonBrain.ingest()`). Closing this out means designing new Protocol
-  methods (e.g. `add_entities`/`add_relations`/`add_claims`) *and* moving
-  the extraction logic behind them — not a mechanical redirect.
-- Only once this phase lands: flip
-  `test_axon_brain_does_not_inherit_graphragmixin` to `strict=True` (or
-  remove the xfail decorator) and actually drop `GraphRagMixin` from
-  `AxonBrain`'s base classes.
+The biggest, riskiest phase — the actual state ownership move, not a
+mechanical redirect. Four standalone bug fixes landed first, each with its
+own regression test, before the inversion itself:
+
+1. **Descendant-merge loop-scope bug** (`switch_project`): the
+   entity-embeddings/claims/community-summaries merge blocks were sitting
+   outside the `for desc in descendants:` loop, so only the *last*
+   descendant's data ever merged (plus a compounding `NameError` on the
+   common code path). Fixed and relocated verbatim into the new engine's
+   `merge_descendants()` below.
+2. **Shared atomic-write helper** (`src/axon/_atomic_persist.py`): extracted
+   from `GraphRagMixin._gr_write_json_if_changed`, closing a write-frequency
+   divergence where `CodeGraphMixin._save_code_graph` (MRO-shadowed, dead
+   code confirmed) always wrote instead of skipping unchanged saves.
+3. **`GraphBackend.clear(persist: bool = False)`** widened so
+   `collection_ops.clear_active_project()`'s `/clear` path persists the
+   now-empty state through the backend instead of dead-lettering seven
+   `brain._save_*` calls that silently stopped existing once the mixin
+   dropped.
+4. **Deleted dead `_save_gr_cache`/`_load_gr_cache`** — zero call sites,
+   confirmed independently of this refactor.
+
+A real production **deadlock** was also found and fixed while wiring the
+Phase 2 parity fixtures (landed standalone, before the inversion):
+`_rebuild_communities` held `_graph_lock` (an `RLock`) across its entire
+body while dispatching work onto `self._executor`; worker threads then
+called `_gr_cache_get`, which also acquired `_graph_lock` — reentrant only
+for the *dispatching* thread, so every worker blocked forever. Fixed with a
+dedicated leaf lock, `_gr_cache_lock`, never acquired while holding
+`_graph_lock` or `_traversal_cache_lock`. Regression test:
+`tests/test_graphrag_parity.py::TestCommunitySummarizationDoesNotDeadlock`
+(runs `finalize()` in a daemon thread with a 30s join timeout).
+
+**The inversion itself:**
+
+- New `src/axon/graph_backends/graphrag_engine.py` —
+  `GraphRagEngine(GraphRagMixin)`. Keeps all ~90 `GraphRagMixin` methods
+  completely unchanged; `self` inside them is now the engine, not the
+  brain. A handful of genuinely brain-owned resources (`config`, `llm`,
+  `embedding`, `vector_store`, `_own_vector_store`, `_executor`,
+  `_community_rebuild_lock`) are proxied back onto the brain via
+  `@property`. Locks and caches (`_graph_lock`, `_gr_cache_lock`,
+  `_traversal_cache*`, `_entity_token_index`) are **not** proxied — they're
+  self-contained via `GraphRagMixin`'s own lazy-init `@property` pattern
+  once eagerly initialised in `GraphRagEngine.__init__` (mirroring the
+  identical TOCTOU-avoidance rationale that used to live inline in
+  `AxonBrain.__init__`).
+  - `load()` absorbs `__init__`'s load block + `switch_project`'s
+    reload-from-disk block, same `_load_*` call order.
+  - `merge_descendants()` absorbs the (bug-fixed) descendant-merge block.
+  - `ingest_chunks()` absorbs `ingest()`'s ~450-line entity/relation/claims
+    extraction and merge pipeline verbatim. Chunk-eligibility filtering
+    (stage 1) stayed on `AxonBrain.ingest()` as backend-agnostic policy.
+  - `expand_with_entity_graph()` moved verbatim from
+    `QueryRouterMixin._expand_with_entity_graph()` — confirming the
+    original roadmap's guess (new `add_entities`/`add_relations`/
+    `add_claims` Protocol methods) wasn't the right shape; a GraphRAG-
+    specific bridge method, not a Protocol addition, was.
+- `graphrag_backend.py` rewritten to compose `self._engine`; all Protocol
+  methods + `close()`/`flush()` retarget `self._brain` → `self._engine`;
+  `ingest()` is real now (`self._engine.ingest_chunks(chunks)` — previously
+  a confirmed no-op with zero production callers); new bridge methods
+  `local_search_context()`, `global_search_map_reduce()`,
+  `classify_query_needs_graphrag()`, `ensure_community_summaries()` (the
+  last one subsumes a `_community_levels`-and-not-`_community_summaries`
+  lazy guard that used to be duplicated in `query_router.py`'s `query()`
+  and `query_stream()`).
+- `main.py`: `GraphRagMixin` dropped from `AxonBrain`'s bases; both load
+  blocks and the descendant-merge block deleted (relocated onto the
+  engine); `ingest()`'s stage-1 filtering + the backend call replace the
+  old inline extraction pipeline; `finalize_ingest()`/`close()` route
+  through the backend/engine; the two dead `_rebuild_entity_token_index()`
+  calls (whose only purpose was serving the now-removed load blocks)
+  deleted; `finalize_graph` removed, its one real caller (`cli.py`, not a
+  dead fallback like the other three sites) retargeted to
+  `brain._graph_backend.finalize(True)`.
+- `query_router.py`: `_expand_with_entity_graph`'s body replaced with a
+  hasattr-guarded bridge call to
+  `self._graph_backend.expand_with_entity_graph(...)`; the four duplicated
+  `query()`/`query_stream()` guard blocks replaced with the
+  `has_community_summaries()`/`ensure_community_summaries()`/
+  `global_search_map_reduce()` bridge pattern.
+- `collection_ops.py`/`repl.py`/`api_routes/graph.py`/
+  `api_routes/governance.py`: the direct
+  `brain._community_build_in_progress = False` assignment folded into
+  `GraphRagEngine._reset_graph_state()` as a 15th field; the 3 dead legacy
+  `finalize_graph` fallback branches deleted (`_graph_backend` is
+  unconditionally attached, `finalize` is a required Protocol method); the
+  3 `_community_build_in_progress` readers redirected to `backend.status()`.
+- `graph_render.py`'s `_resolve_graph_payload()` fallback (the one
+  remaining reference to a `build_graph_payload()` that no longer resolves
+  via MRO on `brain`) now returns `{"nodes": [], "links": []}` — a
+  defensive edge case, not the common path, since `_graph_backend` is
+  unconditionally attached and `graph_data()` is a required Protocol
+  method.
+- **Test migration** (comparable in size to the production port, as
+  predicted): `test_main.py`'s ~50+ direct mixin-method calls repointed to
+  `brain._graph_backend._engine`; a new shared test double,
+  `tests/_graphrag_engine_test_utils.py`
+  (`_bare_graphrag_engine()`/`_TestGraphRagEngine`), extracted so
+  `MagicMock(spec=AxonBrain)`-based fixtures across `test_main.py`,
+  `test_cost_control.py`, `test_graphrag_backend_bugs.py`,
+  `test_graphrag_tuning_fixes.py`, and others can bind real
+  `GraphRagMixin` methods without `AxonBrain`'s narrower post-inversion
+  spec rejecting their internal calls to other, un-enumerated GraphRagMixin
+  methods (e.g. `self._gr_log_profile`, `self.config`). Several tests
+  across the wider suite were also found relying on a real (not
+  tmp-isolated) `axon_store_base`, silently masked pre-inversion by
+  fixtures resetting `brain._entity_graph` after construction; those got
+  either isolated or given an explicit token-index rebuild where the
+  masking no longer applied.
+- **Canaries flipped**: `xfail` removed from
+  `test_graph_backend_base.py::TestPhase2ShimRemoval::test_axon_brain_does_not_inherit_graphragmixin`
+  and `test_architecture.py::TestFullComplianceTarget`; `_KNOWN_FALLBACK_FILES`
+  pinned counts updated (`repl.py` 4→3, `api_routes/graph.py` 1→0,
+  `api_routes/governance.py` 1→0, `query_router.py`'s 7-violation entry
+  removed entirely — `_expand_with_entity_graph` no longer lives there).
 
 ## Priority 2 — v1.0 hardening test debt
 
