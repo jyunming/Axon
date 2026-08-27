@@ -43,16 +43,26 @@ Matches the pipe-delimited format that `_extract_entities` and
 
 ### `expected_graph.json` format
 
+The fixture files are the source of truth for this schema — it's looser
+than a first-draft sketch might suggest, because entity/relation extraction
+isn't fully deterministic and exact-match assertions on every field are
+brittle:
+
 ```json
 {
-  "entities": {
-    "EntityName": {"type": "PRODUCT", "description": "..."}
-  },
-  "relations": [
-    {"subject": "A", "relation": "built_on", "object": "B", "strength": 9}
-  ]
+  "_comment": "optional human-readable note",
+  "expected_entity_keys": ["EntityName", "..."],
+  "expected_entity_types": {"EntityName": "PRODUCT"},
+  "expected_relation_pairs": [["Subject", "Object"]]
 }
 ```
+
+`expected_entity_keys` lists every entity name the canned extraction
+should produce (matched case-insensitively against `_entity_graph`'s
+lowercased keys). `expected_entity_types` only needs to cover the subset
+worth pinning a type for — not every entity. `expected_relation_pairs` is
+`[subject, object]` pairs only (no relation label/strength assertions —
+those aren't stable enough across extraction runs to pin).
 
 ## Fixture Scenarios
 
@@ -67,18 +77,27 @@ Matches the pipe-delimited format that `_extract_entities` and
 
 ## How the mock works
 
-In `test_graphrag_parity.py`, `self.llm.complete` is patched with a side effect
-that looks up `canned_extraction.json` based on the prompt prefix:
+In `test_graphrag_parity.py`, `self.llm.complete` is patched with a side
+effect keyed on the **prompt body**, not `system_prompt` — the real
+prompts (`graph_rag.py`'s `_extract_entities`/`_extract_relations`) put
+their instruction text in the user prompt, and `system_prompt` is just a
+short role label (`"You are a named entity extraction specialist."`) that
+never contains the substrings a naive matcher might reach for:
 
 ```python
-def _canned_llm(prompt, system_prompt="", **kwargs):
-    if "named entities" in system_prompt:
+def _canned_llm(prompt, system_prompt=None, **kwargs):
+    prompt_l = prompt.lower()
+    if "extract the key named entities" in prompt_l:
         return fixture["entities"]
-    if "relationships" in system_prompt:
+    if "extract key relationships" in prompt_l:
         return fixture["relations"]
-    return ""
+    return "no-op summary"  # community-summary prompts etc. — falls back
+                             # gracefully to plain text, doesn't raise
 ```
 
 This intercepts exactly the two `llm.complete()` calls made by
 `_extract_entities` and `_extract_relations`, leaving all parsing,
-graph-building, and community-detection logic running on real code.
+graph-building, and community-detection logic running on real code. Test
+config must also set `graph_rag_llm_fused_extraction=False` — otherwise
+`_extract_graph_llm_batches` routes through a different, JSON-based
+combined-extraction prompt this mock doesn't cover.

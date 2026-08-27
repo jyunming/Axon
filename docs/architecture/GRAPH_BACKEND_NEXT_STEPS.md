@@ -113,18 +113,38 @@ Mechanical redirects + two real correctness bugs fixed along the way:
 in `switch_project`, and all of `main.py::ingest()`; all of `query_router.py`;
 `graph_render.py::build_graph_payload()`.
 
-### Phase 2 — next up
+### Phase 2 — SHIPPED
 
-- Move `graph_render.py::build_graph_payload()`'s body (reads
-  `_entity_graph`/`_relation_graph` directly to build the nodes/links list)
-  into `graph_rag.py` or `graphrag_backend.py` — it's called by
-  `GraphRagBackend.graph_data()` but currently lives outside the whitelist.
-- Wire the real fixtures at `tests/fixtures/graphrag_parity/*` (6 scenarios:
-  basic_entity, multi_entity, relations, community, empty_doc,
-  unicode_stress) into `tests/test_graphrag_parity.py` — that suite is
-  currently pure `MagicMock` adapter-contract testing and never actually
-  exercises real ingest → extraction → community-build → query → render
-  end to end, despite the roadmap's M1 section describing exactly that.
+- Moved `graph_render.py::build_graph_payload()`'s body verbatim into
+  `graph_rag.py` (`GraphRagMixin`), same method name — `GraphRagBackend
+  .graph_data()`'s existing `self._brain.build_graph_payload()` call and
+  every other production caller keep working unchanged via MRO, now
+  resolving from a whitelisted file. `tests/test_graph_rag.py`'s
+  `MockBrain` (the only other `GraphRenderMixin` consumer besides
+  `AxonBrain`) updated to `class MockBrain(GraphRenderMixin,
+  GraphRagMixin)` to keep resolving the method after the move.
+- Wired the real fixtures at `tests/fixtures/graphrag_parity/*` (6
+  scenarios: `codebase`, `issue_thread`, `paper_abstract`, `project_doc`,
+  `software_guide`, `stdlib_docs`) into `tests/test_graphrag_parity.py`'s
+  new `TestGraphRagParityFixtures` — exercises real ingest → extraction →
+  community-build → render end to end (canned-LLM `AxonBrain`, no mocked
+  mixin methods) alongside the pre-existing pure-`MagicMock`
+  adapter-contract tests, which stay unchanged.
+- **Found and fixed a real production deadlock while wiring the fixtures**:
+  `_rebuild_communities` held `_graph_lock` (an `RLock`) across its whole
+  body while dispatching community-summary generation onto a real
+  `ThreadPoolExecutor`; worker threads re-entered the same lock via
+  `_gr_cache_get` from a different OS thread than the one holding it —
+  `RLock` reentry is same-thread-only, so every worker deadlocked forever.
+  Reachable via `graph_rag_community_lazy=False`, via `main.py::ingest()`'s
+  synchronous post-ingest rebuild path, and via `graph_rag_claims`/
+  `graph_rag_canonicalize(_relations)` (the latter two currently default
+  off, so dormant but real). Fixed by giving the GraphRAG LLM/extraction
+  cache its own dedicated leaf lock (`_gr_cache_lock`) instead of sharing
+  `_graph_lock` — see the comment on `_gr_cache_lock_internal`'s init in
+  `main.py` for the full reasoning. Regression test:
+  `TestCommunitySummarizationDoesNotDeadlock` (daemon thread + 30s join
+  timeout, so a regression fails cleanly instead of hanging CI).
 
 ### Phase 3 — `query_router.py`'s retrieval path (20 occurrences)
 

@@ -2198,7 +2198,7 @@ class TestMatchEntitiesByEmbedding:
 from axon.graph_render import GraphRenderMixin
 
 
-class MockBrain(GraphRenderMixin):
+class MockBrain(GraphRenderMixin, GraphRagMixin):
     def __init__(self):
         self.config = MagicMock()
         self._community_levels = {0: {"c1": {"label": "Comm 1"}}}
