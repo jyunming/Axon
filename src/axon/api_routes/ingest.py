@@ -700,8 +700,7 @@ async def delete_documents(
                 brain.vector_store.delete_by_ids(direct_ids)
                 if brain.bm25 is not None:
                     brain.bm25.delete_documents(direct_ids)
-            if brain._entity_graph:
-                brain._prune_entity_graph(set(existing_ids))
+            brain._graph_backend.delete_documents(existing_ids)
             from axon import api as _api
 
             _api._purge_dedup(existing_ids, project)

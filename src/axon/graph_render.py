@@ -26,133 +26,6 @@ class GraphRenderMixin:
         _VIZ_TYPE_COLORS: dict[str, str]
         vector_store: OpenVectorStore
 
-    def build_graph_payload(self) -> dict:
-        """Return a renderer-neutral graph payload normalised from internal graph state.
-        The payload shape is::
-
-            {
-                "nodes": [{"id", "name", "label", "type", "color", "val",
-                           "chunk_count", "degree", "community", "description",
-                           "tooltip",
-                           "evidence": [{"chunk_id", "source", "start_line", "excerpt"}, ...]
-                           }, ...],
-                "links": [{"source", "target", "label", "relation",
-                           "description", "value", "width"}, ...]
-            }
-        ``evidence`` is populated from the vector store for each chunk ID
-        referenced by the node.  It may be empty if the store is unavailable or
-        no chunks have been ingested yet.
-        This method separates graph extraction from rendering.  Feed the result
-        to :meth:`export_graph_html` or any other renderer.
-        """
-        from html import escape
-
-        # community_levels level-0 schema: {entity -> community_id (int)}
-        entity_to_community: dict[str, int] = {}
-        if self._community_levels:
-            for entity, cid in self._community_levels.get(0, {}).items():
-                try:
-                    entity_to_community[entity] = int(cid)
-                except (TypeError, ValueError):
-                    pass
-
-        def _tooltip(name: str, node: dict, community: int | None) -> str:
-            desc = (node.get("description") or "").strip()
-            desc = escape(desc[:220]) if desc else "No description"
-            ntype = escape(node.get("type") or "UNKNOWN")
-            chunk_count = len(node.get("chunk_ids", []))
-            degree = node.get("degree", 0)
-            comm = "None" if community is None else str(community)
-            return (
-                f"<div style='max-width:320px'>"
-                f"<div><b>{escape(name)}</b></div>"
-                f"<div><b>Type:</b> {ntype}</div>"
-                f"<div><b>Chunks:</b> {chunk_count}</div>"
-                f"<div><b>Degree:</b> {degree}</div>"
-                f"<div><b>Community:</b> {comm}</div>"
-                f"<div style='margin-top:6px'>{desc}</div>"
-                f"</div>"
-            )
-
-        # Build a chunk_id → metadata lookup for evidence population.
-        all_chunk_ids: list[str] = []
-        for _node in self._entity_graph.values():
-            if isinstance(_node, dict):
-                all_chunk_ids.extend(_node.get("chunk_ids", []))
-        chunk_meta_lookup: dict[str, dict] = {}
-        if all_chunk_ids and hasattr(self, "vector_store"):
-            try:
-                for _doc in self.vector_store.get_by_ids(list(dict.fromkeys(all_chunk_ids))):
-                    _cid = _doc.get("id") or _doc.get("chunk_id", "")
-                    if _cid:
-                        chunk_meta_lookup[_cid] = _doc.get("metadata", _doc)
-            except Exception:
-                pass
-        nodes: list[dict] = []
-        node_ids: set[str] = set()
-        for name, node in self._entity_graph.items():
-            if not isinstance(node, dict):
-                continue
-            community = entity_to_community.get(name)
-            chunk_count = len(node.get("chunk_ids", []))
-            evidence = [
-                {
-                    "chunk_id": cid,
-                    "source": meta.get("source", ""),
-                    "start_line": meta.get("start_line"),
-                    "excerpt": (meta.get("text") or meta.get("page_content") or "")[:200],
-                }
-                for cid in node.get("chunk_ids", [])
-                if (meta := chunk_meta_lookup.get(cid)) is not None
-            ]
-            nodes.append(
-                {
-                    "id": name,
-                    "name": name,
-                    "label": name[:24],
-                    "type": node.get("type") or "UNKNOWN",
-                    "color": self._VIZ_TYPE_COLORS.get(node.get("type") or "UNKNOWN", "#aec7e8"),
-                    "val": 4 + min(chunk_count, 18),
-                    "chunk_count": chunk_count,
-                    "chunk_ids": node.get("chunk_ids", []),
-                    "degree": node.get("degree", 0),
-                    "community": community,
-                    "description": (node.get("description") or "")[:220],
-                    "tooltip": _tooltip(name, node, community),
-                    "evidence": evidence,
-                }
-            )
-            node_ids.add(name)
-        links: list[dict] = []
-        seen_edges: set[tuple] = set()
-        for src, rels in self._relation_graph.items():
-            if src not in node_ids:
-                continue
-            for rel in rels:
-                if not isinstance(rel, dict):
-                    continue
-                tgt = rel.get("target") or rel.get("object", "")
-                if not tgt or tgt not in node_ids:
-                    continue
-                relation = rel.get("relation", "")
-                key = (src, tgt, relation)
-                if key in seen_edges:
-                    continue
-                seen_edges.add(key)
-                strength = float(rel.get("weight") or rel.get("strength") or 5)
-                links.append(
-                    {
-                        "source": src,
-                        "target": tgt,
-                        "label": relation[:32],
-                        "relation": relation,
-                        "description": rel.get("description", ""),
-                        "value": strength,
-                        "width": 1 + strength / 8,
-                    }
-                )
-        return {"nodes": nodes, "links": links}
-
     def build_code_graph_payload(self) -> dict:
         """Return the code structure graph as {nodes, links} for VS Code webview.
         Node types: ``file``, ``class``, ``function``, ``method``, ``module``.
@@ -591,6 +464,24 @@ if (graphData.nodes && graphData.nodes.length > 0) {{
 
 </script></body></html>"""
 
+    def _resolve_graph_payload(self) -> dict:
+        """Prefer the active graph backend's own ``graph_data()``; fall back
+        to :meth:`build_graph_payload` when the backend doesn't supply one.
+        Mirrors the precedence used by the ``GET /graph/data`` REST route."""
+        backend = getattr(self, "_graph_backend", None)
+        if backend is not None and callable(getattr(backend, "graph_data", None)):
+            try:
+                payload = backend.graph_data()
+            except Exception:
+                return {"nodes": [], "links": []}
+            if hasattr(payload, "to_dict"):
+                result = payload.to_dict()
+                return result if isinstance(result, dict) else {"nodes": [], "links": []}
+            if isinstance(payload, dict):
+                return payload
+            return {"nodes": [], "links": []}
+        return self.build_graph_payload()
+
     def export_graph_html(
         self,
         path: str | None = None,
@@ -611,7 +502,7 @@ if (graphData.nodes && graphData.nodes.length > 0) {{
         """
         import json as _json
 
-        graph = self.build_graph_payload()
+        graph = self._resolve_graph_payload()
         html = self._render_graph_html(graph)
         if json_path:
             pathlib.Path(json_path).write_text(

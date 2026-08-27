@@ -107,6 +107,34 @@ class TestEnsureProject:
         with pytest.raises(ValueError):
             ensure_project("BadName")
 
+    def test_idempotent_call_without_graph_backend_does_not_raise(self, tmp_projects):
+        """Regression: ensure_project() used as a plain "create if missing"
+        helper (graph_backend omitted) must stay idempotent for a project
+        whose stored graph_backend is not the "graphrag" default — omitting
+        the argument must not be treated as an implicit request for
+        "graphrag", or every no-arg re-call breaks any non-default project.
+        """
+        from axon.projects import ensure_project, get_project_graph_backend
+
+        ensure_project("dgproj", graph_backend="dynamic_graph")
+
+        ensure_project("dgproj")  # no graph_backend — must not raise
+
+        assert get_project_graph_backend("dgproj") == "dynamic_graph"
+
+    def test_ancestor_creation_does_not_override_existing_backend(self, tmp_projects):
+        """Regression: creating a deeper descendant must not force the
+        default "graphrag" backend onto an already-existing ancestor with a
+        different stored backend.
+        """
+        from axon.projects import ensure_project, get_project_graph_backend
+
+        ensure_project("research", graph_backend="dynamic_graph")
+
+        ensure_project("research/papers")  # ancestor "research" already exists
+
+        assert get_project_graph_backend("research") == "dynamic_graph"
+
 
 class TestActiveProject:
     def test_default_when_no_file(self, tmp_projects):

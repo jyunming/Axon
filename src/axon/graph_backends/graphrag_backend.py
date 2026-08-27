@@ -110,34 +110,48 @@ class GraphRagBackend:
         n_communities = len(getattr(self._brain, "_community_summaries", {}))
         return FinalizationResult(communities_built=n_communities, backend_id=BACKEND_ID)
 
-    def clear(self) -> None:
+    _PERSISTABLE_SAVE_METHODS = (
+        "_save_entity_graph",
+        "_save_relation_graph",
+        "_save_community_levels",
+        "_save_community_summaries",
+        "_save_community_hierarchy",
+        "_save_claims_graph",
+        "_save_entity_embeddings",
+    )
+
+    def clear(self, *, persist: bool = False) -> None:
         """Clear all GraphRAG state from the attached brain.
 
-        Holds ``_graph_lock`` to prevent concurrent ``/graph/data``
-        readers from iterating mid-clear (audit P1: previously
-        unlocked, would crash readers with ``RuntimeError: dictionary
-        changed size during iteration``).
+        Delegates to ``AxonBrain._reset_graph_state()``, the single source
+        of truth for "wipe graph state" — it resets every graph-related
+        field (not just the four core dicts) and holds ``_graph_lock``
+        internally (audit P1: previously unlocked, would crash readers
+        with ``RuntimeError: dictionary changed size during iteration``).
+
+        ``_reset_graph_state()`` is memory-only by design (also used by
+        read-only scope switching, which must never write project data to
+        disk) — when *persist* is True, additionally call the 7 ``_save_*``
+        methods so the now-empty state is actually written to disk.
         """
-        with self._brain._graph_lock:
-            self._brain._entity_graph.clear()
-            self._brain._relation_graph.clear()
-            self._brain._community_levels.clear()
-            self._brain._community_summaries.clear()
+        self._brain._reset_graph_state()
+        if persist:
+            for method_name in self._PERSISTABLE_SAVE_METHODS:
+                method = getattr(self._brain, method_name, None)
+                if callable(method):
+                    method()
 
     def delete_documents(self, chunk_ids: list[str]) -> None:
-        """Remove chunk IDs from entity graph; drop entities that become empty.
+        """Remove chunk IDs from entity/relation/claims graph state.
 
-        Holds ``_graph_lock`` for the same reason as :meth:`clear`.
+        Delegates to ``AxonBrain._prune_entity_graph()``, the existing
+        ``GraphRagMixin`` method that also prunes the relation graph and
+        claims graph, updates the entity token index, recomputes entity
+        frequency, and persists the changes to disk — a straight
+        entity-graph-only reimplementation here previously dropped all of
+        that.
         """
-        chunk_id_set = set(chunk_ids)
-        with self._brain._graph_lock:
-            for entity in list(self._brain._entity_graph):
-                node = self._brain._entity_graph[entity]
-                if not isinstance(node, dict):
-                    continue
-                node["chunk_ids"] = [c for c in node.get("chunk_ids", []) if c not in chunk_id_set]
-                if not node["chunk_ids"]:
-                    del self._brain._entity_graph[entity]
+        self._brain._prune_entity_graph(set(chunk_ids))
 
     def status(self) -> dict:
         """Return lightweight graph statistics (no side effects)."""
@@ -164,3 +178,9 @@ class GraphRagBackend:
             if filters.limit is not None:
                 nodes = nodes[: filters.limit]
         return GraphPayload(nodes=nodes, links=links)
+
+    def has_entities(self) -> bool:
+        return bool(self._brain._entity_graph)
+
+    def has_community_summaries(self) -> bool:
+        return bool(self._brain._community_summaries)

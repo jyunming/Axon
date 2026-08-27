@@ -9,16 +9,6 @@ logger = logging.getLogger("Axon")
 
 
 class CodeGraphMixin:
-    # NOTE: ``_load_code_graph`` and ``_save_code_graph`` are ALSO defined on
-    # :class:`axon.graph_rag.GraphRagMixin`. GraphRagMixin appears earlier in
-    # ``AxonBrain``'s MRO and therefore wins at runtime. The methods on this
-    # class exist so unit tests can exercise ``CodeGraphMixin`` in isolation
-    # without pulling in the full GraphRagMixin (~4 kLoC). Production goes
-    # through the GraphRagMixin version, which uses
-    # ``_gr_write_json_if_changed`` (atomic + cloud-sync-safe + skip-write-
-    # when-unchanged digest cache). Keep these two implementations in sync
-    # for shape (return type, defaults); divergence in atomic-write semantics
-    # is acceptable because only the GraphRagMixin path runs in production.
     def _load_code_graph(self) -> dict:
         """Load code graph from disk. Returns empty graph if not found."""
         import json
@@ -37,20 +27,23 @@ class CodeGraphMixin:
     def _save_code_graph(self) -> None:
         """Persist code graph to disk.
 
-        Atomic + cloud-sync-safe: writes to a sibling ``.tmp`` first
-        and uses :func:`axon.version_marker._atomic_replace` so a
-        crash mid-write doesn't zero ``.code_graph.json`` (audit P1).
+        Atomic + cloud-sync-safe + skip-write-when-unchanged: delegates to
+        :func:`axon._atomic_persist.write_json_if_changed` with a
+        CodeGraphMixin-owned digest cache, mirroring the behavior
+        ``GraphRagMixin._gr_write_json_if_changed`` uses for the other
+        graph-state files (this class used to have its own divergent,
+        always-write implementation).
         """
-        import json
         import pathlib
 
-        from axon.version_marker import _atomic_replace as _safe_replace
+        from axon._atomic_persist import write_json_if_changed
 
         path = pathlib.Path(self.config.bm25_path) / ".code_graph.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(json.dumps(self._code_graph), encoding="utf-8")
-        _safe_replace(tmp, path)
+        cache = getattr(self, "_code_graph_persist_hashes", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._code_graph_persist_hashes = cache
+        write_json_if_changed(path, self._code_graph, cache)
 
     def _build_code_graph_from_chunks(self, chunks: list[dict]) -> None:
         """Build/update code graph nodes and CONTAINS/IMPORTS edges from codebase chunks.

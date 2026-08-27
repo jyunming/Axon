@@ -30,6 +30,8 @@ client = TestClient(app, raise_server_exceptions=False)
 
 
 def _make_brain(active_project="default"):
+    from axon.graph_backends.base import FinalizationResult
+
     brain = MagicMock()
     brain._active_project = active_project
     brain._entity_graph = {"ent1": {}, "ent2": {}}
@@ -37,6 +39,16 @@ def _make_brain(active_project="default"):
     brain._community_summaries = {"c1": "summary"}
     brain.get_stale_docs.return_value = [{"id": "d1"}]
     brain.finalize_graph.return_value = None
+    brain._graph_backend.status.return_value = {
+        "backend": "graphrag",
+        "entities": 2,
+        "relations": 1,
+        "communities": 0,
+        "community_summaries": 1,
+    }
+    brain._graph_backend.finalize.return_value = FinalizationResult(
+        communities_built=1, backend_id="graphrag"
+    )
     return brain
 
 
@@ -363,8 +375,12 @@ class TestGovernanceProjects:
 
 class TestGovernanceGraphRebuild:
     def test_rebuild_ok(self):
+        from axon.graph_backends.base import FinalizationResult
+
         brain = _make_brain()
-        brain._community_summaries = {"c1": "s", "c2": "s"}
+        brain._graph_backend.finalize.return_value = FinalizationResult(
+            communities_built=2, backend_id="graphrag"
+        )
         api_module.brain = brain
         with patch(_GOV_EMIT):
             r = client.post("/governance/graph/rebuild")
@@ -378,7 +394,7 @@ class TestGovernanceGraphRebuild:
 
     def test_rebuild_permission_error_403(self):
         brain = _make_brain()
-        brain.finalize_graph.side_effect = PermissionError("read-only")
+        brain._graph_backend.finalize.side_effect = PermissionError("read-only")
         api_module.brain = brain
         with patch(_GOV_EMIT):
             r = client.post("/governance/graph/rebuild")
@@ -386,7 +402,7 @@ class TestGovernanceGraphRebuild:
 
     def test_rebuild_generic_error_500(self):
         brain = _make_brain()
-        brain.finalize_graph.side_effect = RuntimeError("internal error")
+        brain._graph_backend.finalize.side_effect = RuntimeError("internal error")
         api_module.brain = brain
         with patch(_GOV_EMIT):
             r = client.post("/governance/graph/rebuild")
@@ -406,7 +422,7 @@ class TestGovernanceGraphRebuild:
 
     def test_rebuild_emits_failed_on_error(self):
         brain = _make_brain()
-        brain.finalize_graph.side_effect = RuntimeError("crash")
+        brain._graph_backend.finalize.side_effect = RuntimeError("crash")
         api_module.brain = brain
         emitted_statuses = []
         with patch(

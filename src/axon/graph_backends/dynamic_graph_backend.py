@@ -1076,8 +1076,13 @@ class DynamicGraphBackend:
             )
         return out
 
-    def clear(self) -> None:
-        """Delete all rows from all tables."""
+    def clear(self, *, persist: bool = False) -> None:
+        """Delete all rows from all tables.
+
+        *persist* is unused here — SQL DELETE + commit is inherently
+        persistent, there is no separate in-memory-only reset for this
+        backend. Accepted only to satisfy the widened GraphBackend Protocol.
+        """
         with self._write_lock:
             self._conn.executescript(
                 "DELETE FROM fact_evidence; DELETE FROM facts; DELETE FROM entities; DELETE FROM episodes;"
@@ -1135,6 +1140,18 @@ class DynamicGraphBackend:
             "superseded_facts": row["superseded_facts"],
             "conflicted_facts": row["conflicted_facts"],
         }
+
+    def has_entities(self) -> bool:
+        """Always False: dynamic_graph tracks its own SQLite entities/facts
+        tables, not GraphRagMixin's brain._entity_graph — this predicate
+        gates GraphRAG-mixin-specific local/global search in query_router.py,
+        which dynamic_graph never drives (it has its own retrieve() path).
+        """
+        return False
+
+    def has_community_summaries(self) -> bool:
+        """dynamic_graph has no community-detection step (see finalize())."""
+        return False
 
     def graph_data(self, filters: GraphDataFilters | None = None) -> GraphPayload:
         """Return current active facts as a renderer-enriched nodes + links payload."""

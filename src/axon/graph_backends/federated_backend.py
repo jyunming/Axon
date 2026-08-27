@@ -225,11 +225,11 @@ class FederatedGraphBackend:
             remaining -= len(rows)
         return out
 
-    def clear(self) -> None:
+    def clear(self, *, persist: bool = False) -> None:
         # Audit P1: a silent clear() failure leaves stale state behind.
         for b in self._backends:
             try:
-                b.clear()
+                b.clear(persist=persist)
             except Exception as exc:
                 logger.warning(
                     "FederatedGraphBackend: %s clear() failed — %s",
@@ -246,6 +246,24 @@ class FederatedGraphBackend:
             except Exception as exc:
                 logger.warning(
                     "FederatedGraphBackend: %s delete_documents() failed — %s",
+                    getattr(b, "BACKEND_ID", type(b).__name__),
+                    exc,
+                )
+
+    def close(self) -> None:
+        """Close every sub-backend that has one (e.g. DynamicGraphBackend's
+        SQLite connection). One raising sub-backend must not prevent the
+        others from being closed — mirrors clear()/delete_documents() above.
+        """
+        for b in self._backends:
+            fn = getattr(b, "close", None)
+            if not callable(fn):
+                continue
+            try:
+                fn()
+            except Exception as exc:
+                logger.warning(
+                    "FederatedGraphBackend: %s close() failed — %s",
                     getattr(b, "BACKEND_ID", type(b).__name__),
                     exc,
                 )
@@ -276,3 +294,28 @@ class FederatedGraphBackend:
             except Exception:
                 pass
         return GraphPayload(nodes=list(nodes.values()), links=links)
+
+    def has_entities(self) -> bool:
+        """Delegate to sub-backends rather than a constant False: the wrapped
+        GraphRagBackend shares the same brain, and GraphRAG entity
+        extraction runs during ingest independent of which graph_backend is
+        selected — so a federated-configured project can carry a genuinely
+        populated brain._entity_graph. A constant False here would silently
+        disable local-search expansion that works today.
+        """
+        for b in self._backends:
+            try:
+                if b.has_entities():
+                    return True
+            except Exception:
+                pass
+        return False
+
+    def has_community_summaries(self) -> bool:
+        for b in self._backends:
+            try:
+                if b.has_community_summaries():
+                    return True
+            except Exception:
+                pass
+        return False

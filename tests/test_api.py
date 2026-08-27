@@ -260,6 +260,17 @@ def test_delete_calls_delete_by_ids_not_collection_delete():
     api_module.brain.vector_store.collection.delete.assert_not_called()
 
 
+def test_delete_prunes_entity_graph_via_backend():
+    """Deleting chunks must prune graph state through _graph_backend.delete_documents()
+    (which fully delegates to _prune_entity_graph — relation/claims pruning,
+    token index, persistence) instead of touching _entity_graph directly."""
+    api_module.brain = _make_brain()
+    api_module.brain.vector_store.get_by_ids.return_value = [{"id": "id1", "text": "t"}]
+    resp = client.post("/delete", json={"doc_ids": ["id1"]})
+    assert resp.status_code == 200
+    api_module.brain._graph_backend.delete_documents.assert_called_once_with(["id1"])
+
+
 # ---------------------------------------------------------------------------
 # /clear
 # ---------------------------------------------------------------------------
@@ -297,16 +308,17 @@ def test_clear_resets_bm25_and_hashes():
     brain._ingested_hashes = {"abc123"}
     brain._entity_graph = {"entity": {"description": "", "chunk_ids": ["neighbor"]}}
 
-    with patch.object(brain, "_save_hash_store") as mock_save_hash, patch.object(
-        brain, "_save_entity_graph"
-    ) as mock_save_graph:
+    with patch.object(brain, "_save_hash_store") as mock_save_hash:
         resp = client.post("/clear")
 
     assert resp.status_code == 200
     assert brain._ingested_hashes == set()
     assert brain._entity_graph == {}
     mock_save_hash.assert_called_once()
-    mock_save_graph.assert_called_once()
+    # _save_entity_graph is no longer called directly by collection_ops.py —
+    # persisting the cleared GraphRAG state is now
+    # GraphRagBackend.clear(persist=True)'s own responsibility.
+    brain._graph_backend.clear.assert_called_once_with(persist=True)
     brain.bm25.save.assert_called_once()
 
 
@@ -380,12 +392,13 @@ def test_clear_resets_graph_state_and_api_dedup_cache():
     assert "default" not in api_module._source_hashes
     assert "_global" not in api_module._source_hashes
     brain._save_doc_versions.assert_called_once()
-    brain._save_relation_graph.assert_called_once()
-    brain._save_community_levels.assert_called_once()
-    brain._save_community_summaries.assert_called_once()
-    brain._save_community_hierarchy.assert_called_once()
-    brain._save_claims_graph.assert_called_once()
-    brain._save_entity_embeddings.assert_called_once()
+    # The 7 GraphRAG _save_* methods are no longer called directly by
+    # collection_ops.py — persisting the cleared GraphRAG state is now
+    # GraphRagBackend.clear(persist=True)'s own responsibility (exercised
+    # for real in test_graph_backend_base.py's TestGraphRagBackendClearPersist).
+    # brain._graph_backend here is a MagicMock, so only the delegation call
+    # itself is observable from this test.
+    brain._graph_backend.clear.assert_called_once_with(persist=True)
     brain._save_code_graph.assert_called_once()
 
 
@@ -3142,6 +3155,28 @@ def _make_brain(provider="chroma"):
         "communities": 0,
         "community_summaries": 0,
     }
+
+    def _reset_graph_fields(*_args, **_kwargs):
+        # Mirrors GraphRagMixin._reset_graph_state() for tests that assert
+        # /clear (collection_ops.clear_active_project) actually empties graph
+        # state — brain is a MagicMock, not a real GraphRagMixin, so
+        # _graph_backend.clear() needs an explicit side effect to do that.
+        brain._entity_graph = {}
+        brain._relation_graph = {}
+        brain._community_levels = {}
+        brain._community_summaries = {}
+        brain._entity_embeddings = {}
+        brain._entity_description_buffer = {}
+        brain._claims_graph = {}
+        brain._community_graph_dirty = False
+        brain._community_hierarchy = {}
+        brain._community_children = {}
+        brain._relation_description_buffer = {}
+        brain._text_unit_entity_map = {}
+        brain._text_unit_relation_map = {}
+        brain._raptor_summary_cache = {}
+
+    brain._graph_backend.clear.side_effect = _reset_graph_fields
     return brain
 
 
@@ -3171,7 +3206,13 @@ class TestGraphStatus:
     def test_returns_status_with_brain(self):
         brain = _make_brain()
         brain._community_build_in_progress = True
-        brain._community_summaries = {"a": 1, "b": 2}
+        brain._graph_backend.status.return_value = {
+            "backend": "graphrag",
+            "entities": 0,
+            "relations": 0,
+            "communities": 0,
+            "community_summaries": 2,
+        }
         api_module.brain = brain
         resp = client.get("/graph/status")
         assert resp.status_code == 200
@@ -3343,6 +3384,72 @@ class TestGraphBackendStatus:
         assert data["entities"] == 7
         assert data["relations"] == 14
         assert data["communities"] == 2
+
+    def test_dynamic_graph_backend_not_reported_as_none(self, tmp_path):
+        """A real DynamicGraphBackend attached to brain._graph_backend must
+        report its own id — not the pre-wiring "none" fallback."""
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from axon.graph_backends.dynamic_graph_backend import DynamicGraphBackend
+
+        cfg = SimpleNamespace(bm25_path=str(tmp_path), graph_backend="dynamic_graph")
+        llm = MagicMock()
+        llm.complete.return_value = ""
+        fake_brain = SimpleNamespace(config=cfg, llm=llm)
+        brain = _make_brain()
+        brain._graph_backend = DynamicGraphBackend(fake_brain)
+        api_module.brain = brain
+        resp = client.get("/graph/backend/status")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["backend"] == "dynamic_graph"
+
+
+class TestGraphRetrieve:
+    def test_503_when_no_brain(self):
+        api_module.brain = None
+        resp = client.post("/graph/retrieve", json={"query": "hello"})
+        assert resp.status_code == 503
+
+    def test_no_backend_returns_none_and_empty_contexts(self):
+        brain = _make_brain()
+        brain._graph_backend = None
+        api_module.brain = brain
+        resp = client.post("/graph/retrieve", json={"query": "hello"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data == {"backend": "none", "contexts": []}
+
+    def test_dynamic_graph_backend_not_reported_as_none(self, tmp_path):
+        """A real DynamicGraphBackend attached to brain._graph_backend must
+        actually run retrieve() and report its own id."""
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from axon.graph_backends.dynamic_graph_backend import DynamicGraphBackend
+
+        cfg = SimpleNamespace(bm25_path=str(tmp_path), graph_backend="dynamic_graph")
+        llm = MagicMock()
+        llm.complete.return_value = ""
+        fake_brain = SimpleNamespace(config=cfg, llm=llm)
+        brain = _make_brain()
+        brain._graph_backend = DynamicGraphBackend(fake_brain)
+        api_module.brain = brain
+        resp = client.post("/graph/retrieve", json={"query": "hello", "top_k": 5})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["backend"] == "dynamic_graph"
+        assert data["contexts"] == []  # empty DB, but backend actually ran
+
+    def test_invalid_point_in_time_returns_422(self):
+        brain = _make_brain()
+        api_module.brain = brain
+        resp = client.post(
+            "/graph/retrieve",
+            json={"query": "hello", "point_in_time": "not-a-date"},
+        )
+        assert resp.status_code == 422
 
 
 class TestCodeGraphData:
@@ -3902,6 +4009,45 @@ class TestCreateProject:
         with patch("axon.projects.ensure_project", side_effect=RuntimeError("disk full")):
             resp = client.post("/project/new", json={"name": "new-project"})
         assert resp.status_code == 500
+
+    def test_graph_backend_forwarded_and_echoed(self):
+        with patch("axon.projects.ensure_project", return_value=None) as mock_ensure:
+            resp = client.post(
+                "/project/new",
+                json={"name": "dg-project", "graph_backend": "dynamic_graph"},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["graph_backend"] == "dynamic_graph"
+        assert mock_ensure.call_args.kwargs.get("graph_backend") == "dynamic_graph"
+
+    def test_graph_backend_omitted_not_in_response(self):
+        with patch("axon.projects.ensure_project", return_value=None) as mock_ensure:
+            resp = client.post("/project/new", json={"name": "plain-project"})
+        assert resp.status_code == 200
+        assert "graph_backend" not in resp.json()
+        assert mock_ensure.call_args.kwargs.get("graph_backend") is None
+
+    def test_invalid_graph_backend_returns_422(self):
+        """Pydantic Literal validation rejects an out-of-enum value before
+        ensure_project() is ever called."""
+        resp = client.post(
+            "/project/new",
+            json={"name": "bad-project", "graph_backend": "neo4j"},
+        )
+        assert resp.status_code == 422
+
+    def test_graph_backend_immutability_returns_400(self):
+        """ensure_project()'s ValueError (e.g. immutable backend conflict)
+        surfaces as 400, same as any other ValueError from this endpoint."""
+        with patch(
+            "axon.projects.ensure_project",
+            side_effect=ValueError("graph_backend is immutable"),
+        ):
+            resp = client.post(
+                "/project/new",
+                json={"name": "existing", "graph_backend": "none"},
+            )
+        assert resp.status_code == 400
 
 
 class TestSwitchProject:

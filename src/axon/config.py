@@ -734,7 +734,13 @@ class AxonConfig:
     # (a chunk that was never ingested may be silently skipped). Opt-in; disabled by default.
     bloom_filter_hash_store: bool = False
     # Graph backend selector: "graphrag" (default), "dynamic_graph", or "federated"
-    graph_backend: str = "graphrag"
+    # Type hint only — dataclasses don't enforce Literal at construction time,
+    # so an out-of-enum string (e.g. a typo) still constructs without raising.
+    # See AxonConfig.validate() for the actual (non-raising) check, surfaced
+    # through GET /config/validate. "federated" is config.yaml-only: it is not
+    # a settable value on project creation (see projects.ensure_project) and
+    # always overrides whichever backend the active project's meta.json stores.
+    graph_backend: Literal["graphrag", "dynamic_graph", "none", "federated"] = "graphrag"
     # Per-backend RRF weights for the "federated" backend (equal weights by default).
     # Example: graph_federation_weights: {graphrag: 1.5, dynamic_graph: 1.0}
     graph_federation_weights: dict = field(default_factory=dict)
@@ -1687,6 +1693,19 @@ class AxonConfig:
                     message=(
                         f"Invalid graph_rag_depth '{cfg.graph_rag_depth}'. "
                         f"Must be one of: {', '.join(sorted(_VALID_GRAPH_RAG_DEPTHS))}."
+                    ),
+                )
+            )
+        _VALID_GRAPH_BACKENDS = {"graphrag", "dynamic_graph", "none", "federated"}
+        if cfg.graph_backend not in _VALID_GRAPH_BACKENDS:
+            issues.append(
+                ConfigIssue(
+                    level="error",
+                    section="rag",
+                    field="graph_backend",
+                    message=(
+                        f"Invalid graph_backend '{cfg.graph_backend}'. "
+                        f"Must be one of: {', '.join(sorted(_VALID_GRAPH_BACKENDS))}."
                     ),
                 )
             )

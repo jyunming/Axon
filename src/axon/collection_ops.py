@@ -43,28 +43,17 @@ def clear_active_project(brain: Any) -> None:
     _call_optional(brain, "_save_hash_store")
     brain._doc_versions = {}
     _call_optional(brain, "_save_doc_versions")
-    brain._entity_graph = {}
-    _call_optional(brain, "_save_entity_graph")
-    brain._relation_graph = {}
-    _call_optional(brain, "_save_relation_graph")
-    brain._community_levels = {}
-    _call_optional(brain, "_save_community_levels")
-    brain._community_summaries = {}
-    _call_optional(brain, "_save_community_summaries")
-    brain._community_hierarchy = {}
-    _call_optional(brain, "_save_community_hierarchy")
-    brain._community_children = {}
-    brain._community_graph_dirty = False
+    # Clear + persist go through the graph backend (single source of truth
+    # for "wipe graph state"; also correctly clears non-GraphRAG backends
+    # like dynamic_graph, which the old field-by-field _save_* calls here
+    # never touched — they always wrote GraphRagMixin's own state
+    # regardless of which backend was actually active). persist=True asks
+    # the backend to also write its now-empty state to disk, not just
+    # reset in memory.
+    graph_backend = getattr(brain, "_graph_backend", None)
+    if graph_backend is not None and callable(getattr(graph_backend, "clear", None)):
+        graph_backend.clear(persist=True)
     brain._community_build_in_progress = False
-    brain._claims_graph = {}
-    _call_optional(brain, "_save_claims_graph")
-    brain._entity_embeddings = {}
-    _call_optional(brain, "_save_entity_embeddings")
-    brain._entity_description_buffer = {}
-    brain._relation_description_buffer = {}
-    brain._text_unit_entity_map = {}
-    brain._text_unit_relation_map = {}
-    brain._raptor_summary_cache = {}
     brain._code_graph = {"nodes": {}, "edges": []}
     _call_optional(brain, "_save_code_graph")
     meta_path = getattr(brain, "_embedding_meta_path", None)

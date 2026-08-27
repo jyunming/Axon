@@ -2591,6 +2591,8 @@ def _interactive_repl(
                         "    /project new <name>                    create a new project and switch to it\n"
                         "    /project new <name> <desc>             create with description\n"
                         "    /project new <parent>/<child>          create a sub-project (up to 5 levels)\n"
+                        "    /project new <name> --backend <b>      graph backend: graphrag|dynamic_graph|none\n"
+                        "                                            (default: graphrag; immutable once set)\n"
                         "    /project switch <name>                 switch to an existing local project\n"
                         "    /project switch <parent>/<child>       switch to a sub-project\n"
                         "    /project switch default                return to the global knowledge base\n"
@@ -3294,6 +3296,9 @@ def _interactive_repl(
                     print(f"\n    Active: {active}")
                     print("    /project new <name>                      create + switch")
                     print("    /project new <parent>/<name>             create sub-project")
+                    print(
+                        "    /project new <name> --backend <b>        graphrag|dynamic_graph|none"
+                    )
                     print("    /project switch <name>                   switch to existing")
                     print("    /project switch @projects|@mounts|@store switch to merged scope")
                     print("    /project switch mounts/<name>            switch to mounted share")
@@ -3312,18 +3317,38 @@ def _interactive_repl(
                     if not sub_arg:
                         print("    Usage: /project new <name>  [description]")
                         print("         /project new research/papers  (sub-project)")
+                        print("         /project new <name> --backend graphrag|dynamic_graph|none")
                     else:
-                        name_parts = sub_arg.split(maxsplit=1)
-                        proj_name = name_parts[0].lower()
-                        proj_desc = name_parts[1] if len(name_parts) > 1 else ""
-                        try:
-                            ensure_project(proj_name, proj_desc)
-                            brain.switch_project(proj_name)
-                            print(f"    Created and switched to project '{proj_name}'")
-                            print(f"    {project_dir(proj_name)}")
-                            print("    Use /ingest to add documents to this project.\n")
-                        except ValueError as e:
-                            print(f"    {e}")
+                        parts = sub_arg.split()
+                        # Optional --backend flag, same idiom as /share ... --ttl-days.
+                        graph_backend: str | None = None
+                        if "--backend" in parts:
+                            try:
+                                _idx = parts.index("--backend")
+                                graph_backend = parts[_idx + 1]
+                                if graph_backend not in ("graphrag", "dynamic_graph", "none"):
+                                    raise ValueError
+                                del parts[_idx : _idx + 2]
+                            except (ValueError, IndexError):
+                                print(
+                                    "    Invalid --backend value "
+                                    "(must be one of: graphrag, dynamic_graph, none)."
+                                )
+                                parts = []
+                        if not parts:
+                            print("    Usage: /project new <name>  [description]")
+                            print("         /project new research/papers  (sub-project)")
+                        else:
+                            proj_name = parts[0].lower()
+                            proj_desc = " ".join(parts[1:])
+                            try:
+                                ensure_project(proj_name, proj_desc, graph_backend=graph_backend)
+                                brain.switch_project(proj_name)
+                                print(f"    Created and switched to project '{proj_name}'")
+                                print(f"    {project_dir(proj_name)}")
+                                print("    Use /ingest to add documents to this project.\n")
+                            except ValueError as e:
+                                print(f"    {e}")
                 elif sub == "switch":
                     if not sub_arg:
                         print("    Usage: /project switch <name>")
@@ -4202,9 +4227,8 @@ def _interactive_repl(
                                         f"    Backend has no finalize step — {_det or 'no community detection on this backend'}."
                                     )
                                 else:
-                                    summaries = getattr(brain, "_community_summaries", {}) or {}
                                     print(
-                                        f"    Done. {len(summaries)} community summaries generated.\n"
+                                        f"    Done. {_r.communities_built} community summaries generated.\n"
                                     )
                             else:
                                 brain.finalize_graph()

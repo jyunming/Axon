@@ -22,6 +22,7 @@ from axon.graph_backends.dynamic_graph_backend import DynamicGraphBackend
 from axon.graph_backends.factory import get_graph_backend
 from axon.graph_backends.federated_backend import FederatedGraphBackend
 from axon.graph_backends.graphrag_backend import GraphRagBackend
+from axon.graph_backends.none_backend import NoneGraphBackend
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -129,6 +130,12 @@ class TestGetGraphBackend:
         backend = get_graph_backend(brain)
         assert isinstance(backend, GraphRagBackend)
         assert backend._brain is brain
+
+    def test_none_config_returns_none_backend(self):
+        brain = _fake_brain("none")
+        backend = get_graph_backend(brain)
+        assert isinstance(backend, NoneGraphBackend)
+        assert isinstance(backend, GraphBackend)
 
 
 # ---------------------------------------------------------------------------
@@ -263,3 +270,80 @@ class TestProjectsGraphBackendPersistence:
                 result = get_project_graph_backend("p")
 
             assert result == "graphrag"
+
+
+# ---------------------------------------------------------------------------
+# projects.py: public ensure_project() validation gate
+#
+# _ensure_single_project() (tested above) accepts any string unchecked by
+# design — validation lives only in the public ensure_project() wrapper.
+# ---------------------------------------------------------------------------
+
+
+class TestEnsureProjectGraphBackendValidation:
+    def test_ensure_project_rejects_invalid_graph_backend(self):
+        from axon.projects import ensure_project
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+
+            import axon.projects as proj_mod
+
+            with patch.object(proj_mod, "project_dir", return_value=tmp / "p"):
+                with pytest.raises(ValueError, match="Invalid graph_backend"):
+                    ensure_project("p", graph_backend="neo4j")
+
+    def test_ensure_project_rejects_federated(self):
+        """ "federated" is a config.yaml-only override, not a project value."""
+        from axon.projects import ensure_project
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+
+            import axon.projects as proj_mod
+
+            with patch.object(proj_mod, "project_dir", return_value=tmp / "p"):
+                with pytest.raises(ValueError, match="Invalid graph_backend"):
+                    ensure_project("p", graph_backend="federated")
+
+    def test_ensure_project_defaults_to_graphrag_when_omitted(self):
+        from axon.projects import ensure_project
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+
+            import axon.projects as proj_mod
+
+            with patch.object(proj_mod, "project_dir", return_value=tmp / "p"):
+                ensure_project("p")
+
+            meta = json.loads((tmp / "p" / "meta.json").read_text())
+            assert meta["graph_backend"] == "graphrag"
+
+    def test_ensure_project_accepts_dynamic_graph(self):
+        from axon.projects import ensure_project
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+
+            import axon.projects as proj_mod
+
+            with patch.object(proj_mod, "project_dir", return_value=tmp / "p"):
+                ensure_project("p", graph_backend="dynamic_graph")
+
+            meta = json.loads((tmp / "p" / "meta.json").read_text())
+            assert meta["graph_backend"] == "dynamic_graph"
+
+    def test_ensure_project_accepts_none(self):
+        from axon.projects import ensure_project
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+
+            import axon.projects as proj_mod
+
+            with patch.object(proj_mod, "project_dir", return_value=tmp / "p"):
+                ensure_project("p", graph_backend="none")
+
+            meta = json.loads((tmp / "p" / "meta.json").read_text())
+            assert meta["graph_backend"] == "none"

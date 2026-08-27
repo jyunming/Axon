@@ -70,8 +70,10 @@ def create_mount_descriptor(
     share_key_id: str,
 ) -> dict[str, Any]:
     """Write a ``mount.json`` descriptor and return it.
-    Reads ``project_id`` from the owner's ``meta.json`` and
-    ``store_id`` from the owner's ``store_meta.json`` if available.
+    Reads ``project_id`` and ``graph_backend`` from the owner's ``meta.json``,
+    and ``store_id`` from the owner's ``store_meta.json``, if available.
+    ``graph_backend`` defaults to ``"graphrag"`` when the owner's meta.json is
+    unreadable (e.g. sealed) or predates this field.
     Args:
         grantee_user_dir: Grantee's AxonStore user directory.
         mount_name:        Logical mount identifier (e.g. ``alice_research``).
@@ -85,9 +87,11 @@ def create_mount_descriptor(
     """
     project_id = ""
     store_id = ""
+    graph_backend = "graphrag"
     try:
         meta = json.loads((target_project_dir / "meta.json").read_text(encoding="utf-8"))
         project_id = meta.get("project_id", "")
+        graph_backend = meta.get("graph_backend", "graphrag")
     except Exception:
         pass
     try:
@@ -104,6 +108,7 @@ def create_mount_descriptor(
         "target_project_dir": str(target_project_dir),
         "project_id": project_id,
         "store_id": store_id,
+        "graph_backend": graph_backend,
         "share_key_id": share_key_id,
         "redeemed_at": now,
         "state": "active",

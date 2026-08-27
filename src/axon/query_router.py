@@ -1359,7 +1359,7 @@ class QueryRouterMixin:
         base_count = len(results)
         # GraphRAG: expand results with entity-linked documents
         _matched_entities: list = []
-        if cfg.graph_rag and self._entity_graph:
+        if cfg.graph_rag and self._graph_backend.has_entities():
             results, _matched_entities = self._expand_with_entity_graph(query, results, cfg=cfg)
         # Code graph expansion (structural, independent of prose GraphRAG)
         if getattr(cfg, "code_graph", False) and self._code_graph.get("nodes"):
@@ -1675,7 +1675,9 @@ class QueryRouterMixin:
             cfg.graph_rag
             and graph_mode in ("local", "hybrid")
             and _matched_entities
-            and (self._entity_graph or self._community_summaries)
+            and (
+                self._graph_backend.has_entities() or self._graph_backend.has_community_summaries()
+            )
         ):
             _local_ctx = self._local_search_context(query, _matched_entities, cfg)
         else:
@@ -1713,16 +1715,20 @@ class QueryRouterMixin:
         if (
             cfg.graph_rag
             and graph_mode in ("global", "hybrid")
-            and not self._community_summaries
+            and not self._graph_backend.has_community_summaries()
             and self._community_levels
             and getattr(cfg, "graph_rag_community_lazy", False)
         ):
             with self._community_rebuild_lock:
-                if not self._community_summaries:
+                if not self._graph_backend.has_community_summaries():
                     self._generate_community_summaries(query_hint=query)
                     if getattr(cfg, "graph_rag_index_community_reports", True):
                         self._index_community_reports_in_vector_store()
-        if cfg.graph_rag and graph_mode in ("global", "hybrid") and self._community_summaries:
+        if (
+            cfg.graph_rag
+            and graph_mode in ("global", "hybrid")
+            and self._graph_backend.has_community_summaries()
+        ):
             _global_ctx = self._global_search_map_reduce(query, cfg)
             if _global_ctx:
                 if graph_mode == "global":
@@ -1870,7 +1876,9 @@ class QueryRouterMixin:
             cfg.graph_rag
             and graph_mode in ("local", "hybrid")
             and _matched_entities
-            and (self._entity_graph or self._community_summaries)
+            and (
+                self._graph_backend.has_entities() or self._graph_backend.has_community_summaries()
+            )
         ):
             _local_ctx = self._local_search_context(query, _matched_entities, cfg)
         else:
@@ -1897,16 +1905,20 @@ class QueryRouterMixin:
         if (
             cfg.graph_rag
             and graph_mode in ("global", "hybrid")
-            and not self._community_summaries
+            and not self._graph_backend.has_community_summaries()
             and self._community_levels
             and getattr(cfg, "graph_rag_community_lazy", False)
         ):
             with self._community_rebuild_lock:
-                if not self._community_summaries:
+                if not self._graph_backend.has_community_summaries():
                     self._generate_community_summaries(query_hint=query)
                     if getattr(cfg, "graph_rag_index_community_reports", True):
                         self._index_community_reports_in_vector_store()
-        if cfg.graph_rag and graph_mode in ("global", "hybrid") and self._community_summaries:
+        if (
+            cfg.graph_rag
+            and graph_mode in ("global", "hybrid")
+            and self._graph_backend.has_community_summaries()
+        ):
             _global_ctx = self._global_search_map_reduce(query, cfg)
             if _global_ctx:
                 if graph_mode == "global":

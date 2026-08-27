@@ -57,6 +57,14 @@ def _make_brain(**kwargs):
     brain._doc_versions = {}
     brain._own_bm25 = MagicMock()
     brain._own_vector_store = MagicMock()
+    brain._graph_backend = MagicMock()
+    brain._graph_backend.status.return_value = {
+        "backend": "graphrag",
+        "entities": 0,
+        "relations": 0,
+        "communities": 0,
+        "community_summaries": 0,
+    }
     for k, v in kwargs.items():
         setattr(brain, k, v)
     return brain
@@ -195,6 +203,41 @@ class TestDispatchToolRouting:
         brain = _make_brain()
         dispatch_tool(brain, "graph_finalize", {})
         brain.finalize_ingest.assert_called_once()
+
+
+class TestCreateProjectTool:
+    def test_forwards_graph_backend(self):
+        brain = _make_brain()
+        with patch("axon.projects.ensure_project") as mock_ensure:
+            result = dispatch_tool(
+                brain,
+                "create_project",
+                {"name": "dgproj", "graph_backend": "dynamic_graph"},
+            )
+        assert mock_ensure.call_args.kwargs.get("graph_backend") == "dynamic_graph"
+        brain.switch_project.assert_called_once_with("dgproj")
+        assert "dgproj" in result
+
+    def test_omitted_graph_backend_forwards_none(self):
+        brain = _make_brain()
+        with patch("axon.projects.ensure_project") as mock_ensure:
+            dispatch_tool(brain, "create_project", {"name": "plainproj"})
+        assert mock_ensure.call_args.kwargs.get("graph_backend") is None
+
+    def test_invalid_graph_backend_surfaces_cleanly(self):
+        """ensure_project()'s ValueError is caught by dispatch_tool's outer
+        handler — no double-wrapping, no traceback leaked to the caller."""
+        brain = _make_brain()
+        with patch(
+            "axon.projects.ensure_project",
+            side_effect=ValueError("Invalid graph_backend 'neo4j'."),
+        ):
+            result = dispatch_tool(
+                brain, "create_project", {"name": "badproj", "graph_backend": "neo4j"}
+            )
+        assert "neo4j" in result
+        assert result.count("neo4j") == 1
+        brain.switch_project.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -482,8 +525,11 @@ class TestToolGraphStatus:
 
     def test_graph_status_with_data(self):
         brain = _make_brain()
-        brain._entity_graph = {"EntityA": {}, "EntityB": {}}
-        brain._relation_count = 5
+        brain._graph_backend.status.return_value = {
+            "entities": 2,
+            "relations": 5,
+            "community_summaries": 0,
+        }
         result = _tool_graph_status(brain)
         assert "entities: 2" in result
 

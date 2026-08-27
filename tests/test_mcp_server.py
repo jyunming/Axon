@@ -439,6 +439,41 @@ def test_create_project_proxies_post():
     asyncio.run(_run())
 
 
+def test_create_project_forwards_graph_backend_when_provided():
+    import asyncio
+    from unittest.mock import patch
+
+    from axon.mcp_server import create_project
+
+    async def _run():
+        rv = {"status": "created", "project": "dgproj", "graph_backend": "dynamic_graph"}
+        mock_post = _mock_post(rv)
+        with patch("httpx.AsyncClient.post", mock_post):
+            result = await create_project(name="dgproj", graph_backend="dynamic_graph")
+        assert result == rv
+        body = mock_post.call_args.kwargs["json"]
+        assert body["graph_backend"] == "dynamic_graph"
+
+    asyncio.run(_run())
+
+
+def test_create_project_omits_graph_backend_when_not_provided():
+    import asyncio
+    from unittest.mock import patch
+
+    from axon.mcp_server import create_project
+
+    async def _run():
+        rv = {"status": "created", "project": "myproj"}
+        mock_post = _mock_post(rv)
+        with patch("httpx.AsyncClient.post", mock_post):
+            await create_project(name="myproj")
+        body = mock_post.call_args.kwargs["json"]
+        assert "graph_backend" not in body
+
+    asyncio.run(_run())
+
+
 def test_delete_project_proxies_post():
     import asyncio
     from unittest.mock import patch

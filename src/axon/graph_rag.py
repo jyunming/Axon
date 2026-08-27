@@ -126,6 +126,18 @@ class GraphRagMixin:
                     self._graph_lock_internal = threading.RLock()
         return self._graph_lock_internal
 
+    @property
+    def _gr_cache_lock(self) -> threading.Lock:
+        """Leaf-level lock for the GraphRAG LLM/extraction cache. Never
+        acquire _graph_lock (or _traversal_cache_lock) while holding this —
+        see the comment on _gr_cache_lock_internal's init in main.py for why.
+        """
+        if not hasattr(self, "_gr_cache_lock_internal"):
+            with GraphRagMixin._lazy_init_lock:
+                if not hasattr(self, "_gr_cache_lock_internal"):
+                    self._gr_cache_lock_internal = threading.Lock()
+        return self._gr_cache_lock_internal
+
     # Entity token index (inverted index: token -> set of entity names)
     # Not persisted; rebuilt from _entity_graph after load.
     @property
@@ -169,6 +181,33 @@ class GraphRagMixin:
                 bucket.discard(eid)
                 if not bucket:
                     del idx[token]
+
+    def _reset_graph_state(self) -> None:
+        """Reset all in-memory GraphRAG state to empty, without touching disk.
+
+        Single source of truth for "wipe graph state and start clean" —
+        used both by ``GraphRagBackend.clear()`` and by ``_switch_to_scope``
+        when entering a merged read-only scope. Held under ``_graph_lock``
+        so concurrent ``/graph/data`` readers can't observe a half-cleared
+        graph (matches the locking already used by ``clear()``/
+        ``delete_documents()``/``_prune_entity_graph``).
+        """
+        with self._graph_lock:
+            self._entity_graph = {}
+            self._rebuild_entity_token_index()
+            self._relation_graph = {}
+            self._community_levels = {}
+            self._community_summaries = {}
+            self._entity_embeddings = {}
+            self._entity_description_buffer = {}
+            self._claims_graph = {}
+            self._community_graph_dirty = False
+            self._community_hierarchy = {}
+            self._community_children = {}
+            self._relation_description_buffer = {}
+            self._text_unit_entity_map = {}
+            self._text_unit_relation_map = {}
+            self._raptor_summary_cache = {}
 
     def _track_persist_future(self, future: concurrent.futures.Future) -> None:
         """Append *future* to the pending list, pruning already-done entries."""
@@ -345,15 +384,16 @@ class GraphRagMixin:
         if not getattr(self.config, "graph_rag_extraction_cache", True):
             self._graph_rag_cache_dirty = False
             return
-        store = self._gr_cache_store()
-        payload = {
-            "format": "gr_ex_cache_v1",
-            "buckets": {
-                bucket: dict(store.get(bucket, {}))
-                for bucket in self._GR_PERSISTABLE_CACHE_BUCKETS
-                if store.get(bucket)
-            },
-        }
+        with self._gr_cache_lock:
+            store = self._gr_cache_store()
+            payload = {
+                "format": "gr_ex_cache_v1",
+                "buckets": {
+                    bucket: dict(store.get(bucket, {}))
+                    for bucket in self._GR_PERSISTABLE_CACHE_BUCKETS
+                    if store.get(bucket)
+                },
+            }
         mp_path = self._gr_extraction_cache_path()
         json_path = self._gr_extraction_cache_json_path()
         mp_path.parent.mkdir(parents=True, exist_ok=True)
@@ -379,7 +419,7 @@ class GraphRagMixin:
         self._graph_rag_cache_dirty = False
 
     def _gr_cache_get(self, bucket: str, key: str):
-        with self._graph_lock:
+        with self._gr_cache_lock:
             store = self._gr_cache_store()
             return store.get(bucket, {}).get(key)
 
@@ -409,7 +449,7 @@ class GraphRagMixin:
             cap = int(getattr(self.config, "graph_rag_extraction_cache_size", 5000))
         if cap <= 0:
             return
-        with self._graph_lock:
+        with self._gr_cache_lock:
             store = self._gr_cache_store()
             bucket_map = store.setdefault(bucket, {})
             bucket_map[key] = value
@@ -706,44 +746,19 @@ class GraphRagMixin:
     def _gr_write_json_if_changed(self, path, payload, *, sort_keys: bool = False) -> bool:
         """Atomically write JSON only when content changed. Returns True if written.
 
-        Uses ``axon.version_marker._atomic_replace`` so the rename
-        survives Windows / OneDrive / cloud-sync transient locks
-        (audit P1: graph_rag bytes/json writers were missing this
-        fallback that ``dynamic_graph_backend`` already implements).
+        Delegates to :func:`axon._atomic_persist.write_json_if_changed` —
+        see its docstring for the digest-cache-gated / cloud-sync-safe
+        rename semantics (audit P1: graph_rag bytes/json writers were
+        missing the atomic-rename fallback ``dynamic_graph_backend``
+        already implements).
         """
-        import hashlib as _hashlib
-        import json as _json
-        import pathlib as _pathlib
+        from axon._atomic_persist import write_json_if_changed
 
-        from axon.version_marker import _atomic_replace as _safe_replace
-
-        p = _pathlib.Path(path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        text = _json.dumps(payload, sort_keys=sort_keys, separators=(",", ":"))
-        digest = _hashlib.sha1(text.encode("utf-8", errors="replace")).hexdigest()
         cache = getattr(self, "_gr_persist_hashes", None)
         if not isinstance(cache, dict):
             cache = {}
             self._gr_persist_hashes = cache
-        p_key = str(p)
-        if cache.get(p_key) == digest and p.exists():
-            return False
-        if p.exists() and cache.get(p_key) is None:
-            try:
-                existing = p.read_text(encoding="utf-8")
-                existing_digest = _hashlib.sha1(
-                    existing.encode("utf-8", errors="replace")
-                ).hexdigest()
-                cache[p_key] = existing_digest
-                if existing_digest == digest:
-                    return False
-            except Exception:
-                pass
-        tmp = p.with_suffix(p.suffix + ".tmp")
-        tmp.write_text(text, encoding="utf-8")
-        _safe_replace(tmp, p)
-        cache[p_key] = digest
-        return True
+        return write_json_if_changed(path, payload, cache, sort_keys=sort_keys)
 
     def _gr_write_bytes_if_changed(self, path, payload: bytes) -> bool:
         """Atomically write bytes only when content changed. Returns True if written.
@@ -912,58 +927,6 @@ class GraphRagMixin:
                 seen.update(entity_data.get("chunk_ids", []))
         return seen
 
-    _GR_CACHE_FILE = ".gr_cache.msgpack"
-
-    def _save_gr_cache(self) -> None:
-        """Persist entity extraction buckets of _graph_rag_cache to disk for cross-restart skip."""
-        import json
-        import pathlib
-
-        from axon.rust_bridge import get_rust_bridge
-
-        cache = getattr(self, "_graph_rag_cache", {})
-        entities_bucket = cache.get("entities", {})
-        if not entities_bucket:
-            return
-        path = pathlib.Path(self.config.bm25_path) / self._GR_CACHE_FILE
-        path.parent.mkdir(parents=True, exist_ok=True)
-        bridge = get_rust_bridge()
-        if bridge.can_entity_graph_codec():
-            raw = bridge.encode_entity_graph(entities_bucket)
-            if raw is not None:
-                path.write_bytes(raw)
-                return
-        try:
-            path.write_text(json.dumps({"entities": entities_bucket}), encoding="utf-8")
-        except Exception as exc:
-            logger.debug("_save_gr_cache failed: %s", exc)
-
-    def _load_gr_cache(self) -> dict:
-        """Load the persisted extraction cache; merges into _graph_rag_cache on brain open."""
-        import json
-        import pathlib
-
-        from axon.rust_bridge import get_rust_bridge
-
-        path = pathlib.Path(self.config.bm25_path) / self._GR_CACHE_FILE
-        if not path.exists():
-            return {}
-        bridge = get_rust_bridge()
-        if bridge.can_entity_graph_codec():
-            try:
-                result = bridge.decode_entity_graph(path.read_bytes())
-                if isinstance(result, dict):
-                    return {"entities": result}
-            except Exception:
-                pass
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                return data
-        except Exception:
-            pass
-        return {}
-
     def _load_entity_graph(self) -> dict:
         """Load persisted entity→doc_id graph from disk.
         Shape: {entity_lower: {"description": str, "chunk_ids": list[str]}}
@@ -1041,28 +1004,6 @@ class GraphRagMixin:
                     logger.debug("entity_graph msgpack save failed: %s", e)
         path = bm25_path / ".entity_graph.json"
         self._gr_write_json_if_changed(path, snapshot)
-
-    def _load_code_graph(self) -> dict:
-        """Load code graph from disk. Returns empty graph if not found."""
-        import json
-        import pathlib
-
-        path = pathlib.Path(self.config.bm25_path) / ".code_graph.json"
-        if path.exists():
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-                if isinstance(data, dict) and "nodes" in data and "edges" in data:
-                    return data
-            except Exception:
-                pass
-        return {"nodes": {}, "edges": []}
-
-    def _save_code_graph(self) -> None:
-        """Persist code graph to disk."""
-        import pathlib
-
-        path = pathlib.Path(self.config.bm25_path) / ".code_graph.json"
-        self._gr_write_json_if_changed(path, self._code_graph)
 
     @staticmethod
     def _normalize_relation_graph(raw: dict) -> dict:
@@ -2170,6 +2111,133 @@ class GraphRagMixin:
         "PRODUCT": "#edc948",
         "UNKNOWN": "#bab0ab",
     }
+
+    def build_graph_payload(self) -> dict:
+        """Return a renderer-neutral graph payload normalised from internal graph state.
+        The payload shape is::
+
+            {
+                "nodes": [{"id", "name", "label", "type", "color", "val",
+                           "chunk_count", "degree", "community", "description",
+                           "tooltip",
+                           "evidence": [{"chunk_id", "source", "start_line", "excerpt"}, ...]
+                           }, ...],
+                "links": [{"source", "target", "label", "relation",
+                           "description", "value", "width"}, ...]
+            }
+        ``evidence`` is populated from the vector store for each chunk ID
+        referenced by the node.  It may be empty if the store is unavailable or
+        no chunks have been ingested yet.
+        This method separates graph extraction from rendering.  Feed the result
+        to :meth:`export_graph_html` or any other renderer.
+        """
+        from html import escape
+
+        # community_levels level-0 schema: {entity -> community_id (int)}
+        entity_to_community: dict[str, int] = {}
+        if self._community_levels:
+            for entity, cid in self._community_levels.get(0, {}).items():
+                try:
+                    entity_to_community[entity] = int(cid)
+                except (TypeError, ValueError):
+                    pass
+
+        def _tooltip(name: str, node: dict, community: int | None) -> str:
+            desc = (node.get("description") or "").strip()
+            desc = escape(desc[:220]) if desc else "No description"
+            ntype = escape(node.get("type") or "UNKNOWN")
+            chunk_count = len(node.get("chunk_ids", []))
+            degree = node.get("degree", 0)
+            comm = "None" if community is None else str(community)
+            return (
+                f"<div style='max-width:320px'>"
+                f"<div><b>{escape(name)}</b></div>"
+                f"<div><b>Type:</b> {ntype}</div>"
+                f"<div><b>Chunks:</b> {chunk_count}</div>"
+                f"<div><b>Degree:</b> {degree}</div>"
+                f"<div><b>Community:</b> {comm}</div>"
+                f"<div style='margin-top:6px'>{desc}</div>"
+                f"</div>"
+            )
+
+        # Build a chunk_id → metadata lookup for evidence population.
+        all_chunk_ids: list[str] = []
+        for _node in self._entity_graph.values():
+            if isinstance(_node, dict):
+                all_chunk_ids.extend(_node.get("chunk_ids", []))
+        chunk_meta_lookup: dict[str, dict] = {}
+        if all_chunk_ids and hasattr(self, "vector_store"):
+            try:
+                for _doc in self.vector_store.get_by_ids(list(dict.fromkeys(all_chunk_ids))):
+                    _cid = _doc.get("id") or _doc.get("chunk_id", "")
+                    if _cid:
+                        chunk_meta_lookup[_cid] = _doc.get("metadata", _doc)
+            except Exception:
+                pass
+        nodes: list[dict] = []
+        node_ids: set[str] = set()
+        for name, node in self._entity_graph.items():
+            if not isinstance(node, dict):
+                continue
+            community = entity_to_community.get(name)
+            chunk_count = len(node.get("chunk_ids", []))
+            evidence = [
+                {
+                    "chunk_id": cid,
+                    "source": meta.get("source", ""),
+                    "start_line": meta.get("start_line"),
+                    "excerpt": (meta.get("text") or meta.get("page_content") or "")[:200],
+                }
+                for cid in node.get("chunk_ids", [])
+                if (meta := chunk_meta_lookup.get(cid)) is not None
+            ]
+            nodes.append(
+                {
+                    "id": name,
+                    "name": name,
+                    "label": name[:24],
+                    "type": node.get("type") or "UNKNOWN",
+                    "color": self._VIZ_TYPE_COLORS.get(node.get("type") or "UNKNOWN", "#aec7e8"),
+                    "val": 4 + min(chunk_count, 18),
+                    "chunk_count": chunk_count,
+                    "chunk_ids": node.get("chunk_ids", []),
+                    "degree": node.get("degree", 0),
+                    "community": community,
+                    "description": (node.get("description") or "")[:220],
+                    "tooltip": _tooltip(name, node, community),
+                    "evidence": evidence,
+                }
+            )
+            node_ids.add(name)
+        links: list[dict] = []
+        seen_edges: set[tuple] = set()
+        for src, rels in self._relation_graph.items():
+            if src not in node_ids:
+                continue
+            for rel in rels:
+                if not isinstance(rel, dict):
+                    continue
+                tgt = rel.get("target") or rel.get("object", "")
+                if not tgt or tgt not in node_ids:
+                    continue
+                relation = rel.get("relation", "")
+                key = (src, tgt, relation)
+                if key in seen_edges:
+                    continue
+                seen_edges.add(key)
+                strength = float(rel.get("weight") or rel.get("strength") or 5)
+                links.append(
+                    {
+                        "source": src,
+                        "target": tgt,
+                        "label": relation[:32],
+                        "relation": relation,
+                        "description": rel.get("description", ""),
+                        "value": strength,
+                        "width": 1 + strength / 8,
+                    }
+                )
+        return {"nodes": nodes, "links": links}
 
     def _generate_community_summaries(self, query_hint: str = "") -> None:
         """Generate LLM summaries for each detected community cluster across all levels.

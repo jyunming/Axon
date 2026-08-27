@@ -310,13 +310,19 @@ async def get_stale_docs(days: int = 7) -> Any:
 
 
 @mcp.tool()
-async def create_project(name: str, description: str = "") -> Any:
+async def create_project(name: str, description: str = "", graph_backend: str | None = None) -> Any:
     """Create a new knowledge base project.
     Args:
         name: Name of the project to create.
         description: Optional description of the project contents.
+        graph_backend: Graph backend for this project — "graphrag" (default),
+            "dynamic_graph", or "none". Immutable once set. Not settable here:
+            "federated" (config.yaml-only override).
     """
-    return await _post("/project/new", {"name": name, "description": description})
+    body: dict = {"name": name, "description": description}
+    if graph_backend is not None:
+        body["graph_backend"] = graph_backend
+    return await _post("/project/new", body)
 
 
 @mcp.tool()

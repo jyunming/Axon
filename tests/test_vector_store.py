@@ -2987,3 +2987,23 @@ def test_clear_active_project():
     assert brain._active_project == "myproj"  # It stays on the project, but wipes its data
     assert brain._ingested_hashes == set()
     assert brain._doc_versions == {}
+
+
+def test_clear_active_project_delegates_graph_reset_to_backend():
+    """The in-memory reset AND persistence of the now-empty state both go
+    through _graph_backend.clear(persist=True) — the single source of
+    truth for "wipe graph state" (also correctly clears non-GraphRAG
+    backends like dynamic_graph, which direct brain._save_* calls never
+    touched regardless of which backend was actually active). collection_ops
+    no longer calls any brain._save_* method directly — persisting the 7
+    GraphRAG files is now GraphRagBackend.clear(persist=True)'s own
+    responsibility, exercised separately in test_graph_backend_base.py."""
+    brain = MagicMock()
+    brain._active_project = "myproj"
+    brain.vector_store = MagicMock()
+    brain.bm25 = MagicMock()
+
+    clear_active_project(brain)
+
+    brain._graph_backend.clear.assert_called_once_with(persist=True)
+    assert brain._community_build_in_progress is False

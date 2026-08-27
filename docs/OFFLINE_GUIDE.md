@@ -53,6 +53,22 @@ vector_store:
 | **Vector store** | `turboquantdb` (default), `lancedb`, `chroma` | `qdrant` (remote) |
 | **Web search** | — | Brave (disabled automatically) |
 
+### Dynamic Graph backend and offline mode
+
+A project created with `graph_backend: dynamic_graph` is offline-safe by
+construction — its bi-temporal graph is a local SQLite file
+(`.dynamic_graph.db`) under the project directory; nothing about storage or
+retrieval makes a network call.
+
+Unlike `raptor`/`graph_rag` above, offline mode does **not** auto-disable
+`dynamic_graph`'s entity/fact extraction — there is no separate flag to turn
+off. Extraction runs through the same `brain.llm` client every other LLM call
+in Axon uses, so it is bound by the same provider restriction (see
+"Compatible providers" above): with offline mode on, `llm.provider` can only
+be `ollama`, `local`, or `vllm`, so extraction calls never leave the machine.
+If you want a project with zero LLM calls at all — not even to a local
+provider — create it with `graph_backend: none` instead.
+
 ---
 
 ## 2. Local-Assets-Only Mode — Strict HF Enforcement

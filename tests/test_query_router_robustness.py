@@ -429,8 +429,17 @@ def _make_full_stub(**config_kwargs) -> RouterStubV2:
     stub._last_diagnostics = None
     # Wire a MagicMock graph backend; retrieve() is never called because
     # _entity_graph is empty (cfg.graph_rag guard short-circuits first).
+    # has_entities()/has_community_summaries() are wired as side_effects
+    # (not static return_values) so they mirror the real GraphRagBackend's
+    # bool(brain._entity_graph)/bool(brain._community_summaries) behavior —
+    # including tests that mutate stub._entity_graph/_community_summaries
+    # after this stub is constructed.
     stub._graph_backend = MagicMock()
     stub._graph_backend.retrieve.return_value = []
+    stub._graph_backend.has_entities.side_effect = lambda: bool(stub._entity_graph)
+    stub._graph_backend.has_community_summaries.side_effect = lambda: bool(
+        stub._community_summaries
+    )
     return stub
 
 

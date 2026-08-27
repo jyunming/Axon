@@ -44,9 +44,14 @@ def _build_overview(brain, jobs: dict) -> dict:
     relation_count = 0
     community_count = 0
     if brain:
-        entity_count = len(getattr(brain, "_entity_graph", {}) or {})
-        relation_count = len(getattr(brain, "_relation_graph", {}) or {})
-        community_count = len(getattr(brain, "_community_summaries", {}) or {})
+        try:
+            backend = getattr(brain, "_graph_backend", None)
+            status = backend.status() if backend is not None else {}
+            entity_count = status.get("entities", 0)
+            relation_count = status.get("relations", 0)
+            community_count = status.get("community_summaries", 0)
+        except Exception:
+            pass
     # Stale docs
     stale_count = 0
     if brain:
@@ -181,9 +186,11 @@ async def governance_projects():
             maint = {"maintenance_state": "unknown", "active_leases": 0}
         graph_state = {}
         if brain and getattr(brain, "_active_project", None) == name:
+            backend = getattr(brain, "_graph_backend", None)
+            status = backend.status() if backend is not None else {}
             graph_state = {
-                "entity_count": len(getattr(brain, "_entity_graph", {}) or {}),
-                "community_count": len(getattr(brain, "_community_summaries", {}) or {}),
+                "entity_count": status.get("entities", 0),
+                "community_count": status.get("community_summaries", 0),
             }
         result.append({**p, "maintenance": maint, "graph": graph_state})
     return {"projects": result, "count": len(result)}
@@ -218,8 +225,13 @@ async def governance_graph_rebuild(req: Request):
         request_id=rid,
     )
     try:
-        await asyncio.to_thread(brain.finalize_graph, True)
-        summary_count = len(brain._community_summaries)
+        backend = getattr(brain, "_graph_backend", None)
+        if backend is not None and callable(getattr(backend, "finalize", None)):
+            result = await asyncio.to_thread(backend.finalize, True)
+            summary_count = getattr(result, "communities_built", 0)
+        else:
+            await asyncio.to_thread(brain.finalize_graph, True)
+            summary_count = len(getattr(brain, "_community_summaries", {}) or {})
         gov.emit(
             "graph_finalize",
             "graph",

@@ -348,6 +348,23 @@ class TestDynamicGraphBackendFinalize:
 
 
 # ---------------------------------------------------------------------------
+# close() — needed by main.py's switch_project()/close() wiring, which calls
+# it whenever the active project's backend is torn down or replaced.
+# ---------------------------------------------------------------------------
+
+
+class TestDynamicGraphBackendClose:
+    def test_close_does_not_raise(self, tmp_path):
+        backend = _make_backend(tmp_path)
+        backend.close()  # should not raise
+
+    def test_close_is_idempotent(self, tmp_path):
+        backend = _make_backend(tmp_path)
+        backend.close()
+        backend.close()  # calling twice must not raise
+
+
+# ---------------------------------------------------------------------------
 # Factory integration
 # ---------------------------------------------------------------------------
 

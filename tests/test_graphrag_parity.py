@@ -6,10 +6,16 @@ pass-through for graph state and retrieval results.
 """
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+import json
+from contextlib import contextmanager
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from axon.graph_backends.base import GraphDataFilters, IngestResult
 from axon.graph_backends.graphrag_backend import GraphRagBackend
+from axon.main import AxonBrain, AxonConfig
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -234,43 +240,26 @@ class TestRetrieveParity:
 
 
 class TestMutationParity:
-    def test_clear_empties_entity_graph(self):
-        brain = _make_brain(
-            entity_graph={"alice": {"chunk_ids": ["c1"]}},
-            relation_graph={"alice": [{"target": "bob"}]},
-            community_levels={0: {"alice": 0}},
-            community_summaries={0: "summary"},
-        )
+    """clear()/delete_documents() now delegate to the real GraphRagMixin
+    methods (_reset_graph_state()/_prune_entity_graph()) instead of
+    reimplementing a partial version of their behavior — see
+    GRAPH_BACKEND_NEXT_STEPS.md Phase 1. Full-behavior coverage (relation/
+    claims pruning, persistence, token-index cleanup) lives with those
+    methods' own tests in test_main.py / test_graph_rag.py; these tests only
+    verify the adapter delegates with the right arguments.
+    """
+
+    def test_clear_delegates_to_reset_graph_state(self):
+        brain = _make_brain()
         backend = GraphRagBackend(brain)
         backend.clear()
-        assert brain._entity_graph == {}
-        assert brain._relation_graph == {}
-        assert brain._community_levels == {}
-        assert brain._community_summaries == {}
+        brain._reset_graph_state.assert_called_once_with()
 
-    def test_delete_documents_removes_chunk_from_entity(self):
-        brain = _make_brain(entity_graph={"alice": {"chunk_ids": ["c1", "c2"]}})
+    def test_delete_documents_delegates_to_prune_entity_graph(self):
+        brain = _make_brain()
         backend = GraphRagBackend(brain)
-        backend.delete_documents(["c1"])
-        assert brain._entity_graph["alice"]["chunk_ids"] == ["c2"]
-
-    def test_delete_documents_removes_entity_when_all_chunks_gone(self):
-        brain = _make_brain(entity_graph={"alice": {"chunk_ids": ["c1"]}})
-        backend = GraphRagBackend(brain)
-        backend.delete_documents(["c1"])
-        assert "alice" not in brain._entity_graph
-
-    def test_delete_documents_leaves_unrelated_entities(self):
-        brain = _make_brain(
-            entity_graph={
-                "alice": {"chunk_ids": ["c1"]},
-                "bob": {"chunk_ids": ["c2"]},
-            }
-        )
-        backend = GraphRagBackend(brain)
-        backend.delete_documents(["c1"])
-        assert "alice" not in brain._entity_graph
-        assert "bob" in brain._entity_graph
+        backend.delete_documents(["c1", "c2"])
+        brain._prune_entity_graph.assert_called_once_with({"c1", "c2"})
 
 
 # ---------------------------------------------------------------------------
@@ -293,3 +282,209 @@ class TestIngestNoOp:
         backend = GraphRagBackend(_make_brain())
         result = backend.ingest([])
         assert result.chunks_processed == 0
+
+
+# ---------------------------------------------------------------------------
+# End-to-end fixture-driven parity: real AxonBrain, canned LLM, real
+# ingest -> extraction -> community-build -> render. Complements the
+# MagicMock adapter-contract tests above (which only verify delegation) with
+# genuine behavior coverage — this is the drift detector Phase 3/4 rely on.
+# See docs/architecture/GRAPH_BACKEND_NEXT_STEPS.md Phase 2.
+# ---------------------------------------------------------------------------
+
+_FIXTURES_DIR = Path(__file__).parent / "fixtures" / "graphrag_parity"
+_SCENARIOS = [
+    "codebase",
+    "issue_thread",
+    "paper_abstract",
+    "project_doc",
+    "software_guide",
+    "stdlib_docs",
+]
+
+
+def _load_fixture(name: str) -> dict:
+    d = _FIXTURES_DIR / name
+    return {
+        "input_text": (d / "input.txt").read_text(encoding="utf-8"),
+        "canned": json.loads((d / "canned_extraction.json").read_text(encoding="utf-8")),
+        "expected": json.loads((d / "expected_graph.json").read_text(encoding="utf-8")),
+    }
+
+
+def _canned_llm(canned: dict):
+    """Match on prompt BODY content, not system_prompt substrings — the
+    README's documented matcher (system_prompt substrings "named entities"/
+    "relationships") never matches the real prompts and would silently
+    no-op. This mirrors the proven pattern in test_mixin_integration.py.
+    Anything else (community-summary JSON prompts, etc.) falls through to a
+    plain-text default: _generate_community_summaries gracefully treats
+    non-JSON output as raw summary text rather than raising.
+    """
+
+    def _complete(prompt, system_prompt=None, **kwargs):
+        prompt_l = prompt.lower()
+        if "extract the key named entities" in prompt_l:
+            return canned["entities"]
+        if "extract key relationships" in prompt_l:
+            return canned["relations"]
+        return "no-op summary"
+
+    return _complete
+
+
+class TestGraphRagParityFixtures:
+    @pytest.fixture
+    def make_brain(self, tmp_path):
+        @contextmanager
+        def _make(canned: dict):
+            config = AxonConfig(
+                axon_store_base=str(tmp_path),
+                bm25_path=str(tmp_path),
+                vector_store_path=str(tmp_path),
+                graph_rag=True,
+                graph_rag_relations=True,
+                graph_rag_min_entities_for_relations=0,
+                graph_rag_llm_fused_extraction=False,
+                graph_rag_community=True,
+                graph_rag_community_lazy=False,
+                raptor=False,
+                similarity_threshold=0.0,
+            )
+            # Patches stay live for the whole test body (not just brain
+            # construction) — matches test_mixin_integration.py's proven
+            # pattern, so anything lazily re-touching these classes during
+            # ingest/finalize stays mocked too.
+            with patch("axon.main.OpenVectorStore"), patch("axon.retrievers.BM25Retriever"), patch(
+                "axon.main.OpenEmbedding"
+            ) as mock_embed, patch("axon.main.OpenLLM") as mock_llm, patch(
+                "axon.main.OpenReranker"
+            ), patch(
+                "axon.projects.ensure_project"
+            ), patch(
+                "axon.projects.ensure_user_project"
+            ):
+                mock_embed.return_value.embed.return_value = [[0.1] * 8]
+                mock_embed.return_value.embed_query.return_value = [0.1] * 8
+                mock_llm.return_value.complete.side_effect = _canned_llm(canned)
+                brain = AxonBrain(config)
+                # Store-isolation guard (GRAPH_BACKEND_NEXT_STEPS.md "Safety
+                # notes") — never let a fixture-driven test resolve onto the
+                # real global store.
+                assert str(tmp_path) in str(brain.config.projects_root)
+                try:
+                    yield brain
+                finally:
+                    brain.close()
+
+        return _make
+
+    @pytest.mark.parametrize("scenario", _SCENARIOS)
+    def test_ingest_extraction_community_render_parity(self, make_brain, scenario):
+        fixture = _load_fixture(scenario)
+        with make_brain(fixture["canned"]) as brain:
+            brain.ingest([{"id": f"{scenario}_doc", "text": fixture["input_text"]}])
+
+            expected = fixture["expected"]
+            entity_keys = {k.lower() for k in expected["expected_entity_keys"]}
+            got_keys = set(brain._entity_graph.keys())
+            missing = entity_keys - got_keys
+            assert not missing, f"{scenario}: missing entities {missing} in {sorted(got_keys)}"
+
+            for name, expected_type in expected.get("expected_entity_types", {}).items():
+                node = brain._entity_graph.get(name.lower())
+                assert node is not None, f"{scenario}: {name} missing from entity graph"
+                assert node["type"] == expected_type, (
+                    f"{scenario}: {name} type {node['type']!r} != " f"expected {expected_type!r}"
+                )
+
+            for subject, obj in expected.get("expected_relation_pairs", []):
+                subj_l, obj_l = subject.lower(), obj.lower()
+                rels = brain._relation_graph.get(subj_l, [])
+                targets = {r.get("target") for r in rels}
+                assert obj_l in targets, (
+                    f"{scenario}: relation {subject}->{obj} not found; "
+                    f"{subj_l} has targets {targets}"
+                )
+
+            # Close the loop: finalize (community build) + render, both
+            # asserted through the backend surface — not the mixin methods
+            # directly — so this stays stable when Phase 3/4 relocate them.
+            result = brain._graph_backend.finalize()
+            # Pinned > 0, not just >= 0: every fixture scenario produces real
+            # communities (verified 4-9 across the 6 scenarios) — >= 0 would
+            # pass even if community detection silently no-op'd.
+            assert result.communities_built > 0, (
+                f"{scenario}: expected at least one community, got " f"{result.communities_built}"
+            )
+
+            payload = brain._graph_backend.graph_data()
+            assert payload.nodes, f"{scenario}: render produced no nodes"
+            rendered_ids = {n["id"] for n in payload.nodes}
+            assert (
+                entity_keys <= rendered_ids
+            ), f"{scenario}: render missing {entity_keys - rendered_ids}"
+
+
+class TestCommunitySummarizationDoesNotDeadlock:
+    """Regression test for a deadlock discovered while wiring the fixtures
+    above: _rebuild_communities holds _graph_lock (an RLock) for its whole
+    body, then _generate_community_summaries dispatches _summarise onto a
+    real ThreadPoolExecutor; worker threads call _gr_cache_get, which used
+    to also acquire _graph_lock — a different OS thread than the one
+    holding it, so RLock's same-thread reentry never applies and every
+    worker blocks forever. Fixed by giving the GraphRAG cache its own
+    dedicated leaf lock (_gr_cache_lock) that's never held while dispatching
+    executor work. Runs finalize() in a daemon thread with a bounded join so
+    a regression fails in 30s instead of hanging the test run / CI.
+    """
+
+    def test_finalize_does_not_deadlock_on_graph_lock(self, tmp_path):
+        import threading
+
+        fixture = _load_fixture("codebase")
+        config = AxonConfig(
+            axon_store_base=str(tmp_path),
+            bm25_path=str(tmp_path),
+            vector_store_path=str(tmp_path),
+            graph_rag=True,
+            graph_rag_relations=True,
+            graph_rag_min_entities_for_relations=0,
+            graph_rag_llm_fused_extraction=False,
+            graph_rag_community=True,
+            graph_rag_community_lazy=False,
+            raptor=False,
+            similarity_threshold=0.0,
+        )
+        with patch("axon.main.OpenVectorStore"), patch("axon.retrievers.BM25Retriever"), patch(
+            "axon.main.OpenEmbedding"
+        ) as mock_embed, patch("axon.main.OpenLLM") as mock_llm, patch(
+            "axon.main.OpenReranker"
+        ), patch(
+            "axon.projects.ensure_project"
+        ), patch(
+            "axon.projects.ensure_user_project"
+        ):
+            mock_embed.return_value.embed.return_value = [[0.1] * 8]
+            mock_embed.return_value.embed_query.return_value = [0.1] * 8
+            mock_llm.return_value.complete.side_effect = _canned_llm(fixture["canned"])
+            brain = AxonBrain(config)
+            assert str(tmp_path) in str(brain.config.projects_root)
+            try:
+                brain.ingest([{"id": "codebase_doc", "text": fixture["input_text"]}])
+
+                result_holder: dict = {}
+
+                def _run():
+                    result_holder["result"] = brain._graph_backend.finalize()
+
+                thread = threading.Thread(target=_run, daemon=True)
+                thread.start()
+                thread.join(timeout=30)
+                assert not thread.is_alive(), (
+                    "community summarization deadlocked under _graph_lock "
+                    "(finalize() did not return within 30s)"
+                )
+                assert result_holder["result"].communities_built > 0
+            finally:
+                brain.close()
