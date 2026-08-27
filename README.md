@@ -146,6 +146,7 @@ If something doesn't look right:
 
 ```bash
 axon --doctor                     # Health checks: Python, Ollama, model pulled, store writable.
+axon update                       # Check PyPI and upgrade the package + VS Code extension together.
 ```
 
 Local inference uses [Ollama](https://ollama.com) or vLLM (self-hosted). Cloud providers (OpenAI, Gemini, Grok, GitHub Copilot, Ollama Cloud) work via API keys.

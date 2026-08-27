@@ -1182,3 +1182,119 @@ class TestMainEdgeCases:
         with patch("axon.projects.delete_project"):
             run_cli("--project-delete", "myproject")
         brain.query.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# `axon update` — bare subcommand intercepted before argparse (see main())
+# ---------------------------------------------------------------------------
+
+
+class TestAxonUpdateSubcommand:
+    def test_unknown_flag_rejected(self, capsys):
+        code = run_cli("update", "--bogus")
+        assert code == 2
+        assert "Unknown argument" in capsys.readouterr().out
+
+    def test_already_current_short_circuits(self, capsys):
+        from axon.update_check import UpdateCheckResult
+
+        with patch("axon.config.AxonConfig.load", return_value=MagicMock(offline_mode=False)):
+            with patch(
+                "axon.update_check.check_for_update",
+                return_value=UpdateCheckResult("0.4.4", "0.4.4", False),
+            ):
+                code = run_cli("update")
+        assert code == 0
+        assert "Already on the latest version" in capsys.readouterr().out
+
+    def test_offline_mode_refuses(self, capsys):
+        from axon.update_check import UpdateCheckResult
+
+        with patch("axon.config.AxonConfig.load", return_value=MagicMock(offline_mode=True)):
+            with patch(
+                "axon.update_check.check_for_update",
+                return_value=UpdateCheckResult("0.4.4", None, False, skipped_reason="offline_mode"),
+            ):
+                code = run_cli("update")
+        assert code == 1
+        assert "offline_mode" in capsys.readouterr().out
+
+    def test_check_error_reported(self, capsys):
+        from axon.update_check import UpdateCheckResult
+
+        with patch("axon.config.AxonConfig.load", return_value=MagicMock(offline_mode=False)):
+            with patch(
+                "axon.update_check.check_for_update",
+                return_value=UpdateCheckResult("0.4.4", None, False, skipped_reason="error"),
+            ):
+                code = run_cli("update")
+        assert code == 1
+        assert "Could not reach PyPI" in capsys.readouterr().out
+
+    def test_yes_flag_skips_confirmation_and_upgrades(self, capsys):
+        from axon.update_check import UpdateCheckResult, UpdateRunResult
+
+        with patch("axon.config.AxonConfig.load", return_value=MagicMock(offline_mode=False)):
+            with patch(
+                "axon.update_check.check_for_update",
+                return_value=UpdateCheckResult("0.4.4", "0.5.0", True),
+            ):
+                with patch(
+                    "axon.update_check.run_update",
+                    return_value=UpdateRunResult(
+                        "upgraded",
+                        "Upgraded 0.4.4 → 0.5.0 via pip.",
+                        package_before="0.4.4",
+                        package_after="0.5.0",
+                        vsix_status="installed",
+                    ),
+                ) as mock_run:
+                    code = run_cli("update", "-y")
+        mock_run.assert_called_once()
+        assert code == 0
+        out = capsys.readouterr().out
+        assert "Upgraded 0.4.4" in out
+        assert "VS Code extension: installed" in out
+
+    def test_non_interactive_without_yes_refuses(self, capsys):
+        from axon.update_check import UpdateCheckResult
+
+        with patch("axon.config.AxonConfig.load", return_value=MagicMock(offline_mode=False)):
+            with patch(
+                "axon.update_check.check_for_update",
+                return_value=UpdateCheckResult("0.4.4", "0.5.0", True),
+            ):
+                with patch("sys.stdin.isatty", return_value=False):
+                    code = run_cli("update")
+        assert code == 1
+        assert "axon update -y" in capsys.readouterr().out
+
+    def test_interactive_decline_cancels(self, capsys):
+        from axon.update_check import UpdateCheckResult
+
+        with patch("axon.config.AxonConfig.load", return_value=MagicMock(offline_mode=False)):
+            with patch(
+                "axon.update_check.check_for_update",
+                return_value=UpdateCheckResult("0.4.4", "0.5.0", True),
+            ):
+                with patch("sys.stdin.isatty", return_value=True):
+                    with patch("builtins.input", return_value="n"):
+                        code = run_cli("update")
+        assert code == 1
+        assert "Cancelled" in capsys.readouterr().out
+
+    def test_refused_run_update_reported(self, capsys):
+        from axon.update_check import UpdateCheckResult, UpdateRunResult
+
+        with patch("axon.config.AxonConfig.load", return_value=MagicMock(offline_mode=False)):
+            with patch(
+                "axon.update_check.check_for_update",
+                return_value=UpdateCheckResult("0.4.4", "0.5.0", True),
+            ):
+                with patch(
+                    "axon.update_check.run_update",
+                    return_value=UpdateRunResult("refused", "An axon-api server is live."),
+                ):
+                    code = run_cli("update", "-y")
+        assert code == 1
+        assert "axon-api server is live" in capsys.readouterr().out

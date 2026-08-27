@@ -295,7 +295,73 @@ def _snapshot_first_run_state(args) -> None:
     args._first_run_snapshot = _is_first_run(args)
 
 
+def _run_axon_update(argv: list[str]) -> int:
+    """Handle ``axon update`` — a bare subcommand, not a flag, so it's
+    intercepted before the main argparse parser runs (see main()). Only
+    ``-y``/``--yes`` is recognised; anything else is an error.
+
+    Confirmation gate lives here, not in update_check.run_update() — that
+    function assumes permission has already been granted and just executes.
+    """
+    from axon.config import AxonConfig
+    from axon.update_check import check_for_update, run_update
+
+    yes = False
+    for arg in argv:
+        if arg in ("-y", "--yes"):
+            yes = True
+        else:
+            print(f"  Unknown argument for `axon update`: {arg}")
+            print("  Usage: axon update [-y|--yes]")
+            return 2
+
+    try:
+        config = AxonConfig.load(None)
+    except Exception:
+        config = None
+    offline = bool(getattr(config, "offline_mode", False)) if config is not None else False
+
+    check = check_for_update(offline=offline, force=True)
+    if check.skipped_reason == "offline_mode":
+        print("  offline_mode is on in config.yaml — skipping the update check.")
+        return 1
+    if check.skipped_reason == "error" or not check.latest:
+        print("  Could not reach PyPI to check the latest version. Check your connection.")
+        return 1
+    if not check.update_available:
+        print(f"  Already on the latest version ({check.current}).")
+        return 0
+
+    print(f"  Update available: {check.current} → {check.latest}")
+    if not yes:
+        if not sys.stdin.isatty():
+            print("  Non-interactive session — re-run with `axon update -y` to proceed.")
+            return 1
+        reply = input("  Upgrade axon-rag and the VS Code extension now? [y/N] ").strip().lower()
+        if reply not in ("y", "yes"):
+            print("  Cancelled.")
+            return 1
+
+    result = run_update(config=config, force_check=False)
+    if result.status == "refused":
+        print(f"  {result.detail}")
+        return 1
+    if result.status == "failed":
+        print(f"  ERROR: {result.detail}")
+        return 1
+    print(f"  {result.detail}")
+    if result.vsix_status:
+        print(f"  VS Code extension: {result.vsix_status}")
+    return 0
+
+
 def main():
+    # `axon update` is a bare subcommand (not a flag) per user preference —
+    # intercept before argparse so it can't collide with the freeform `query`
+    # positional argument's own parsing.
+    if sys.argv[1:2] == ["update"]:
+        sys.exit(_run_axon_update(sys.argv[2:]))
+
     import argparse
 
     from axon.config import AxonConfig

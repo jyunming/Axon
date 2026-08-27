@@ -1267,6 +1267,24 @@ This option is currently configurable only via `config.yaml`; environment variab
 
 ## 12. Upgrading Axon
 
+**From a PyPI install (`pip install axon-rag`) — the common case:**
+
+```bash
+axon update      # interactive: checks PyPI, confirms, upgrades
+axon update -y   # non-interactive / scripted
+```
+
+`axon` and `axon-api` also check PyPI in the background at startup (once/day,
+non-blocking, silent when `offline_mode` is on) and print a one-line
+`axon update` suggestion when a newer release exists — you don't need to
+check manually. `axon update` detects whether you installed with `pip`,
+`pipx`, or `conda` and runs the matching upgrade command, then re-installs
+the bundled VS Code extension so both stay in sync. It refuses to run
+inside a container (use `docker compose pull && docker compose up -d`
+instead) or while an `axon-api` server is live against the active store —
+stop the server first. See [ADMIN_REFERENCE.md §2.10a](ADMIN_REFERENCE.md#210a-self-update)
+for the full sequence.
+
 **From an editable install (`pip install -e .`):**
 
 ```bash
@@ -1275,9 +1293,9 @@ git pull         # fetch the latest code
 pip install -e . # re-install to pick up any new dependencies
 ```
 
-> `git pull` updates the source files. `pip install -e .` is needed if `pyproject.toml` changed (new or removed dependencies). It is safe to run both every time.
+> `git pull` updates the source files. `pip install -e .` is needed if `pyproject.toml` changed (new or removed dependencies). It is safe to run both every time. `axon update` does not apply here — it upgrades a *published* package, not a local checkout.
 
-**Check for breaking changes:** read `CHANGELOG.md` (if present) or the GitHub release notes before upgrading. In particular, if the embedding model default changed you will need to delete your vector store and re-ingest (see [TROUBLESHOOTING.md — ChromaDB InvalidDimensionException](TROUBLESHOOTING.md)).
+**Check for breaking changes:** read `CHANGELOG.md` (if present) or the GitHub release notes before upgrading. In particular, if the embedding model default changed you will need to delete your vector store and re-ingest (see [TROUBLESHOOTING.md — ChromaDB InvalidDimensionException](TROUBLESHOOTING.md)). `axon update` does not attempt config-schema migration — it points at `CHANGELOG.md` after a successful upgrade instead.
 
 **Verify the upgrade:**
 ```bash
@@ -1305,6 +1323,7 @@ For common errors and step-by-step fixes, see [TROUBLESHOOTING.md](TROUBLESHOOTI
 | Open WebGUI | `http://localhost:8420/gui/` (when `axon-api` is running) |
 | Start Streamlit UI (deprecated) | `axon-ui` or `make run-ui` |
 | Health check | `curl http://localhost:8420/health` |
+| Upgrade (PyPI install) | `axon update` |
 | Ingest a file | `axon --ingest ./path/to/file` |
 | Run a query | `axon "your question"` |
 
