@@ -1575,6 +1575,8 @@ Your primary goal is to help the user by answering questions based on the provid
             from axon.rust_bridge import get_rust_bridge
 
             bridge = get_rust_bridge()
+            import json as _json
+
             with self._graph_lock:
                 for desc in descendants:
                     desc_bm25_path = project_bm25_path(desc)
@@ -1590,8 +1592,6 @@ Your primary goal is to help the user by answering questions based on the provid
                             raw = None
                     if raw is None and desc_graph_path.exists():
                         try:
-                            import json as _json
-
                             raw = _json.loads(desc_graph_path.read_text(encoding="utf-8"))
                         except Exception:
                             raw = None
@@ -1635,8 +1635,6 @@ Your primary goal is to help the user by answering questions based on the provid
                             raw_rel = None
                     if raw_rel is None and desc_rel_path.exists():
                         try:
-                            import json as _json
-
                             raw_rel = _json.loads(desc_rel_path.read_text(encoding="utf-8"))
                         except Exception:
                             raw_rel = None
@@ -1659,59 +1657,61 @@ Your primary goal is to help the user by answering questions based on the provid
                                         if key not in existing_keys:
                                             self._relation_graph[src].append(entry)
                                             existing_keys.add(key)
-                # --- entity embeddings ---
-                desc_emb_path = desc_base / ".entity_embeddings.json"
-                if desc_emb_path.exists():
-                    try:
-                        raw = _json.loads(desc_emb_path.read_text(encoding="utf-8"))
-                        if isinstance(raw, dict):
-                            for entity_key, embedding in raw.items():
-                                if (
-                                    isinstance(entity_key, str)
-                                    and entity_key not in self._entity_embeddings
-                                ):
-                                    self._entity_embeddings[entity_key] = embedding
-                    except Exception as e:
-                        logger.warning(f"Could not merge entity embeddings for '{desc}': {e}")
-                # --- claims ---
-                desc_claims_path = desc_base / ".claims_graph.json"
-                if desc_claims_path.exists():
-                    try:
-                        raw = _json.loads(desc_claims_path.read_text(encoding="utf-8"))
-                        if isinstance(raw, dict):
-                            for chunk_id, claims in raw.items():
-                                if isinstance(chunk_id, str) and isinstance(claims, list):
-                                    if chunk_id not in self._claims_graph:
-                                        self._claims_graph[chunk_id] = []
-                                    existing_claim_keys = {
-                                        (c.get("subject"), c.get("object"), c.get("type"))
-                                        for c in self._claims_graph[chunk_id]
-                                    }
-                                    for claim in claims:
-                                        if isinstance(claim, dict):
-                                            key = (
-                                                claim.get("subject"),
-                                                claim.get("object"),
-                                                claim.get("type"),
+                    # --- entity embeddings ---
+                    desc_emb_path = desc_base / ".entity_embeddings.json"
+                    if desc_emb_path.exists():
+                        try:
+                            raw = _json.loads(desc_emb_path.read_text(encoding="utf-8"))
+                            if isinstance(raw, dict):
+                                for entity_key, embedding in raw.items():
+                                    if (
+                                        isinstance(entity_key, str)
+                                        and entity_key not in self._entity_embeddings
+                                    ):
+                                        self._entity_embeddings[entity_key] = embedding
+                        except Exception as e:
+                            logger.warning(f"Could not merge entity embeddings for '{desc}': {e}")
+                    # --- claims ---
+                    desc_claims_path = desc_base / ".claims_graph.json"
+                    if desc_claims_path.exists():
+                        try:
+                            raw = _json.loads(desc_claims_path.read_text(encoding="utf-8"))
+                            if isinstance(raw, dict):
+                                for chunk_id, claims in raw.items():
+                                    if isinstance(chunk_id, str) and isinstance(claims, list):
+                                        if chunk_id not in self._claims_graph:
+                                            self._claims_graph[chunk_id] = []
+                                        existing_claim_keys = {
+                                            (c.get("subject"), c.get("object"), c.get("type"))
+                                            for c in self._claims_graph[chunk_id]
+                                        }
+                                        for claim in claims:
+                                            if isinstance(claim, dict):
+                                                key = (
+                                                    claim.get("subject"),
+                                                    claim.get("object"),
+                                                    claim.get("type"),
+                                                )
+                                                if key not in existing_claim_keys:
+                                                    self._claims_graph[chunk_id].append(claim)
+                                                    existing_claim_keys.add(key)
+                        except Exception as e:
+                            logger.warning(f"Could not merge claims for '{desc}': {e}")
+                    # --- community summaries (namespaced to avoid community-ID collision) ---
+                    desc_summ_path = desc_base / ".community_summaries.json"
+                    if desc_summ_path.exists():
+                        try:
+                            raw = _json.loads(desc_summ_path.read_text(encoding="utf-8"))
+                            if isinstance(raw, dict):
+                                for summ_key, summary in raw.items():
+                                    if isinstance(summ_key, str) and isinstance(summary, dict):
+                                        namespaced_key = f"desc_{desc}_{summ_key}"
+                                        if namespaced_key not in self._community_summaries:
+                                            self._community_summaries[namespaced_key] = dict(
+                                                summary
                                             )
-                                            if key not in existing_claim_keys:
-                                                self._claims_graph[chunk_id].append(claim)
-                                                existing_claim_keys.add(key)
-                    except Exception as e:
-                        logger.warning(f"Could not merge claims for '{desc}': {e}")
-                # --- community summaries (namespaced to avoid community-ID collision) ---
-                desc_summ_path = desc_base / ".community_summaries.json"
-                if desc_summ_path.exists():
-                    try:
-                        raw = _json.loads(desc_summ_path.read_text(encoding="utf-8"))
-                        if isinstance(raw, dict):
-                            for summ_key, summary in raw.items():
-                                if isinstance(summ_key, str) and isinstance(summary, dict):
-                                    namespaced_key = f"desc_{desc}_{summ_key}"
-                                    if namespaced_key not in self._community_summaries:
-                                        self._community_summaries[namespaced_key] = dict(summary)
-                    except Exception as e:
-                        logger.warning(f"Could not merge community summaries for '{desc}': {e}")
+                        except Exception as e:
+                            logger.warning(f"Could not merge community summaries for '{desc}': {e}")
         self._active_project = name
         self._read_only_scope = False
         # Resolve kind from switch operation — descriptor-based, not string-pattern

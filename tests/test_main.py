@@ -14225,6 +14225,110 @@ class TestDescendantGraphMerge:
 
         brain.close()
 
+    def test_switch_project_merges_all_descendants_not_just_last(self, tmp_path):
+        """Regression test for a real bug: the entity-embeddings/claims/
+        community-summaries merge blocks were indented one level too
+        shallow — outside the `for desc in descendants:` loop — so they
+        only ran once, using whatever `desc`/`desc_base` the loop happened
+        to leave bound after its last iteration. All descendants but the
+        last silently lost their embeddings/claims/community-summary data
+        on every multi-descendant project switch. Unlike the other tests in
+        this class (which re-simulate the merge logic inline and would
+        never have caught this), this test calls the real
+        AxonBrain.switch_project() so it actually exercises the fixed code.
+        """
+        from axon.main import AxonBrain, AxonConfig
+
+        root_dir = tmp_path / "root_project"
+        root_dir.mkdir()
+        (root_dir / "meta.json").write_text("{}", encoding="utf-8")
+
+        n_descendants = 3
+        desc_names = [f"root_project/child_{i}" for i in range(n_descendants)]
+        desc_dirs = {}
+        for i, dname in enumerate(desc_names):
+            d = tmp_path / f"desc_{i}"
+            d.mkdir()
+            (d / ".entity_embeddings.json").write_text(
+                json.dumps({f"entity_{i}": [0.1 * i, 0.2 * i]}), encoding="utf-8"
+            )
+            (d / ".claims_graph.json").write_text(
+                json.dumps({f"chunk_{i}": [{"subject": f"s{i}", "object": f"o{i}", "type": "t"}]}),
+                encoding="utf-8",
+            )
+            (d / ".community_summaries.json").write_text(
+                json.dumps({f"comm_{i}": {"summary": f"summary {i}", "level": 1}}),
+                encoding="utf-8",
+            )
+            desc_dirs[dname] = d
+
+        def _bm25_path_for(n: str) -> str:
+            return str(desc_dirs[n]) if n in desc_dirs else str(tmp_path / "main_bm25")
+
+        with patch("axon.main.OpenVectorStore"), patch("axon.main.OpenEmbedding"), patch(
+            "axon.main.OpenLLM"
+        ), patch("axon.main.OpenReranker"), patch("axon.retrievers.BM25Retriever"), patch(
+            "axon.projects.ensure_project"
+        ):
+            with patch.object(AxonBrain, "_load_hash_store", return_value=set()), patch.object(
+                AxonBrain, "_load_entity_graph", return_value={}
+            ), patch.object(AxonBrain, "_load_relation_graph", return_value={}), patch.object(
+                AxonBrain, "_load_community_levels", return_value={}
+            ), patch.object(
+                AxonBrain, "_load_community_summaries", return_value={}
+            ), patch.object(
+                AxonBrain, "_load_entity_embeddings", return_value={}
+            ), patch.object(
+                AxonBrain, "_load_claims_graph", return_value={}
+            ), patch.object(
+                AxonBrain, "_load_community_hierarchy", return_value={}
+            ), patch.object(
+                AxonBrain, "_load_code_graph", return_value={}
+            ), patch.object(
+                AxonBrain, "_load_doc_versions", return_value=None
+            ):
+                brain = AxonBrain(AxonConfig(bm25_path=str(tmp_path / "main_bm25")))
+
+        brain.close = MagicMock()
+        with patch("axon.main.OpenVectorStore"), patch("axon.retrievers.BM25Retriever"), patch(
+            "axon.projects.set_active_project"
+        ), patch("axon.runtime.get_registry"), patch(
+            "axon.projects.project_dir", return_value=root_dir
+        ), patch(
+            "axon.projects.project_vector_path", return_value=str(tmp_path / "vec")
+        ), patch(
+            "axon.projects.project_bm25_path", side_effect=_bm25_path_for
+        ), patch(
+            "axon.projects.list_descendants", return_value=desc_names
+        ), patch(
+            "axon.projects.get_project_graph_backend", return_value="graphrag"
+        ):
+            brain._load_hash_store = MagicMock(return_value=set())
+            brain._load_entity_graph = MagicMock(return_value={})
+            brain._load_relation_graph = MagicMock(return_value={})
+            brain._load_community_levels = MagicMock(return_value={})
+            brain._load_community_summaries = MagicMock(return_value={})
+            brain._load_entity_embeddings = MagicMock(return_value={})
+            brain._load_claims_graph = MagicMock(return_value={})
+            brain._load_community_hierarchy = MagicMock(return_value={})
+
+            brain.switch_project("root_project")
+
+        for i in range(n_descendants):
+            assert f"entity_{i}" in brain._entity_embeddings, (
+                f"descendant {i}'s entity embeddings missing — only the last "
+                f"descendant's data survived the merge"
+            )
+            assert f"chunk_{i}" in brain._claims_graph, (
+                f"descendant {i}'s claims missing — only the last descendant's "
+                f"data survived the merge"
+            )
+            namespaced_key = f"desc_root_project/child_{i}_comm_{i}"
+            assert namespaced_key in brain._community_summaries, (
+                f"descendant {i}'s community summary missing — only the last "
+                f"descendant's data survived the merge"
+            )
+
 
 # ===========================================================================
 
