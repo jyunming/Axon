@@ -68,9 +68,12 @@ class GraphRagBackend:
         """Run GraphRAG global-search map-reduce over community summaries for *query*."""
         return self._engine._global_search_map_reduce(query, cfg)
 
-    def classify_query_needs_graphrag(self, query: str, auto_route: bool) -> bool:
-        """Return True if *query* should trigger GraphRAG expansion (auto-routing)."""
-        return self._engine._classify_query_needs_graphrag(query, auto_route)
+    def classify_query_needs_graphrag(self, query: str, mode: str) -> bool:
+        """Return True if *query* should trigger GraphRAG expansion (auto-routing).
+
+        *mode* is the classifier strategy ("heuristic" / "llm"), not a bool.
+        """
+        return self._engine._classify_query_needs_graphrag(query, mode)
 
     def ensure_community_summaries(
         self, query_hint: str, index_community_reports: bool = True
@@ -101,6 +104,13 @@ class GraphRagBackend:
         since entity/relation/claims graphs are normally saved incrementally
         during ingest but batch mode (``ingest_batch_mode=True``) defers
         those writes until finalize_ingest() is explicitly called.
+
+        The extraction-cache flush below is unconditional (not gated on
+        ingest_batch_mode) — it mirrors the pre-M2 AxonBrain.finalize_ingest(),
+        which flushed a dirty extraction cache regardless of batch mode.
+        Without this, GraphRagEngine.ingest_chunks()'s deferred cache writes
+        (skipped mid-batch via _defer_saves) would stay unpersisted until
+        some later close()/flush() happened to run.
         """
         engine = self._engine
         if getattr(engine.config, "ingest_batch_mode", False):
@@ -109,6 +119,8 @@ class GraphRagBackend:
             if getattr(engine, "_claims_graph", None):
                 engine._save_claims_graph()
             logger.info("finalize_ingest: entity/relation/claims graphs saved.")
+        if getattr(engine, "_graph_rag_cache_dirty", False):
+            engine._save_graph_rag_extraction_cache()
 
     def flush(self) -> None:
         """Flush any dirty in-memory GraphRAG state and pending background persists."""
