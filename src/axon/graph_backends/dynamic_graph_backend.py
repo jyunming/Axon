@@ -1136,6 +1136,18 @@ class DynamicGraphBackend:
             "conflicted_facts": row["conflicted_facts"],
         }
 
+    def has_entities(self) -> bool:
+        """Always False: dynamic_graph tracks its own SQLite entities/facts
+        tables, not GraphRagMixin's brain._entity_graph — this predicate
+        gates GraphRAG-mixin-specific local/global search in query_router.py,
+        which dynamic_graph never drives (it has its own retrieve() path).
+        """
+        return False
+
+    def has_community_summaries(self) -> bool:
+        """dynamic_graph has no community-detection step (see finalize())."""
+        return False
+
     def graph_data(self, filters: GraphDataFilters | None = None) -> GraphPayload:
         """Return current active facts as a renderer-enriched nodes + links payload."""
         limit = (filters.limit if filters else None) or 500

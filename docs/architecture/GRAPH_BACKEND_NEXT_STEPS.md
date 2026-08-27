@@ -146,26 +146,45 @@ in `switch_project`, and all of `main.py::ingest()`; all of `query_router.py`;
   `TestCommunitySummarizationDoesNotDeadlock` (daemon thread + 30s join
   timeout, so a regression fails cleanly instead of hanging CI).
 
-### Phase 3 — `query_router.py`'s retrieval path (20 occurrences)
+### Phase 3 — SHIPPED (`query_router.py`'s retrieval path)
 
-- `_expand_with_entity_graph()` (`query_router.py:251`) is the *real
-  implementation* `GraphRagBackend.retrieve()` already delegates to, but it
-  physically lives outside the whitelist. Decide: move its body into
-  `graphrag_backend.py`/`graph_rag.py`, or treat it as an explicit,
-  documented whitelist exception.
-- `query()`/`query_stream()`/`_execute_retrieval_body()` use
-  `_entity_graph`/`_community_summaries` as truthy guards before calling
-  `_local_search_context()`/`_generate_community_summaries()`/
-  `_global_search_map_reduce()`/`_expand_with_entity_graph()` — these are
-  the most mechanically-redirectable sites (e.g. a new
-  `has_local_context()`/`has_community_summaries()` Protocol method), but
-  the guarded bodies still call mixin methods directly until those, too,
-  get pulled behind the backend.
-- This is also where the other half of v0.4 unblocks: plumb
-  `_graph_backend.retrieve()` into the main `/query` pipeline for real
-  (today only `POST /graph/retrieve` uses the backend directly — verified
-  zero production call sites for `.retrieve()` otherwise). See the "v0.4"
-  section of `docs/architecture/DYNAMIC_GRAPH_ROADMAP.md`.
+- **3a**: Added `has_entities()`/`has_community_summaries()` to the
+  `GraphBackend` Protocol and `_REQUIRED_METHODS` (all backends must
+  implement both — callers use them unconditionally, no hasattr guard).
+  `GraphRagBackend` reflects real brain state
+  (`bool(brain._entity_graph)`/`bool(brain._community_summaries)`);
+  `NoneGraphBackend`/`DynamicGraphBackend` return a constant `False` (
+  neither drives GraphRAG-mixin local/global search — `DynamicGraphBackend`
+  has its own SQL+BFS `retrieve()` path entirely).
+  `FederatedGraphBackend` **delegates to its sub-backends** rather than a
+  constant `False` — it wraps a real `GraphRagBackend` sharing the same
+  brain, and GraphRAG entity extraction runs during ingest independent of
+  which `graph_backend` is selected, so a federated-configured project can
+  carry a genuinely populated `brain._entity_graph`; a constant `False`
+  would have silently disabled local-search expansion that works today.
+  Redirected all 6 truthy guards in `query_router.py`'s
+  `_execute_retrieval_body()`/`query()`/`query_stream()` to the new
+  predicates. `_community_levels`/`_community_rebuild_lock` reads stay
+  direct (not part of the 4 architecture-audited attributes).
+- **3b**: `_expand_with_entity_graph()` (`query_router.py:251`) stays a
+  documented, pinned exception (`test_architecture.py`'s
+  `_KNOWN_FALLBACK_FILES["query_router.py"] = 7`) — it's entangled with
+  `QueryRouterMixin`-owned `_graph_lock`/`_traversal_cache` state and reads
+  `graph_rag_*` config fields `RetrievalConfig` doesn't carry, so moving it
+  now would mean dragging query-orchestration concurrency state into
+  `graph_rag.py`. Temporary through Phase 4, which must relocate it (and
+  its `_extract_entities`/`_match_entities_by_embedding`/`_entity_matches`
+  dependencies) and remove this pinned entry.
+- **3c**: Deliberately did NOT force the *Protocol-typed* `retrieve()`
+  (`RetrievalConfig`/`GraphContext`) into the main query path this phase —
+  `RetrievalConfig` lacks the `graph_rag_*` tuning knobs
+  `_expand_with_entity_graph` reads, and `GraphRagBackend.retrieve()`
+  returns `GraphContext` while `query()`/`query_stream()` depend on dict
+  results carrying `_graph_expanded`. Phase 4 still owes the direct call at
+  `query_router.py:1362` some backend-routed replacement once 3b's
+  relocation lands — just not through the typed Protocol method. That
+  remains its own scoped follow-up (the "other half of v0.4" — see
+  `docs/architecture/DYNAMIC_GRAPH_ROADMAP.md`).
 
 ### Phase 4 — `main.py`'s load/init/switch paths + `ingest()` (biggest, riskiest)
 

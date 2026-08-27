@@ -1,7 +1,7 @@
 """Architecture tests for the GraphBackend Protocol.
 
 Verifies:
-  1. The Protocol exposes exactly the 7 required methods.
+  1. The Protocol exposes exactly the 9 required methods.
   2. GraphRagBackend satisfies the Protocol (runtime isinstance check).
   3. DynamicGraphBackend satisfies the Protocol (full SQLite implementation).
   4. A minimal hand-rolled object satisfies the Protocol.
@@ -23,6 +23,7 @@ from axon.graph_backends.base import (
     RetrievalConfig,
 )
 from axon.graph_backends.dynamic_graph_backend import DynamicGraphBackend
+from axon.graph_backends.federated_backend import FederatedGraphBackend
 from axon.graph_backends.graphrag_backend import GraphRagBackend
 from axon.graph_backends.none_backend import NoneGraphBackend
 
@@ -64,7 +65,7 @@ def _make_none_backend() -> NoneGraphBackend:
 
 class TestProtocolShape:
     def test_required_methods_count(self):
-        assert len(_REQUIRED_METHODS) == 7
+        assert len(_REQUIRED_METHODS) == 9
 
     def test_required_method_names(self):
         expected = {
@@ -75,6 +76,8 @@ class TestProtocolShape:
             "delete_documents",
             "status",
             "graph_data",
+            "has_entities",
+            "has_community_summaries",
         }
         assert _REQUIRED_METHODS == expected
 
@@ -137,6 +140,24 @@ class TestGraphRagBackendProtocol:
         d = backend.graph_data().to_dict()
         assert set(d.keys()) == {"nodes", "links"}
 
+    def test_has_entities_false_when_empty(self):
+        backend = _make_graphrag_backend()
+        assert backend.has_entities() is False
+
+    def test_has_entities_true_when_populated(self):
+        backend = _make_graphrag_backend()
+        backend._brain._entity_graph = {"alice": {"type": "PERSON"}}
+        assert backend.has_entities() is True
+
+    def test_has_community_summaries_false_when_empty(self):
+        backend = _make_graphrag_backend()
+        assert backend.has_community_summaries() is False
+
+    def test_has_community_summaries_true_when_populated(self):
+        backend = _make_graphrag_backend()
+        backend._brain._community_summaries = {"0_0": {"full_content": "summary"}}
+        assert backend.has_community_summaries() is True
+
 
 # ---------------------------------------------------------------------------
 # DynamicGraphBackend stub satisfies Protocol
@@ -190,6 +211,15 @@ class TestDynamicGraphBackendProtocol:
         backend = _make_dynamic_backend(tmp_path)
         payload = backend.graph_data()
         assert isinstance(payload, GraphPayload)
+
+    def test_has_entities_always_false(self, tmp_path):
+        # dynamic_graph tracks its own SQLite tables, not brain._entity_graph —
+        # this predicate gates GraphRAG-mixin local/global search, which
+        # dynamic_graph never drives.
+        assert _make_dynamic_backend(tmp_path).has_entities() is False
+
+    def test_has_community_summaries_always_false(self, tmp_path):
+        assert _make_dynamic_backend(tmp_path).has_community_summaries() is False
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +282,64 @@ class TestNoneGraphBackendProtocol:
         # as "unsupported" rather than crashing.
         assert not hasattr(_make_none_backend(), "list_conflicts")
 
+    def test_has_entities_always_false(self):
+        assert _make_none_backend().has_entities() is False
+
+    def test_has_community_summaries_always_false(self):
+        assert _make_none_backend().has_community_summaries() is False
+
+
+# ---------------------------------------------------------------------------
+# FederatedGraphBackend delegates has_entities/has_community_summaries
+# ---------------------------------------------------------------------------
+
+
+class TestFederatedGraphBackendProtocol:
+    """Unlike NoneGraphBackend/DynamicGraphBackend, Federated must NOT return
+    a constant False: it wraps a real GraphRagBackend sharing the same
+    brain, and GraphRAG entity extraction runs during ingest independent of
+    which graph_backend is selected — so a federated-configured project can
+    carry a genuinely populated brain._entity_graph.
+    """
+
+    @staticmethod
+    def _make_federated(entities_present: bool, summaries_present: bool) -> FederatedGraphBackend:
+        backend = FederatedGraphBackend.__new__(FederatedGraphBackend)
+        graphrag = MagicMock()
+        graphrag.BACKEND_ID = "graphrag"
+        graphrag.has_entities.return_value = entities_present
+        graphrag.has_community_summaries.return_value = summaries_present
+        dynamic = MagicMock()
+        dynamic.BACKEND_ID = "dynamic_graph"
+        dynamic.has_entities.return_value = False
+        dynamic.has_community_summaries.return_value = False
+        backend._backends = [graphrag, dynamic]
+        backend._weights = {"graphrag": 1.0, "dynamic_graph": 1.0}
+        return backend
+
+    def test_has_entities_true_when_sub_backend_has_entities(self):
+        backend = self._make_federated(entities_present=True, summaries_present=False)
+        assert backend.has_entities() is True
+
+    def test_has_entities_false_when_no_sub_backend_has_entities(self):
+        backend = self._make_federated(entities_present=False, summaries_present=False)
+        assert backend.has_entities() is False
+
+    def test_has_community_summaries_true_when_sub_backend_has_summaries(self):
+        backend = self._make_federated(entities_present=False, summaries_present=True)
+        assert backend.has_community_summaries() is True
+
+    def test_has_community_summaries_false_when_no_sub_backend_has_summaries(self):
+        backend = self._make_federated(entities_present=False, summaries_present=False)
+        assert backend.has_community_summaries() is False
+
+    def test_has_entities_survives_sub_backend_exception(self):
+        backend = self._make_federated(entities_present=True, summaries_present=False)
+        backend._backends[0].has_entities.side_effect = RuntimeError("boom")
+        # First sub-backend raises; second (dynamic) reports False — overall False,
+        # and the exception must not propagate.
+        assert backend.has_entities() is False
+
 
 # ---------------------------------------------------------------------------
 # Minimal hand-rolled object satisfies Protocol
@@ -281,6 +369,12 @@ class TestMinimalProtocolConformance:
 
             def graph_data(self, filters=None):
                 return GraphPayload()
+
+            def has_entities(self):
+                return False
+
+            def has_community_summaries(self):
+                return False
 
         assert isinstance(_Minimal(), GraphBackend)
 

@@ -158,3 +158,9 @@ class GraphRagBackend:
             if filters.limit is not None:
                 nodes = nodes[: filters.limit]
         return GraphPayload(nodes=nodes, links=links)
+
+    def has_entities(self) -> bool:
+        return bool(self._brain._entity_graph)
+
+    def has_community_summaries(self) -> bool:
+        return bool(self._brain._community_summaries)

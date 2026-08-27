@@ -58,3 +58,9 @@ class NoneGraphBackend:
 
     def graph_data(self, filters: GraphDataFilters | None = None) -> GraphPayload:
         return GraphPayload()
+
+    def has_entities(self) -> bool:
+        return False
+
+    def has_community_summaries(self) -> bool:
+        return False

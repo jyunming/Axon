@@ -114,7 +114,17 @@ class GraphPayload:
 # ---------------------------------------------------------------------------
 
 _REQUIRED_METHODS = frozenset(
-    {"ingest", "retrieve", "finalize", "clear", "delete_documents", "status", "graph_data"}
+    {
+        "ingest",
+        "retrieve",
+        "finalize",
+        "clear",
+        "delete_documents",
+        "status",
+        "graph_data",
+        "has_entities",
+        "has_community_summaries",
+    }
 )
 
 # Optional capabilities — backends MAY implement these. Callers must check
@@ -176,4 +186,20 @@ class GraphBackend(Protocol):
 
     def graph_data(self, filters: GraphDataFilters | None = None) -> GraphPayload:
         """Return the current graph as a renderer-neutral payload."""
+        ...
+
+    def has_entities(self) -> bool:
+        """Cheap, side-effect-free check: does this backend have any entity
+        state to drive GraphRAG-style local-search expansion? Used by
+        query_router.py as a truthy guard in place of reaching into
+        brain-owned attributes directly.
+        """
+        ...
+
+    def has_community_summaries(self) -> bool:
+        """Cheap, side-effect-free check: does this backend have community
+        summaries to drive global-search map-reduce? Used by query_router.py
+        as a truthy guard in place of reaching into brain-owned attributes
+        directly.
+        """
         ...

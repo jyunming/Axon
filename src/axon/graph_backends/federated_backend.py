@@ -294,3 +294,28 @@ class FederatedGraphBackend:
             except Exception:
                 pass
         return GraphPayload(nodes=list(nodes.values()), links=links)
+
+    def has_entities(self) -> bool:
+        """Delegate to sub-backends rather than a constant False: the wrapped
+        GraphRagBackend shares the same brain, and GraphRAG entity
+        extraction runs during ingest independent of which graph_backend is
+        selected — so a federated-configured project can carry a genuinely
+        populated brain._entity_graph. A constant False here would silently
+        disable local-search expansion that works today.
+        """
+        for b in self._backends:
+            try:
+                if b.has_entities():
+                    return True
+            except Exception:
+                pass
+        return False
+
+    def has_community_summaries(self) -> bool:
+        for b in self._backends:
+            try:
+                if b.has_community_summaries():
+                    return True
+            except Exception:
+                pass
+        return False
