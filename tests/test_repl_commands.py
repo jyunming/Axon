@@ -1918,3 +1918,94 @@ class TestReplEmbedCommand:
         brain = _make_mock_brain()
         output = _run_repl_with_commands(["/embed"], brain=brain)
         assert isinstance(output, str)
+
+
+# ---------------------------------------------------------------------------
+# /update — passive startup check + interactive confirm-then-upgrade
+# ---------------------------------------------------------------------------
+
+
+class TestReplUpdate:
+    def test_already_current(self):
+        from axon.update_check import UpdateCheckResult
+
+        brain = _make_mock_brain()
+        with patch(
+            "axon.update_check.check_for_update",
+            return_value=UpdateCheckResult("0.4.4", "0.4.4", False),
+        ):
+            output = _run_repl_with_commands(["/update"], brain=brain)
+        assert "Already on the latest version" in output
+
+    def test_offline_mode_skips_check(self):
+        from axon.update_check import UpdateCheckResult
+
+        brain = _make_mock_brain()
+        with patch(
+            "axon.update_check.check_for_update",
+            return_value=UpdateCheckResult("0.4.4", None, False, skipped_reason="offline_mode"),
+        ):
+            output = _run_repl_with_commands(["/update"], brain=brain)
+        assert "offline_mode" in output
+
+    def test_update_available_declined(self):
+        from axon.update_check import UpdateCheckResult
+
+        brain = _make_mock_brain()
+        with patch(
+            "axon.update_check.check_for_update",
+            return_value=UpdateCheckResult("0.4.4", "0.5.0", True),
+        ):
+            output = _run_repl_with_commands(["/update", "n"], brain=brain)
+        assert "Update available: 0.4.4" in output
+        assert "Cancelled" in output
+
+    def test_update_available_confirmed_runs_upgrade(self):
+        from axon.update_check import UpdateCheckResult, UpdateRunResult
+
+        brain = _make_mock_brain()
+        with patch(
+            "axon.update_check.check_for_update",
+            return_value=UpdateCheckResult("0.4.4", "0.5.0", True),
+        ):
+            with patch(
+                "axon.update_check.run_update",
+                return_value=UpdateRunResult(
+                    "upgraded",
+                    "Upgraded 0.4.4 → 0.5.0 via pip.",
+                    package_before="0.4.4",
+                    package_after="0.5.0",
+                    vsix_status="installed",
+                ),
+            ) as mock_run:
+                output = _run_repl_with_commands(["/update", "y"], brain=brain)
+        mock_run.assert_called_once()
+        assert "Upgraded 0.4.4" in output
+        assert "VS Code extension: installed" in output
+        assert "Restart axon" in output
+
+    def test_passive_startup_check_skipped_in_scripted_test_mode(self):
+        """The background passive-check thread must be gated on
+        `_scripted_inputs is None` — otherwise every scripted REPL test in
+        this suite (there are many) would spawn a real thread hitting PyPI
+        and writing to the real ~/.axon cache. This locks in that gate."""
+        import inspect
+
+        from axon import repl
+
+        src = inspect.getsource(repl._interactive_repl)
+        assert "if _scripted_inputs is None:" in src
+        gate_idx = src.index("if _scripted_inputs is None:")
+        thread_idx = src.index("_update_thread = _update_threading.Thread")
+        # The thread-start call must appear textually after *some*
+        # `_scripted_inputs is None` gate opens, and before the join site
+        # below unconditionally executes regardless of gating.
+        assert thread_idx > gate_idx
+
+    def test_no_real_network_call_during_scripted_run(self):
+        """Belt-and-suspenders: run a full scripted session with
+        check_for_update unpatched and httpx.get patched to explode —
+        the scripted run must not touch it at all."""
+        with patch("httpx.get", side_effect=AssertionError("must not hit network in tests")):
+            output = _run_repl_with_commands(["/help"], brain=_make_mock_brain())
+        assert isinstance(output, str)

@@ -41,6 +41,11 @@ logger = logging.getLogger("AxonAPI")
 
 brain: AxonBrain | None = None
 
+# asyncio.create_task() only holds a weak reference — an unreferenced task
+# can be garbage-collected mid-execution. Background tasks spawned in
+# lifespan() (e.g. the update-check) are stashed here until they finish.
+_background_tasks: set = set()
+
 
 def get_brain() -> AxonBrain:
     """FastAPI dependency that ensures the brain is initialized."""
@@ -187,6 +192,26 @@ async def lifespan(app: FastAPI):
         _auto_init_store(config)
         brain = AxonBrain(config)
         logger.info("Axon initialized successfully")
+        # Passive update-check, fired as a background task so a slow/
+        # unreachable PyPI never delays the server accepting requests.
+        # Rate-limited to once/day via update_check's own on-disk cache.
+        import asyncio as _asyncio
+
+        async def _bg_update_check() -> None:
+            try:
+                from axon.update_check import check_for_update, format_suggestion
+
+                offline = bool(getattr(config, "offline_mode", False))
+                result = await _asyncio.to_thread(check_for_update, offline=offline)
+                suggestion = format_suggestion(result)
+                if suggestion:
+                    logger.info(suggestion.strip())
+            except Exception:
+                pass
+
+        _update_task = _asyncio.create_task(_bg_update_check())
+        _background_tasks.add(_update_task)
+        _update_task.add_done_callback(_background_tasks.discard)
     except Exception as e:
         # Re-raise so the server fails fast rather than serving every
         # request with brain=None and 503-ing the user. Previously this

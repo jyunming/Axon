@@ -281,6 +281,32 @@ def check_local_llm_reachable(
     return Check("Local LLM endpoint", "ok", detail=f"{url} — {shown}")
 
 
+def check_update_available(offline: bool = False) -> Check:
+    """Query PyPI (rate-limited, cached) for a newer axon-rag release.
+
+    Always non-fatal — an update being available, or the check itself
+    failing, is informational only. Silent (``ok``, no detail) when
+    offline_mode is on, matching this check's other network-dependent
+    siblings' behavior of staying quiet rather than nagging about
+    something the user has explicitly opted out of.
+    """
+    from axon.update_check import check_for_update
+
+    result = check_for_update(offline=offline)
+    if result.skipped_reason == "offline_mode":
+        return Check("Update available", "ok", detail="skipped (offline_mode)")
+    if result.skipped_reason == "error":
+        return Check("Update available", "ok", detail="couldn't reach PyPI")
+    if result.update_available:
+        return Check(
+            "Update available",
+            "warning",
+            detail=f"{result.current} → {result.latest}",
+            hint="Run `axon update` to upgrade the package and VS Code extension together.",
+        )
+    return Check("Update available", "ok", detail=f"{result.current} is current")
+
+
 _CHECK_FUNCS: tuple[Callable[..., Check], ...] = (
     check_python_version,
     check_ollama_reachable,
@@ -288,6 +314,7 @@ _CHECK_FUNCS: tuple[Callable[..., Check], ...] = (
     check_store_writable,
     check_local_llm_reachable,
     check_optional_extras,
+    check_update_available,
 )
 
 
@@ -332,6 +359,7 @@ def run_doctor(config: Any | None = None) -> DoctorReport:
         local_api_key = getattr(config, "local_api_key", None) or getattr(
             getattr(config, "llm", None), "local_api_key", None
         )
+    offline_mode = bool(getattr(config, "offline_mode", False)) if config is not None else False
 
     checks: list[Check] = []
     for fn in _CHECK_FUNCS:
@@ -343,6 +371,8 @@ def run_doctor(config: Any | None = None) -> DoctorReport:
             checks.append(fn(store_base))
         elif fn is check_local_llm_reachable:
             checks.append(fn(llm_provider, local_base_url, local_api_key))
+        elif fn is check_update_available:
+            checks.append(fn(offline_mode))
         else:
             checks.append(fn())
     if any(c.status == "error" for c in checks):

@@ -70,6 +70,34 @@ def clear_dry_run_env():
 
 
 @pytest.fixture(autouse=True)
+def _stub_pypi_update_check(request, monkeypatch):
+    """No test should make a real network call to PyPI.
+
+    axon.update_check.check_for_update() is called from several startup
+    hooks (api.py's lifespan background task, repl.py's background thread,
+    cli.py's `axon update`, doctor.py's `--doctor` check) that individual
+    test files for those surfaces don't all know to mock. Stub it globally
+    at the module-attribute level — every caller does a lazy
+    ``from axon.update_check import check_for_update`` inside its own
+    function body, so patching the attribute here is visible to all of
+    them. Skipped for test_update_check.py itself, which exercises the
+    real function against a mocked httpx.get.
+    """
+    if request.module.__name__.rsplit(".", 1)[-1] == "test_update_check":
+        yield
+        return
+    from axon.update_check import UpdateCheckResult
+
+    monkeypatch.setattr(
+        "axon.update_check.check_for_update",
+        lambda **kwargs: UpdateCheckResult(
+            current="0.0.0+test", latest=None, update_available=False, skipped_reason="error"
+        ),
+    )
+    yield
+
+
+@pytest.fixture(autouse=True)
 def reset_axon_logger():
     """Restore Axon logger state after each test.
 

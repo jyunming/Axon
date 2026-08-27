@@ -69,6 +69,7 @@ _SLASH_COMMANDS = [
     "/stale",
     "/store ",
     "/theme ",
+    "/update",
     "/vllm-url ",
 ]
 
@@ -106,6 +107,7 @@ _SLASH_CMD_DESC: dict[str, str] = {
     "/stale": "Show documents not refreshed recently",
     "/store": "AxonStore management (init / status / share)",
     "/theme": "Switch syntax-highlighting theme",
+    "/update": "Check for a newer axon-rag release and upgrade if you confirm",
     "/vllm-url": "Set the vLLM server base URL",
 }
 
@@ -2459,6 +2461,35 @@ def _interactive_repl(
     brain.config.discussion_fallback = True
     _tick_lines = init_display.tick_lines if init_display else []
     _draw_header(brain, _tick_lines)
+    # Passive update-check: fired on a background daemon thread so a slow/
+    # unreachable PyPI never delays the prompt appearing. Rate-limited to
+    # once/day via update_check's own on-disk cache. A short join below
+    # only catches the common cache-hit case (near-instant); a genuine
+    # network round-trip is silently skipped this session, not waited on.
+    _update_suggestion: dict = {}
+    _update_thread = None
+
+    # Skip in test-mode (_scripted_inputs) — same reasoning as the
+    # prompt_toolkit Application above: a real background thread hitting
+    # PyPI and writing to the real ~/.axon cache has no place in a
+    # scripted test run.
+    if _scripted_inputs is None:
+
+        def _bg_update_check() -> None:
+            try:
+                from axon.update_check import check_for_update, format_suggestion
+
+                offline = bool(getattr(brain.config, "offline_mode", False))
+                text = format_suggestion(check_for_update(offline=offline))
+                if text:
+                    _update_suggestion["text"] = text
+            except Exception:
+                pass
+
+        import threading as _update_threading
+
+        _update_thread = _update_threading.Thread(target=_bg_update_check, daemon=True)
+        _update_thread.start()
     # ── Session init ───────────────────────────────────────────────────────────
     session: dict = _new_session(brain)
     chat_history: list = session["history"]
@@ -2477,6 +2508,11 @@ def _interactive_repl(
     _bash_cmd: list[str] | None = _resolve_bash(
         str(getattr(brain.config, "repl_shell", "auto")).lower().strip()
     )
+    if _update_thread is not None:
+        _update_thread.join(timeout=0.1)
+    if _update_suggestion.get("text"):
+        print(_update_suggestion["text"])
+        print()
 
     def _process_input_sync(user_input: str) -> bool:
         """Process one REPL input. Returns True to exit the REPL loop."""
@@ -3603,6 +3639,35 @@ def _interactive_repl(
                         print("\n    No keys file yet. Use /keys set <provider> to add keys.")
                     print("    /keys set <provider>  to set a key interactively")
                     print("    /help keys            for provider URLs and usage\n")
+            elif cmd == "/update":
+                from axon.update_check import check_for_update, run_update
+
+                offline = bool(getattr(brain.config, "offline_mode", False))
+                _chk = check_for_update(offline=offline, force=True)
+                if _chk.skipped_reason == "offline_mode":
+                    print("    offline_mode is on in config.yaml — skipping the update check.")
+                elif _chk.skipped_reason == "error" or not _chk.latest:
+                    print("    Could not reach PyPI to check the latest version.")
+                elif not _chk.update_available:
+                    print(f"    Already on the latest version ({_chk.current}).")
+                else:
+                    print(f"    Update available: {_chk.current} → {_chk.latest}")
+                    _reply = (
+                        _read_input("    Upgrade axon-rag and the VS Code extension now? [y/N] ")
+                        .strip()
+                        .lower()
+                    )
+                    if _reply not in ("y", "yes"):
+                        print("    Cancelled.")
+                    else:
+                        _result = run_update(config=brain.config, force_check=False)
+                        if _result.status in ("refused", "failed"):
+                            print(f"    {_result.detail}")
+                        else:
+                            print(f"    {_result.detail}")
+                            if _result.vsix_status:
+                                print(f"    VS Code extension: {_result.vsix_status}")
+                            print("    Restart axon for the new version to take effect.")
             elif cmd == "/share":
                 # ── /share — project sharing lifecycle ──────────────────────────
                 from axon import shares as _shares_mod

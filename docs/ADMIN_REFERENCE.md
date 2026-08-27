@@ -165,7 +165,46 @@ If no query string is given, the interactive REPL starts. If a query string is g
 | `--config-validate` | Validate `config.yaml` and print issues; exits with code `1` if any errors found |
 | `--config-reset` | Reset `config.yaml` to built-in defaults and exit |
 | `--setup` | Run the interactive config setup wizard and exit |
-| `--doctor` | Run health checks (Python ≥ 3.10, Ollama daemon, model pulled, store writable, recommended extras) and print a colored checklist; exits non-zero on any required-check failure |
+| `--doctor` | Run health checks (Python ≥ 3.10, Ollama daemon, model pulled, store writable, recommended extras, newer PyPI release available) and print a colored checklist; exits non-zero on any required-check failure |
+
+### 2.10a Self-Update
+
+`axon` and `axon-api` both check PyPI for a newer `axon-rag` release at
+startup — non-blocking (fire-and-forget, short timeout), rate-limited to
+once/day via an on-disk cache at `~/.axon/.update_check_cache.json`, and
+silent when `offline_mode` is on or the check itself fails. `axon`/the REPL
+print a one-line suggestion after the startup banner; `axon-api` logs it.
+`axon-mcp`/`axon-ui` are not checked (no clear human consumer watching
+their stdout — see §8).
+
+`axon update` is a bare subcommand (not a flag) that performs the upgrade:
+
+```bash
+axon update       # interactive confirmation prompt
+axon update -y    # non-interactive / scripted, skips the prompt
+```
+
+Sequence: live PyPI check (cache bypassed) → if already current, reports
+and exits → detects install method (`pipx`/`conda`/`pip`, via environment
+markers) → runs the matching upgrade command → re-installs the bundled VS
+Code extension in-process (same VSIX the fresh package ships, via the
+`axon-ext` installer — a missing `code` CLI degrades to a partial success,
+not a failure) → reports package version before/after and the VSIX
+install result separately.
+
+Refuses outright (no partial action taken) when:
+- Running inside a container — use `docker compose pull && docker compose
+  up -d` instead; a `pip install` here would upgrade a filesystem layer
+  that reverts on the next restart.
+- An `axon-api` server is currently live against the active store (same
+  single-instance lock `axon-api` itself checks at startup) — upgrading
+  the package out from under a running server risks corrupting in-flight
+  requests. Stop the server first.
+
+`axon update` does not attempt config-schema migration — after a
+successful upgrade it points at `CHANGELOG.md` for any breaking config
+changes, the same convention `SETUP.md` already documents. No REST or MCP
+equivalent exists; this is a CLI/REPL-only capability (see §8).
 
 ### 2.11 AxonStore (Sealed Store)
 
@@ -210,6 +249,7 @@ Start the REPL with `axon`. All commands begin with `/`. Use `!<cmd>` for shell 
 | `/debug` | Toggle verbose debug logging on/off | `/debug` |
 | `/theme [NAME]` | Switch syntax-highlighting theme for code blocks (e.g. `monokai`, `dracula`, `solarized-dark`) | `/theme dracula` |
 | `/keys [set PROVIDER]` | Show API key status for all providers; `/keys set <provider>` saves interactively | `/keys set openai` |
+| `/update` | Check PyPI for a newer `axon-rag` release and, on confirmation, upgrade the package + VS Code extension together (see §2.10a) | `/update` |
 
 ### 3.2 Ingestion & Collection
 
@@ -1028,6 +1068,14 @@ curl -X POST http://localhost:8420/graph/finalize
 | Maintenance state | ✓ | — | — | — |
 | Lease registry | ✓ | — | — | ✓ |
 | Governance audit | ✓ | — | — | — |
+| Self-update (`axon update`) | — | ✓ | ✓ | — |
+
+`axon update` and its startup update-check are deliberately CLI/REPL-only
+(plus a passive log line at `axon-api` startup, not a callable capability)
+— see §2.10a. REST/MCP callers are typically automated (scripts, other
+agents, MCP clients), not a human deciding whether to upgrade, and an
+`axon-api` process upgrading its own running package is exactly the
+footgun `axon update` refuses via its single-instance-lock check.
 
 ---
 

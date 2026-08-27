@@ -56,6 +56,29 @@ genuinely configurable, not just env-var-only:
   `RAG_API_BASE`, VS Code `axon.apiBase`, etc.), update to `:8420` or set
   `--port 8000` explicitly to keep the old value.
 
+### ✨ `axon update` — self-update, one command
+
+`axon` (CLI/REPL) and `axon-api` now check PyPI for a newer `axon-rag`
+release at startup — non-blocking, rate-limited to once/day via an on-disk
+cache, silent when `offline_mode` is on or the check fails. `axon`/REPL
+print a one-line suggestion after the startup banner; `axon-api` logs it.
+`axon-mcp`/`axon-ui` are intentionally not checked (no human watching
+their stdout).
+
+- **`axon update`** (new bare subcommand, plus `/update` in the REPL)
+  detects your install method (pip / pipx / conda), runs the matching
+  upgrade command, then re-installs the bundled VS Code extension so both
+  stay in sync — one command instead of two. Prompts for confirmation
+  (`-y`/`--yes` for scripted use).
+- Refuses inside a container (`docker compose pull && docker compose up
+  -d` is the right move there) and while an `axon-api` server is live
+  against the active store, to avoid upgrading a running server's package
+  out from under it.
+- CLI/REPL only — deliberately no REST or MCP equivalent (see
+  [ADMIN_REFERENCE.md §2.10a](docs/ADMIN_REFERENCE.md#210a-self-update)).
+  Does not attempt config-schema migration; read this file (or the release
+  notes) for breaking config changes, same as before.
+
 ### 🐛 Fixes
 
 - **Web GUI chat dropped spaces between words** in streamed answers
