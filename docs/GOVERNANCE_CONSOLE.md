@@ -254,32 +254,32 @@ The `session_id` is the `agent_request_id` from the Copilot request body.
 
 1. Check current state:
    ```bash
-   curl http://localhost:8000/governance/overview | jq .maintenance
+   curl http://localhost:8420/governance/overview | jq .maintenance
    ```
 
 2. Set project to draining (blocks new writes, waits for in-flight to finish):
    ```bash
-   curl -X POST "http://localhost:8000/governance/project/maintenance?name=myproject&state=draining"
+   curl -X POST "http://localhost:8420/governance/project/maintenance?name=myproject&state=draining"
    ```
 
 3. Wait for active leases to reach 0:
    ```bash
-   watch -n 2 'curl -s http://localhost:8000/governance/overview | jq .maintenance.active_leases'
+   watch -n 2 'curl -s http://localhost:8420/governance/overview | jq .maintenance.active_leases'
    ```
 
 4. Trigger graph rebuild:
    ```bash
-   curl -X POST http://localhost:8000/governance/graph/rebuild
+   curl -X POST http://localhost:8420/governance/graph/rebuild
    ```
 
 5. Restore normal state:
    ```bash
-   curl -X POST "http://localhost:8000/governance/project/maintenance?name=myproject&state=normal"
+   curl -X POST "http://localhost:8420/governance/project/maintenance?name=myproject&state=normal"
    ```
 
 6. Verify in audit log:
    ```bash
-   curl "http://localhost:8000/governance/audit?action=graph_finalize&limit=5"
+   curl "http://localhost:8420/governance/audit?action=graph_finalize&limit=5"
    ```
 
 ---
@@ -290,17 +290,17 @@ The `session_id` is the `agent_request_id` from the Copilot request body.
 
 1. Check active sessions:
    ```bash
-   curl http://localhost:8000/governance/copilot/sessions | jq .active
+   curl http://localhost:8420/governance/copilot/sessions | jq .active
    ```
 
 2. If a session is stuck (opened but never closed), expire it:
    ```bash
-   curl -X POST "http://localhost:8000/governance/copilot/session/SESS_ID/expire"
+   curl -X POST "http://localhost:8420/governance/copilot/session/SESS_ID/expire"
    ```
 
 3. Check audit log for recent Copilot errors:
    ```bash
-   curl "http://localhost:8000/governance/audit?action=copilot_session_failed&limit=10"
+   curl "http://localhost:8420/governance/audit?action=copilot_session_failed&limit=10"
    ```
 
 ### Symptom: `/llm/copilot/tasks` returns empty repeatedly

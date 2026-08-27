@@ -507,14 +507,20 @@ class AxonConfig:
     # CORS origins allowed by the REST API server (maps from api.allow_origins in config.yaml).
     # Example: ["http://localhost:3000", "https://my.app"]
     api_allow_origins: list = field(default_factory=list)
-    # Host/port where an axon-api server can be reached. Used by CLI/REPL clients
-    # for single-instance detection: if a server is already running here, store-
-    # mutating commands (ingest, project ops) are routed through it instead of
-    # opening a second local AxonBrain on the same store. Server-side, axon-api
-    # still reads AXON_HOST/AXON_PORT env vars; these config fields are the
-    # client-side default (overridden by AXON_API_BASE/RAG_API_BASE env vars).
+    # Host/port where an axon-api server can be reached. Used by CLI/REPL
+    # clients for single-instance detection: if a server is already running
+    # here, store-mutating commands (ingest, project ops) are routed through
+    # it instead of opening a second local AxonBrain on the same store
+    # (overridden client-side by AXON_API_BASE/RAG_API_BASE env vars).
+    # api_port doubles as the server's own bind-port fallback: axon-api's
+    # main() resolves --port > AXON_PORT > this field > 8420, and writes the
+    # resolved value back to AXON_HOST/AXON_PORT so lifespan()'s
+    # single-instance lock stays accurate. api_host is NOT used for the bind
+    # decision (0.0.0.0 vs. this field's client-oriented 127.0.0.1 default
+    # would silently narrow the server to localhost-only) — server bind host
+    # stays --host > AXON_HOST > "0.0.0.0", set in api.py.
     api_host: str = "127.0.0.1"
-    api_port: int = 8000
+    api_port: int = 8420
     openai_api_key: str = ""
     grok_api_key: str = ""
     gemini_api_key: str = ""
@@ -525,9 +531,9 @@ class AxonConfig:
     # (llama-server), vLLM, LM Studio, text-generation-inference, LocalAI, or
     # anything else exposing POST /chat/completions and GET /models.
     #
-    # Defaults to :8080 (llama-server's port) rather than :8000, which is where
-    # `axon-api` itself listens — a shared default there would collide on a
-    # single-machine setup.
+    # Defaults to :8080 (llama-server's port), distinct from `axon-api`'s own
+    # :8420 default and from vllm_base_url's :8000 above — three independent
+    # local services, three non-colliding default ports.
     local_base_url: str = "http://localhost:8080/v1"
     # Most local servers ignore auth entirely; set this only if yours requires
     # a key. The OpenAI SDK refuses to construct a client without one, so an

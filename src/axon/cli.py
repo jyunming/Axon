@@ -1795,7 +1795,7 @@ def main():
             import json as _json_gov
 
             sub = (args.governance or "overview").lower().strip()
-            _gov_api_base = os.environ.get("AXON_API_BASE", "http://127.0.0.1:8000").rstrip("/")
+            _gov_api_base = os.environ.get("AXON_API_BASE", "http://127.0.0.1:8420").rstrip("/")
             try:
                 import urllib.request as _ur
 

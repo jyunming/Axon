@@ -330,7 +330,7 @@ export async function showGovernancePanel(
   context: vscode.ExtensionContext,
 ): Promise<void> {
   const config = vscode.workspace.getConfiguration('axon');
-  const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+  const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
   const apiKey = config.get<string>('apiKey', '');
   AxonGovernancePanel.createOrReveal(context, apiBase, apiKey);
 }

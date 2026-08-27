@@ -141,7 +141,7 @@ search:off
 **Via the API:** Send a query and check the `provenance` field in the response:
 
 ```bash
-curl -X POST http://localhost:8000/query \
+curl -X POST http://localhost:8420/query \
   -H "Content-Type: application/json" \
   -d '{"query": "What is the latest news about AI?", "include_diagnostics": true}'
 ```

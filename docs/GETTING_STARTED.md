@@ -248,12 +248,12 @@ The API lets your own programs, scripts, and automation tools talk to Axon over 
 **Launch** (run this in a **separate terminal** and leave it running):
 
 ```bash
-axon-api   # starts at http://localhost:8000
+axon-api   # starts at http://localhost:8420
 ```
 
-You should see `Uvicorn running on http://0.0.0.0:8000`. Leave this terminal open — closing it stops the API.
+You should see `Uvicorn running on http://0.0.0.0:8420`. Leave this terminal open — closing it stops the API.
 
-**Easiest way to explore:** open `http://localhost:8000/docs` in your browser — this shows every endpoint with a form to try it interactively. No code needed.
+**Easiest way to explore:** open `http://localhost:8420/docs` in your browser — this shows every endpoint with a form to try it interactively. No code needed.
 
 > **What is `curl`?** It is a command-line tool for making HTTP requests — like clicking a button in a browser, but scriptable. If you prefer a visual interface, use the Swagger UI at `/docs` instead.
 > **Getting a `403 Forbidden` error when ingesting?** Axon only allows reading files from within a configured base directory (`RAG_INGEST_BASE`). If you get a 403, check the `RAG_INGEST_BASE` value in your `.env` file and make sure it covers the folder you are trying to ingest from. By default it is set to your home directory.
@@ -261,19 +261,19 @@ You should see `Uvicorn running on http://0.0.0.0:8000`. Leave this terminal ope
 **Ingest a folder (returns immediately, runs in the background):**
 
 ```bash
-curl -X POST http://localhost:8000/ingest \
+curl -X POST http://localhost:8420/ingest \
   -H "Content-Type: application/json" \
   -d '{"path": "/path/to/docs"}'
 # ← returns a job_id straight away; ingest runs in the background
 # Check if it finished (replace abc123 with your job_id)
-curl http://localhost:8000/ingest/status/abc123
+curl http://localhost:8420/ingest/status/abc123
 # ← keeps returning {"status": "processing"} until done, then {"status": "completed"}
 ```
 
 **Ingest a single piece of text:**
 
 ```bash
-curl -X POST http://localhost:8000/add_text \
+curl -X POST http://localhost:8420/add_text \
   -H "Content-Type: application/json" \
   -d '{"text": "Important note to remember.", "metadata": {"source": "notes"}}'
 ```
@@ -281,7 +281,7 @@ curl -X POST http://localhost:8000/add_text \
 **Ask a question (returns a full synthesised answer):**
 
 ```bash
-curl -X POST http://localhost:8000/query \
+curl -X POST http://localhost:8420/query \
   -H "Content-Type: application/json" \
   -d '{"query": "What are the main topics?"}'
 ```
@@ -289,7 +289,7 @@ curl -X POST http://localhost:8000/query \
 **Search without an LLM answer (returns raw matching chunks):**
 
 ```bash
-curl -X POST http://localhost:8000/search \
+curl -X POST http://localhost:8420/search \
   -H "Content-Type: application/json" \
   -d '{"query": "authentication flow", "top_k": 5}'
 ```
@@ -302,7 +302,7 @@ curl -X POST http://localhost:8000/search \
 
 Served by `axon-api` at no extra cost. If the API is running, just open:
 
-**[http://localhost:8000/gui/](http://localhost:8000/gui/)**
+**[http://localhost:8420/gui/](http://localhost:8420/gui/)**
 
 Features: chat, document ingest, graph explorer, knowledge base, governance
 console, project switcher, settings panel.
@@ -340,7 +340,7 @@ axon-ui   # opens automatically at http://localhost:8501
 
 | Tool | Config file | Notes |
 |---|---|---|
-| **Claude Code** | `~/.claude/settings.json` | `claude mcp add axon axon-mcp --env RAG_API_BASE=http://localhost:8000` |
+| **Claude Code** | `~/.claude/settings.json` | `claude mcp add axon axon-mcp --env RAG_API_BASE=http://localhost:8420` |
 | **OpenAI Codex CLI** | `~/.codex/config.toml` | TOML format — see SETUP.md |
 | **Google Gemini CLI** | `~/.gemini/settings.json` | Same JSON shape as Claude Code |
 | **VS Code** (agent mode) | `.vscode/mcp.json` | Also needs `.vscode/settings.json` |
@@ -353,7 +353,7 @@ The JSON config is the same for Claude Code, Gemini CLI, VS Code, and Cursor —
   "mcpServers": {
     "axon": {
       "command": "axon-mcp",
-      "env": { "RAG_API_BASE": "http://localhost:8000" }
+      "env": { "RAG_API_BASE": "http://localhost:8420" }
     }
   }
 }
@@ -389,7 +389,7 @@ Each project has its own separate, isolated knowledge base. This lets you keep w
 axon --project work "Summarise the Q3 report"
 axon --project research "What papers discuss attention mechanisms?"
 # API
-curl -X POST http://localhost:8000/query \
+curl -X POST http://localhost:8420/query \
   -H "Content-Type: application/json" \
   -d '{"query": "What are the main topics?", "project": "work"}'
 ```
@@ -507,7 +507,7 @@ Clicking any citation or graph node opens the source file at the exact line in t
 |---|---|
 | **REPL** | `/graph viz` — exports to HTML and opens in browser |
 | **VS Code Command Palette** | `Ctrl+Shift+P` → `Axon: Show Graph for Query…` |
-| **API** | `curl http://localhost:8000/graph/visualize -o graph.html` |
+| **API** | `curl http://localhost:8420/graph/visualize -o graph.html` |
 
 | Tab | What it shows | How to enable |
 |---|---|---|

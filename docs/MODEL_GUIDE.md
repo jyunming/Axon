@@ -266,8 +266,8 @@ llm:
 ```
 
 Common ports: llama.cpp `llama-server` **8080**, LM Studio **1234**, vLLM **8000**,
-TGI **3000**. The default is 8080 — deliberately *not* 8000, which is where
-`axon-api` itself listens.
+TGI **3000**, and `axon-api` itself **8420** — four non-colliding defaults
+for services that might all run on one machine at once.
 
 Check the endpoint before querying:
 

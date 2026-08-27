@@ -21,7 +21,7 @@ export class AxonShareProjectTool implements vscode.LanguageModelTool<any> {
   }
   async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
     const apiKey = config.get<string>('apiKey', '');
     const { project, grantee } = options.input ?? {};
     try {
@@ -46,7 +46,7 @@ export class AxonRedeemShareTool implements vscode.LanguageModelTool<any> {
   }
   async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
     const apiKey = config.get<string>('apiKey', '');
     const { share_string } = options.input ?? {};
     try {
@@ -71,7 +71,7 @@ export class AxonRevokeShareTool implements vscode.LanguageModelTool<any> {
   }
   async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
     const apiKey = config.get<string>('apiKey', '');
     const { key_id } = options.input ?? {};
     try {
@@ -93,7 +93,7 @@ export class AxonRevokeShareTool implements vscode.LanguageModelTool<any> {
 export class AxonListSharesTool implements vscode.LanguageModelTool<any> {
   async invoke(_options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
     const apiKey = config.get<string>('apiKey', '');
     try {
       const result = await httpGet(`${apiBase}/share/list`, apiKey);
@@ -116,7 +116,7 @@ export class AxonInitStoreTool implements vscode.LanguageModelTool<any> {
   }
   async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
     const apiKey = config.get<string>('apiKey', '');
     const { base_path } = options.input;
     try {
@@ -139,7 +139,7 @@ export class AxonGetStoreStatusTool implements vscode.LanguageModelTool<any> {
   }
   async invoke(_options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
     const apiKey = config.get<string>('apiKey', '');
     try {
       const result = await httpGet(`${apiBase}/store/status`, apiKey);
@@ -161,7 +161,7 @@ export class AxonExtendShareTool implements vscode.LanguageModelTool<any> {
   }
   async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
     const apiKey = config.get<string>('apiKey', '');
     const { key_id, ttl_days } = options.input ?? {};
     try {
@@ -191,7 +191,7 @@ export class AxonStoreWhoamiTool implements vscode.LanguageModelTool<any> {
   }
   async invoke(_options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
     const apiKey = config.get<string>('apiKey', '');
     try {
       const result = await httpGet(`${apiBase}/store/whoami`, apiKey);

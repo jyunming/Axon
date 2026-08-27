@@ -33,7 +33,7 @@ class _Resp:
 
 def _cfg(**kw):
     c = types.SimpleNamespace(
-        api_host="127.0.0.1", api_port=8000, api_key="", projects_root=r"C:\store"
+        api_host="127.0.0.1", api_port=8420, api_key="", projects_root=r"C:\store"
     )
     for k, v in kw.items():
         setattr(c, k, v)
@@ -57,7 +57,7 @@ def _fake_urlopen(routes: dict[str, _Resp]):
 
 
 def test_resolve_api_base_default():
-    assert sc.resolve_api_base(_cfg()) == "http://127.0.0.1:8000"
+    assert sc.resolve_api_base(_cfg()) == "http://127.0.0.1:8420"
 
 
 def test_resolve_api_base_env_override(monkeypatch):
@@ -91,7 +91,7 @@ def test_detect_server_routes_when_store_matches(monkeypatch):
     got = sc.detect_server(_cfg(projects_root=r"C:\store"))
     assert got is not None
     assert got["project"] == "p"
-    assert got["_api_base"].endswith(":8000")
+    assert got["_api_base"].endswith(":8420")
 
 
 def test_detect_server_skips_on_store_mismatch(monkeypatch):
@@ -126,16 +126,16 @@ def test_store_lock_roundtrip(tmp_path, monkeypatch):
         _fake_urlopen({"/health/ready": _Resp(200, b'{"status":"ok"}')}),
     )
     assert sc.find_live_server_for_store(cfg) is None  # no lock yet
-    sc.write_store_lock(cfg, "0.0.0.0", 8000)
+    sc.write_store_lock(cfg, "0.0.0.0", 8420)
     found = sc.find_live_server_for_store(cfg)
-    assert found is not None and found["port"] == 8000 and found["pid"] == __import__("os").getpid()
+    assert found is not None and found["port"] == 8420 and found["pid"] == __import__("os").getpid()
     sc.release_store_lock(cfg)
     assert sc.find_live_server_for_store(cfg) is None  # released
 
 
 def test_store_lock_stale_is_ignored(tmp_path, monkeypatch):
     cfg = _cfg(projects_root=str(tmp_path))
-    sc.write_store_lock(cfg, "127.0.0.1", 8000)
+    sc.write_store_lock(cfg, "127.0.0.1", 8420)
 
     def _dead(*a, **k):
         raise OSError("connection refused")  # recorded server is gone
@@ -149,7 +149,7 @@ def test_release_store_lock_leaves_other_pid(tmp_path):
 
     cfg = _cfg(projects_root=str(tmp_path))
     lock = tmp_path / sc._LOCK_NAME
-    lock.write_text(_json.dumps({"host": "127.0.0.1", "port": 8000, "pid": 999999}))
+    lock.write_text(_json.dumps({"host": "127.0.0.1", "port": 8420, "pid": 999999}))
     sc.release_store_lock(cfg)  # not our pid → must not delete
     assert lock.exists()
 
@@ -159,16 +159,16 @@ def test_find_live_server_treats_503_as_alive(tmp_path, monkeypatch):
     # It is ALIVE, so the lock must NOT be treated as stale (else a 2nd server
     # could start during the 1st's startup and race on the store).
     cfg = _cfg(projects_root=str(tmp_path))
-    sc.write_store_lock(cfg, "127.0.0.1", 8000)
+    sc.write_store_lock(cfg, "127.0.0.1", 8420)
 
     def _busy(*a, **k):
         raise urllib.error.HTTPError(
-            "http://127.0.0.1:8000/health/ready", 503, "initializing", {}, None
+            "http://127.0.0.1:8420/health/ready", 503, "initializing", {}, None
         )
 
     monkeypatch.setattr(sc.urllib.request, "urlopen", _busy)
     found = sc.find_live_server_for_store(cfg)
-    assert found is not None and found["port"] == 8000
+    assert found is not None and found["port"] == 8420
 
 
 def test_detect_server_sends_api_key_on_config_probe(monkeypatch):

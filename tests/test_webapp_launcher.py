@@ -21,7 +21,7 @@ class TestDeprecationNotice:
         notice = webapp_launcher.DEPRECATION_NOTICE
         assert "DEPRECATED" in notice
         assert "axon-api" in notice
-        assert "http://localhost:8000/gui/" in notice
+        assert "http://localhost:8420/gui/" in notice
 
     def test_missing_streamlit_notice_points_at_the_gui_first(self):
         """The hint must lead with the no-dependency option, not pip install."""

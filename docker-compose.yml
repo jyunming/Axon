@@ -3,7 +3,7 @@ services:
   axon-api:
     build: .
     ports:
-      - "8000:8000"
+      - "8420:8420"
     volumes:
       - ./src:/app/src
       - ./chroma_data:/app/chroma_data
@@ -21,7 +21,7 @@ services:
     restart: unless-stopped
 
   # DEPRECATED: the Streamlit UI is superseded by the web GUI that the axon-api
-  # service already serves at http://localhost:8000/gui/. This service is kept
+  # service already serves at http://localhost:8420/gui/. This service is kept
   # for existing users and will be removed alongside axon-ui.
   axon-ui:
     build: .
@@ -36,7 +36,7 @@ services:
       - ./.streamlit:/app/.streamlit
     environment:
       - OLLAMA_HOST=http://ollama:11434
-      - AXON_API_URL=http://axon-api:8000
+      - AXON_API_URL=http://axon-api:8420
     env_file:
       - path: .env
         required: false

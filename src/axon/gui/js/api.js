@@ -4,7 +4,7 @@
  */
 
 class AxonAPI {
-    constructor(baseUrl = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8000') {
+    constructor(baseUrl = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8420') {
         this.baseUrl = baseUrl;
         this.activeProject = 'default';
         this.apiKey = localStorage.getItem('axon_api_key') || '';

@@ -16,7 +16,7 @@ export class AxonGraphStatusTool implements vscode.LanguageModelTool<any> {
   }
   async invoke(_options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
     const apiKey = config.get<string>('apiKey', '');
     try {
       const result = await httpGet(`${apiBase}/graph/status`, apiKey);
@@ -59,7 +59,7 @@ export class AxonGraphFinalizeTool implements vscode.LanguageModelTool<any> {
   }
   async invoke(_options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
     const apiKey = config.get<string>('apiKey', '');
     try {
       const result = await httpPost(`${apiBase}/graph/finalize`, {}, apiKey);
@@ -91,7 +91,7 @@ export class AxonGraphConflictsTool implements vscode.LanguageModelTool<any> {
   }
   async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
     const apiKey = config.get<string>('apiKey', '');
     const limit = (options.input && typeof options.input.limit === 'number') ? options.input.limit : 100;
     try {
@@ -119,7 +119,7 @@ export class AxonGraphRetrieveTool implements vscode.LanguageModelTool<any> {
   }
   async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
     const apiKey = config.get<string>('apiKey', '');
     const body: any = { query: options.input?.query ?? '' };
     if (typeof options.input?.top_k === 'number') body.top_k = options.input.top_k;
@@ -148,7 +148,7 @@ export class AxonGraphDataTool implements vscode.LanguageModelTool<any> {
   }
   async invoke(_options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
     const apiKey = config.get<string>('apiKey', '');
     try {
       const result = await httpGet(`${apiBase}/graph/data`, apiKey);
@@ -182,7 +182,7 @@ export class AxonGetActiveLeasesTool implements vscode.LanguageModelTool<any> {
   }
   async invoke(_options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
     const apiKey = config.get<string>('apiKey', '');
     try {
       const result = await httpGet(`${apiBase}/registry/leases`, apiKey);

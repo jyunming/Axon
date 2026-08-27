@@ -14,7 +14,7 @@ all 30 Axon tools are available to Claude Code automatically — no additional i
 **Step 1 — Start the Axon API:**
 
 ```bash
-axon-api          # starts at http://127.0.0.1:8000 by default
+axon-api          # starts at http://127.0.0.1:8420 by default
 ```
 
 **Step 2 — Add the MCP server to Claude Code:**

@@ -52,7 +52,7 @@ pytest -v -s  # Verbose with output
 
 ### Running Services
 ```bash
-# API Server — also serves the web GUI at http://localhost:8000/gui/
+# API Server — also serves the web GUI at http://localhost:8420/gui/
 make run-api
 axon-api
 # Streamlit UI (DEPRECATED — superseded by the web GUI above)
@@ -234,7 +234,7 @@ nano .env
 OLLAMA_HOST=http://localhost:11434
 OLLAMA_MODEL=llama3.1:8b
 AXON_HOST=127.0.0.1
-AXON_PORT=8000
+AXON_PORT=8420
 LOG_LEVEL=INFO
 ```
 
@@ -369,12 +369,12 @@ Merged scopes are read-only — ingest is blocked until you switch to a specific
 
 ### Health Check
 ```bash
-curl http://localhost:8000/health
+curl http://localhost:8420/health
 ```
 
 ### Query Knowledge Base
 ```bash
-curl -X POST http://localhost:8000/query \
+curl -X POST http://localhost:8420/query \
   -H "Content-Type: application/json" \
   -d '{
     "query": "What is machine learning?",
@@ -384,7 +384,7 @@ curl -X POST http://localhost:8000/query \
 
 ### Search Documents
 ```bash
-curl -X POST http://localhost:8000/search \
+curl -X POST http://localhost:8420/search \
   -H "Content-Type: application/json" \
   -d '{
     "query": "Python programming",
@@ -394,7 +394,7 @@ curl -X POST http://localhost:8000/search \
 
 ### Add Text
 ```bash
-curl -X POST http://localhost:8000/add_text \
+curl -X POST http://localhost:8420/add_text \
   -H "Content-Type: application/json" \
   -d '{
     "text": "Important information to remember",
@@ -404,7 +404,7 @@ curl -X POST http://localhost:8000/add_text \
 
 ### Ingest Files (async — returns job_id immediately)
 ```bash
-curl -X POST http://localhost:8000/ingest \
+curl -X POST http://localhost:8420/ingest \
   -H "Content-Type: application/json" \
   -d '{"path": "/path/to/documents"}'
 # Response: {"message": "Ingestion started", "job_id": "abc123", "status": "processing"}
@@ -412,19 +412,19 @@ curl -X POST http://localhost:8000/ingest \
 
 ### Poll Ingest Status
 ```bash
-curl http://localhost:8000/ingest/status/abc123
+curl http://localhost:8420/ingest/status/abc123
 # Response: {"job_id": "abc123", "status": "completed", "documents_ingested": 12}
 ```
 
 ### List Tracked Documents
 ```bash
-curl http://localhost:8000/tracked-docs
+curl http://localhost:8420/tracked-docs
 # Response: {"docs": {"/path/file.txt": {"content_hash": "...", "chunk_count": 5, "ingested_at": "..."}}}
 ```
 
 ### Refresh (Re-ingest Changed Files)
 ```bash
-curl -X POST http://localhost:8000/ingest/refresh
+curl -X POST http://localhost:8420/ingest/refresh
 # Re-ingests files whose content has changed since last ingest
 # Response: {"skipped": [...], "reingested": [...], "missing": [...], "errors": [...]}
 ```
@@ -432,11 +432,11 @@ curl -X POST http://localhost:8000/ingest/refresh
 ### Projects
 ```bash
 # List all projects
-curl http://localhost:8000/projects
+curl http://localhost:8420/projects
 # On /query and /search: project field validates against the active project (409 on mismatch);
 # on /add_text, /add_texts, /ingest_url it also enforces active-project match;
 # /ingest (path-based) has no project field.
-curl -X POST http://localhost:8000/query \
+curl -X POST http://localhost:8420/query \
   -H "Content-Type: application/json" \
   -d '{"query": "What is RAG?", "project": "my-project"}'
 ```
@@ -444,20 +444,20 @@ curl -X POST http://localhost:8000/query \
 ### Collection & Management
 ```bash
 # Source and chunk counts for active project
-curl http://localhost:8000/collection
+curl http://localhost:8420/collection
 # Documents not refreshed in N days
-curl "http://localhost:8000/collection/stale?days=30"
+curl "http://localhost:8420/collection/stale?days=30"
 # Batch ingest multiple text strings
-curl -X POST http://localhost:8000/add_texts \
+curl -X POST http://localhost:8420/add_texts \
   -H "Content-Type: application/json" \
   -d '{"docs": [{"text": "First text", "metadata": {"source": "a"}}, {"text": "Second text", "metadata": {"source": "b"}}]}'
 # Ingest content from a remote URL
-curl -X POST http://localhost:8000/ingest_url \
+curl -X POST http://localhost:8420/ingest_url \
   -H "Content-Type: application/json" \
   -d '{"url": "https://example.com/page"}'
 # Remove documents by internal chunk ID list (chunk IDs are not returned by /collection/stale;
 # delete-by-source is not yet a public contract — use GET /collection to inspect sources)
-curl -X POST http://localhost:8000/delete \
+curl -X POST http://localhost:8420/delete \
   -H "Content-Type: application/json" \
   -d '{"doc_ids": ["chunk-abc123", "chunk-def456"]}'
 ```
@@ -465,33 +465,33 @@ curl -X POST http://localhost:8000/delete \
 ### GraphRAG
 ```bash
 # GraphRAG community build status
-curl http://localhost:8000/graph/status
+curl http://localhost:8420/graph/status
 # Trigger community rebuild
-curl -X POST http://localhost:8000/graph/finalize
+curl -X POST http://localhost:8420/graph/finalize
 # Knowledge graph payload (VS Code panel)
-curl http://localhost:8000/graph/data
+curl http://localhost:8420/graph/data
 ```
 
 ### AxonStore (Multi-User Sharing)
 ```bash
 # AxonStore identity / status check
-curl http://localhost:8000/store/whoami
+curl http://localhost:8420/store/whoami
 # Change the store base path (e.g. to a shared drive)
-curl -X POST http://localhost:8000/store/init \
+curl -X POST http://localhost:8420/store/init \
   -H "Content-Type: application/json" \
   -d '{"base_path": "/data/axon-store"}'
 # Generate a share key
-curl -X POST http://localhost:8000/share/generate \
+curl -X POST http://localhost:8420/share/generate \
   -H "Content-Type: application/json" \
   -d '{"project": "my-project", "grantee": "<os-username>"}'
 # Redeem a share key
-curl -X POST http://localhost:8000/share/redeem \
+curl -X POST http://localhost:8420/share/redeem \
   -H "Content-Type: application/json" \
   -d '{"share_string": "eyJ..."}'
 # List active shares
-curl http://localhost:8000/share/list
+curl http://localhost:8420/share/list
 # Revoke a share
-curl -X POST http://localhost:8000/share/revoke \
+curl -X POST http://localhost:8420/share/revoke \
   -H "Content-Type: application/json" \
   -d '{"key_id": "sk_a1b2c3d4"}'
 ```
@@ -499,7 +499,7 @@ curl -X POST http://localhost:8000/share/revoke \
 ### OpenAPI / Swagger UI
 The full interactive API reference is available at:
 ```
-http://localhost:8000/docs
+http://localhost:8420/docs
 ```
 
 ## Troubleshooting
@@ -546,7 +546,7 @@ brain.ingest([
 ```python
 import httpx
 response = httpx.post(
-    "http://localhost:8000/query",
+    "http://localhost:8420/query",
     json={"query": "What is RAG?"}
 )
 print(response.json()["response"])

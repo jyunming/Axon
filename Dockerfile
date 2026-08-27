@@ -19,7 +19,7 @@ COPY . .
 RUN pip install -e .
 
 # Expose ports for API and UI
-EXPOSE 8000
+EXPOSE 8420
 EXPOSE 8501
 
 # Run as non-root user for security

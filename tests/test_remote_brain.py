@@ -36,7 +36,7 @@ def _fake_config():
         discussion_fallback=False,
         llm_temperature=0.3,
         api_host="127.0.0.1",
-        api_port=8000,
+        api_port=8420,
         api_key="",
         projects_root="/store/physics_kg",
     )
@@ -48,7 +48,7 @@ def _make_brain(record):
     *record* is a list; each request appends (method, path, body). The recorder
     returns a canned response keyed on path.
     """
-    brain = RemoteBrain(_fake_config(), {"project": "physics_kg", "_api_base": "http://x:8000"})
+    brain = RemoteBrain(_fake_config(), {"project": "physics_kg", "_api_base": "http://x:8420"})
 
     def fake_request(method, path, body=None, timeout=None):
         record.append((method, path, body))
@@ -73,7 +73,7 @@ def test_get_brain_returns_remote_when_server_detected(monkeypatch):
     monkeypatch.setattr(
         remote_brain._sc,
         "detect_server",
-        lambda cfg: {"status": "ok", "project": "physics_kg", "_api_base": "http://127.0.0.1:8000"},
+        lambda cfg: {"status": "ok", "project": "physics_kg", "_api_base": "http://127.0.0.1:8420"},
     )
 
     # AxonBrain must NOT be constructed on the remote path.
@@ -87,7 +87,7 @@ def test_get_brain_returns_remote_when_server_detected(monkeypatch):
     brain = get_brain(_fake_config())
     assert isinstance(brain, RemoteBrain)
     assert brain._active_project == "physics_kg"
-    assert brain._api_base == "http://127.0.0.1:8000"
+    assert brain._api_base == "http://127.0.0.1:8420"
 
 
 def test_get_brain_returns_local_when_no_server(monkeypatch):

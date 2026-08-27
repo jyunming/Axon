@@ -6,6 +6,7 @@ tests/test_api.py
 Unit tests for the FastAPI endpoints in axon.api.
 """
 
+import errno
 import os
 from unittest.mock import ANY, MagicMock, patch
 
@@ -2329,25 +2330,181 @@ class TestAPIKeyMiddleware:
 
 class TestApiMain:
     def test_main_calls_uvicorn(self):
-        """main() calls uvicorn.run with app, host, and port (lines 194-196)."""
+        """main() calls uvicorn.run with app, host, and port."""
         import axon.api as api_module
 
         with patch("uvicorn.run") as mock_run:
             with patch.dict(os.environ, {"AXON_HOST": "127.0.0.1", "AXON_PORT": "9876"}):
-                api_module.main()
+                api_module.main(argv=[])
             mock_run.assert_called_once()
             call_args = mock_run.call_args
             assert call_args[1].get("host") == "127.0.0.1" or call_args[0][1] == "127.0.0.1"
+            assert call_args[1].get("port") == 9876
 
     def test_main_uses_defaults(self):
-        """main() uses 0.0.0.0:8000 by default (lines 194-196)."""
+        """main() uses 0.0.0.0:8420 by default, without touching a real config.yaml."""
+        import axon.api as api_module
+        from axon.config import AxonConfig
+
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("AXON_HOST", "AXON_PORT", "AXON_CONFIG_PATH")
+        }
+        with patch("uvicorn.run") as mock_run, patch.object(
+            AxonConfig, "load", return_value=AxonConfig()
+        ) as mock_load:
+            with patch.dict(os.environ, env, clear=True):
+                api_module.main(argv=[])
+            mock_run.assert_called_once()
+            call_args = mock_run.call_args
+            assert call_args[1].get("host") == "0.0.0.0" or call_args[0][1] == "0.0.0.0"
+            assert call_args[1].get("port") == 8420
+            mock_load.assert_called_once()
+
+    def test_main_cli_flags_override_env(self):
+        """--host/--port beat AXON_HOST/AXON_PORT."""
         import axon.api as api_module
 
-        env = {k: v for k, v in os.environ.items() if k not in ("AXON_HOST", "AXON_PORT")}
         with patch("uvicorn.run") as mock_run:
-            with patch.dict(os.environ, env, clear=True):
-                api_module.main()
-            mock_run.assert_called_once()
+            with patch.dict(os.environ, {"AXON_HOST": "10.0.0.1", "AXON_PORT": "1111"}):
+                api_module.main(argv=["--host", "192.168.1.5", "--port", "9200"])
+            call_args = mock_run.call_args
+            assert call_args[1]["host"] == "192.168.1.5"
+            assert call_args[1]["port"] == 9200
+
+    def test_main_resolved_address_propagated_to_env(self):
+        """Resolved host/port are written back to AXON_HOST/AXON_PORT so
+        lifespan()'s independent env-var read (which writes the
+        single-instance lock file) stays in sync with what was actually
+        bound, regardless of where the value came from."""
+        import axon.api as api_module
+
+        with patch("uvicorn.run"):
+            with patch.dict(os.environ, {}, clear=False):
+                api_module.main(argv=["--port", "9300"])
+                assert os.environ["AXON_PORT"] == "9300"
+
+    def test_main_config_flag_sets_axon_config_path_env(self):
+        """--config propagates to AXON_CONFIG_PATH so lifespan() loads the same file."""
+        import axon.api as api_module
+
+        with patch("uvicorn.run"):
+            with patch.dict(os.environ, {}, clear=False):
+                api_module.main(argv=["--port", "9301", "--config", "/tmp/custom.yaml"])
+                assert os.environ["AXON_CONFIG_PATH"] == "/tmp/custom.yaml"
+
+    def test_main_port_in_use_exits_with_friendly_message(self, capsys):
+        """A bind-time EADDRINUSE becomes a clear SystemExit, not a raw traceback."""
+        import axon.api as api_module
+
+        with patch("uvicorn.run", side_effect=OSError(errno.EADDRINUSE, "Address in use")):
+            with pytest.raises(SystemExit) as exc_info:
+                api_module.main(argv=["--port", "9302"])
+        assert exc_info.value.code == 1
+        assert "already in use" in capsys.readouterr().err
+
+    def test_main_other_oserror_reraises(self):
+        """A non-EADDRINUSE OSError is not swallowed into the friendly message."""
+        import axon.api as api_module
+
+        with patch("uvicorn.run", side_effect=OSError(errno.EACCES, "Permission denied")):
+            with pytest.raises(OSError):
+                api_module.main(argv=["--port", "9303"])
+
+
+class TestResolveBindAddress:
+    """Unit tests for the CLI > env > config.yaml > default precedence."""
+
+    def _args(self, host=None, port=None, config=None):
+        import argparse
+
+        return argparse.Namespace(host=host, port=port, config=config)
+
+    def test_cli_flags_win(self):
+        from axon.api import _resolve_bind_address
+
+        host, port = _resolve_bind_address(self._args(host="1.2.3.4", port=1234), env={})
+        assert (host, port) == ("1.2.3.4", 1234)
+
+    def test_env_wins_over_config(self):
+        from axon.api import _resolve_bind_address
+
+        with patch("axon.api.AxonConfig.load") as mock_load:
+            host, port = _resolve_bind_address(
+                self._args(), env={"AXON_HOST": "5.6.7.8", "AXON_PORT": "5678"}
+            )
+        assert (host, port) == ("5.6.7.8", 5678)
+        mock_load.assert_not_called()
+
+    def test_falls_through_to_config_port(self):
+        from axon.api import _resolve_bind_address
+        from axon.config import AxonConfig
+
+        with patch("axon.api.AxonConfig.load", return_value=AxonConfig(api_port=9999)):
+            host, port = _resolve_bind_address(self._args(), env={})
+        assert host == "0.0.0.0"
+        assert port == 9999
+
+    def test_host_never_falls_through_to_config_api_host(self):
+        """Host resolution deliberately never uses config.api_host (127.0.0.1
+        default) — only AXON_HOST/--host/"0.0.0.0", to avoid silently
+        narrowing the server from all-interfaces to localhost-only."""
+        from axon.api import _resolve_bind_address
+        from axon.config import AxonConfig
+
+        with patch("axon.api.AxonConfig.load", return_value=AxonConfig(api_host="9.9.9.9")):
+            host, _ = _resolve_bind_address(self._args(), env={})
+        assert host == "0.0.0.0"
+
+    def test_config_path_flag_used_for_load(self):
+        from axon.api import _resolve_bind_address
+
+        with patch("axon.api.AxonConfig.load") as mock_load:
+            mock_load.return_value.api_port = 4242
+            _resolve_bind_address(self._args(config="/custom/config.yaml"), env={})
+        mock_load.assert_called_once_with("/custom/config.yaml")
+
+    def test_invalid_port_raises(self):
+        from axon.api import _resolve_bind_address
+
+        with pytest.raises(ValueError, match="Invalid port"):
+            _resolve_bind_address(self._args(port=99999), env={})
+
+    def test_fully_specified_never_loads_config(self):
+        """A fully-specified invocation must never touch config.yaml at all."""
+        from axon.api import _resolve_bind_address
+
+        with patch("axon.api.AxonConfig.load") as mock_load:
+            _resolve_bind_address(self._args(host="1.1.1.1", port=1), env={})
+        mock_load.assert_not_called()
+
+
+class TestLifespanPortSync:
+    """The one genuinely load-bearing behavior for "configurable and
+    discoverable, so we don't launch the same application twice": whatever
+    port main() resolves and writes into AXON_PORT must be exactly what
+    lifespan() records in the single-instance lock file, regardless of
+    where that port came from (--port, env var, or config.yaml)."""
+
+    async def test_lifespan_writes_env_var_port_to_lock(self):
+        from axon.api import app, lifespan
+
+        with patch.dict(os.environ, {"AXON_HOST": "127.0.0.1", "AXON_PORT": "9500"}), patch(
+            "axon.api.AxonConfig.load", return_value=MagicMock()
+        ), patch("axon.api._auto_init_store"), patch("axon.api.AxonBrain"), patch(
+            "axon.server_client.find_live_server_for_store", return_value=None
+        ), patch(
+            "axon.server_client.write_store_lock"
+        ) as mock_write_lock, patch(
+            "axon.server_client.release_store_lock"
+        ):
+            async with lifespan(app):
+                pass
+        mock_write_lock.assert_called_once()
+        _config, host, port = mock_write_lock.call_args[0]
+        assert host == "127.0.0.1"
+        assert port == 9500
 
 
 """

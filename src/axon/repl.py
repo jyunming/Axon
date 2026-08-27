@@ -4431,7 +4431,7 @@ def _interactive_repl(
                 sub = sub_parts[0].lower() if sub_parts else "overview"
                 sub_arg = sub_parts[1] if len(sub_parts) > 1 else ""
                 _gov_host = getattr(brain.config, "api_host", "127.0.0.1") or "127.0.0.1"
-                _gov_base = f"http://{_gov_host}:{getattr(brain.config, 'api_port', 8000)}"
+                _gov_base = f"http://{_gov_host}:{getattr(brain.config, 'api_port', 8420)}"
                 try:
                     import urllib.parse as _up_gov
                     import urllib.request as _ur_gov

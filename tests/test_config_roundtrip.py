@@ -50,6 +50,23 @@ def cfg_path():
     shutil.rmtree(d, ignore_errors=True)
 
 
+# AxonConfig.load() applies "High Priority -- wins over config.yaml" env-var
+# overrides for these fields (see config.py). Round-trip tests assume a clean
+# environment; without this, they're only deterministic on a machine that
+# happens not to have e.g. OLLAMA_MODELS set (a real dev machine with Ollama
+# installed will have it).
+@pytest.fixture(autouse=True)
+def _clear_config_env_overrides(monkeypatch):
+    for var in (
+        "OLLAMA_HOST",
+        "OLLAMA_BASE_URL",
+        "VLLM_BASE_URL",
+        "AXON_PROJECTS_ROOT",
+        "OLLAMA_MODELS",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+
 def _settable_fields():
     """Fields a user can meaningfully persist (not private, not derived)."""
     return [

@@ -36,6 +36,26 @@ single owner per store:
   file grow without bound (observed at 500+ MB). Each process now owns its file,
   so rotation always succeeds.
 
+### ⚠️ `axon-api`'s default port moved from 8000 to 8420
+
+8000 collided with Django's dev server and with this codebase's own
+`vllm_base_url` default — a machine running both `axon-api` and a local vLLM
+server on defaults already had a latent port clash. The port is also now
+genuinely configurable, not just env-var-only:
+
+- `axon-api --host`/`--port`/`--config` flags now exist for real (previously
+  documented in ADMIN_REFERENCE.md but not implemented).
+- Resolution precedence: `--port` > `AXON_PORT` env var > `config.yaml`'s
+  `api.port` > `8420` default (`--host`/`AXON_PORT` only, not `config.yaml`'s
+  client-oriented `api_host`, to avoid silently narrowing the bind from all-
+  interfaces to localhost-only). Previously `config.yaml`'s `api.port` had
+  zero effect on what port the server actually bound to.
+- A bind-time "address already in use" now exits with a clear message
+  suggesting `--port <other>` instead of a raw socket traceback.
+- If you scripted around the old `:8000` default (curl examples, MCP
+  `RAG_API_BASE`, VS Code `axon.apiBase`, etc.), update to `:8420` or set
+  `--port 8000` explicitly to keep the old value.
+
 ### 🐛 Fixes
 
 - **Web GUI chat dropped spaces between words** in streamed answers

@@ -4,7 +4,7 @@ Complete operator reference for Axon deployments.
 Covers all four surfaces: CLI, REPL, REST API, and MCP server.
 
 For installation and first-run setup, see [SETUP.md](SETUP.md).
-For interactive API docs, start `axon-api` and open `http://localhost:8000/docs`.
+For interactive API docs, start `axon-api` and open `http://localhost:8420/docs`.
 
 ---
 
@@ -13,25 +13,34 @@ For interactive API docs, start `axon-api` and open `http://localhost:8000/docs`
 | Command | Starts | Default Port | Best For |
 |---------|--------|-------------|---------|
 | `axon` | Interactive REPL | — | Day-to-day exploration, power users |
-| `axon-api` | FastAPI REST server + WebGUI | `8000` | Agents, scripts, CI pipelines, browser UI |
+| `axon-api` | FastAPI REST server + WebGUI | `8420` | Agents, scripts, CI pipelines, browser UI |
 | `axon-mcp` | MCP stdio server | — | GitHub Copilot agent mode, Claude Code |
 | `axon-ui` | Streamlit web UI — **deprecated** | `8501` | Superseded by the built-in WebGUI; removal planned |
 | `axon-ext` | Install VS Code extension | — | Registers the bundled VSIX in VS Code |
 
-When `axon-api` is running, the built-in WebGUI is at `http://localhost:8000/gui/`.
+When `axon-api` is running, the built-in WebGUI is at `http://localhost:8420/gui/`.
 
 > **Deprecation:** `axon-ui` (Streamlit) is deprecated and will be removed in a
 > future release. It is no longer bundled by the `[starter]` or `[all]` extras —
 > install it explicitly with `pip install "axon-rag[ui]"`. The built-in WebGUI is
 > the maintained browser surface.
 
-Start flags for the API server:
+Start flags for the API server (resolved in this order: flag > env var >
+`config.yaml`'s `api.port` > `8420` default; `--host` does not read
+`config.yaml`'s `api.host` — see §6 — which is a client-discovery default,
+not a bind-interface choice):
 
 ```bash
-axon-api --host 0.0.0.0 --port 8000   # bind to all interfaces
-axon-api --reload                       # dev mode: auto-reload on source change
+axon-api --host 0.0.0.0 --port 8420   # bind to all interfaces, explicit port
 axon-api --config /path/to/config.yaml  # explicit config file
 ```
+
+The resolved host/port are written back to the `AXON_HOST`/`AXON_PORT`
+environment variables before the server starts, so the single-instance guard
+(a per-store `.axon-api.lock` file preventing two servers from writing the
+same store concurrently; override with `AXON_ALLOW_MULTIPLE_SERVERS=1`)
+always records the address actually bound to, regardless of whether it came
+from a flag, an env var, or `config.yaml`.
 
 ---
 
@@ -324,7 +333,7 @@ axon> Compare @report.pdf with @notes.docx
 
 ## 4. REST API Reference
 
-**73 endpoints** across 12 route files. Base URL: `http://localhost:8000` (default).
+**73 endpoints** across 12 route files. Base URL: `http://localhost:8420` (default).
 
 Interactive docs: `/docs` (Swagger UI), `/redoc` — both branded with the Axon favicon. `/favicon.ico` redirects (302) to `/brand/axon-favicon.svg`; `/brand/*` is a static mount of `src/axon/brand/`. These paths (plus `/gui/`, `/health/live`, `/metrics`) bypass the optional `X-API-Key` middleware so browsers can fetch the docs UI without credentials.
 
@@ -844,13 +853,15 @@ YAML section: `offline:`
 | `api.allow_origins` | list | `[]` | CORS allowed origins (e.g. `["http://localhost:3000"]`) |
 | `api.max_upload_bytes` | int | `524288000` | Maximum file size per `/ingest/upload` multipart upload in bytes (default 500 MiB); requests exceeding this receive HTTP `413` |
 | `api.max_files_per_request` | int | `1000` | Maximum files per `/ingest/upload` batch request; requests exceeding this receive HTTP `422` |
+| `api.host` | str | `127.0.0.1` | CLI/REPL client-side "where to look for a running server" default (single-instance detection, `axon --governance`, REPL `/governance`). Not read by `axon-api` itself for its bind address — see `--host`/`AXON_HOST` below. |
+| `api.port` | int | `8420` | Both the client-side default above *and* a fallback the server itself binds to when neither `--port` nor `AXON_PORT` is set (see §1's precedence order) |
 
 Environment variables for the API server:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AXON_HOST` | `127.0.0.1` | Bind address for `axon-api` |
-| `AXON_PORT` | `8000` | Listen port for `axon-api` |
+| `AXON_HOST` | `0.0.0.0` | Bind address for `axon-api`. Beats `config.yaml`; beaten by `--host`. |
+| `AXON_PORT` | `8420` | Listen port for `axon-api`. Beats `config.yaml`'s `api.port`; beaten by `--port`. |
 
 ### 6.15 Mount & Share Settings
 
@@ -910,8 +921,8 @@ YAML section: `repl:`
 | `BRAVE_API_KEY` | Web search | Brave Search API key |
 | `AXON_STORE_BASE` | Sharing | AxonStore shared filesystem path |
 | `AXON_PROJECTS_ROOT` | Projects | Override the projects root directory directly |
-| `AXON_HOST` | API server | API server bind address (default: `127.0.0.1`) |
-| `AXON_PORT` | API server | API server port (default: `8000`) |
+| `AXON_HOST` | API server | API server bind address (default: `0.0.0.0`) |
+| `AXON_PORT` | API server | API server port (default: `8420`) |
 | `RAG_INGEST_BASE` | Security | Restrict ingest to this directory tree (default: cwd) |
 | `AXON_DEBUG` | Logging | Set to any non-empty value to enable DEBUG-level console logging |
 | `PYTHONUTF8` | Windows | Set to `1` to force UTF-8 mode on Windows |
@@ -923,50 +934,50 @@ YAML section: `repl:`
 ### 7.1 Check System Health
 
 ```bash
-curl http://localhost:8000/health
-curl http://localhost:8000/governance/overview
+curl http://localhost:8420/health
+curl http://localhost:8420/governance/overview
 ```
 
 ### 7.2 Audit Query Activity
 
 ```bash
 # Last 50 queries across all projects
-curl "http://localhost:8000/governance/audit?limit=50"
+curl "http://localhost:8420/governance/audit?limit=50"
 # Filter by project
-curl "http://localhost:8000/governance/audit?project=my-project&limit=20"
+curl "http://localhost:8420/governance/audit?project=my-project&limit=20"
 # Filter by surface (api | mcp | vscode | repl | cli)
-curl "http://localhost:8000/governance/audit?surface=mcp"
+curl "http://localhost:8420/governance/audit?surface=mcp"
 ```
 
 ### 7.3 Put a Project Into Maintenance
 
 ```bash
 # Check leases first
-curl http://localhost:8000/registry/leases
+curl http://localhost:8420/registry/leases
 # Wait for active_leases == 0, then transition
-curl -X POST http://localhost:8000/governance/project/maintenance \
+curl -X POST http://localhost:8420/governance/project/maintenance \
   -H "Content-Type: application/json" \
   -d '{"project": "my-project", "state": "readonly"}'
 # Fully offline
-curl -X POST http://localhost:8000/governance/project/maintenance \
+curl -X POST http://localhost:8420/governance/project/maintenance \
   -d '{"project": "my-project", "state": "offline"}'
 # Restore
-curl -X POST http://localhost:8000/governance/project/maintenance \
+curl -X POST http://localhost:8420/governance/project/maintenance \
   -d '{"project": "my-project", "state": "normal"}'
 ```
 
 ### 7.4 Force-Expire a Stuck Session
 
 ```bash
-curl http://localhost:8000/governance/copilot/sessions
-curl -X POST http://localhost:8000/governance/copilot/session/<session_id>/expire
+curl http://localhost:8420/governance/copilot/sessions
+curl -X POST http://localhost:8420/governance/copilot/session/<session_id>/expire
 ```
 
 ### 7.5 Rebuild GraphRAG Communities
 
 ```bash
-curl http://localhost:8000/graph/status
-curl -X POST http://localhost:8000/graph/finalize
+curl http://localhost:8420/graph/status
+curl -X POST http://localhost:8420/graph/finalize
 ```
 
 ---

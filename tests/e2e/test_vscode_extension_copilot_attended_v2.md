@@ -10,7 +10,7 @@ Axon VS Code extension.
 
 The extension registers tools via `vscode.lm.registerTool()` on activation. Each tool is a
 TypeScript class in `integrations/vscode-axon/src/tools/`. Tools call the Axon REST API
-(default `http://127.0.0.1:8000`) and return a `LanguageModelToolResult` containing a text
+(default `http://127.0.0.1:8420`) and return a `LanguageModelToolResult` containing a text
 string.
 
 Two execution modes are available:
@@ -39,12 +39,12 @@ Chat and observe tool invocations in the Axon output channel.
 
 ## Test Environment Setup
 
-1. Start the Axon API server: `axon-api` (listens on `http://127.0.0.1:8000` by default)
+1. Start the Axon API server: `axon-api` (listens on `http://127.0.0.1:8420` by default)
 2. Build the extension: `cd integrations/vscode-axon && npm run compile`
 3. Run automated suite: `python -m pytest tests/e2e/test_vscode_extension_tools_e2e.py -v --no-cov -m e2e`
 
 VS Code settings used by the extension (configurable via `axon.*`):
-- `axon.apiBase` — REST API base URL (default `http://127.0.0.1:8000`)
+- `axon.apiBase` — REST API base URL (default `http://127.0.0.1:8420`)
 - `axon.apiKey` — optional Bearer token
 - `axon.autoStart` — whether to spawn the Python server on activation
 - `axon.showGraphOnQuery` — whether to open the graph panel after search/query

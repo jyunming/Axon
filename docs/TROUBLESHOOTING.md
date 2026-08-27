@@ -212,7 +212,7 @@ Known limits:
 llm:
   provider: vllm
   model: meta-llama/Llama-3.1-8B-Instruct
-  base_url: http://localhost:8000/v1
+  vllm_base_url: http://localhost:8000/v1
 ```
 
 ---
@@ -235,8 +235,8 @@ llm:
 **Symptom:** Copilot tools return `Failed to fetch` or `ECONNREFUSED`.
 
 **Fix:**
-1. Confirm `axon-api` is running: `curl http://localhost:8000/health`
-2. Check `axon.apiBase` in VS Code settings matches the server address exactly (default: `http://localhost:8000`).
+1. Confirm `axon-api` is running: `curl http://localhost:8420/health`
+2. Check `axon.apiBase` in VS Code settings matches the server address exactly (default: `http://localhost:8420`).
 3. On Windows, ensure the API is bound to `localhost`, not `0.0.0.0` — both should work from the same machine, but double-check `AXON_HOST` in `.env`.
 
 ---
@@ -558,7 +558,7 @@ openai.NotFoundError: 404 The model `mistral-7b-instruct` was not found
 
 1. Confirm your vLLM server is running and healthy:
    ```bash
-   curl http://localhost:8000/v1/models
+   curl http://localhost:8420/v1/models
    ```
    The response lists all served models.
 
@@ -626,9 +626,11 @@ rag:
 (the shipped default) too — community detection adds a map-reduce over community
 reports, which is many more sequential calls.
 
-**Symptom: port conflict.** `local_base_url` defaults to `:8080`, deliberately
-not `:8000` — that is where `axon-api` itself listens. If you moved your LLM
-server to 8000, move the API instead (`AXON_PORT`).
+**Symptom: port conflict.** `local_base_url` defaults to `:8080`; `axon-api`
+itself defaults to `:8420` — non-colliding on purpose. If something else on
+your machine already holds one of these ports, move the conflicting side:
+`axon-api --port <other>` (or `AXON_PORT`) for the API, `/local-url` or
+`llm.local_base_url` for the local LLM server.
 
 ---
 
