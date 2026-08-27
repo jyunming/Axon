@@ -240,7 +240,9 @@ class TestLeidenalgResolutionParameter:
             brain._entity_graph = entity_graph
             brain._relation_graph = relation_graph
 
-            brain._run_hierarchical_community_detection()
+            from tests._graphrag_engine_test_utils import _bare_graphrag_engine
+
+            _bare_graphrag_engine(brain)._run_hierarchical_community_detection()
 
         # Each find_partition call must have resolution_parameter= keyword
         call_kwargs = [call.kwargs for call in mock_la.find_partition.call_args_list]
@@ -291,7 +293,9 @@ class TestLeidenalgResolutionParameter:
             brain._entity_graph = entity_graph
             brain._relation_graph = relation_graph
 
-            brain._run_hierarchical_community_detection()
+            from tests._graphrag_engine_test_utils import _bare_graphrag_engine
+
+            _bare_graphrag_engine(brain)._run_hierarchical_community_detection()
 
         resolutions = [
             call.kwargs.get("resolution_parameter")

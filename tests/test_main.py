@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+import inspect
 import os
 from unittest.mock import MagicMock, patch
 
 import yaml
+
+from axon.graph_backends.graphrag_engine import GraphRagEngine
+from tests._graphrag_engine_test_utils import (
+    _bare_graphrag_engine,
+    _bind_gr_cache_methods,
+    _bind_graphrag_method,
+)
 
 # Provide a simple synchronous executor mock to avoid thread leaks on Windows
 
@@ -35,52 +43,6 @@ class SyncExecutor:
 
     def __exit__(self, *args):
         pass
-
-
-def _bind_gr_cache_methods(brain):
-    """Bind real GraphRagMixin cache helpers onto a MagicMock brain.
-
-    MagicMock(spec=AxonBrain) mocks every method including _gr_cache_get,
-    so real bound methods like _extract_relations get MagicMock back from
-    cache lookups (not None) and think there's a cache hit. Binding the real
-    implementations fixes this for the whole test.
-
-    Also binds incoming-relation index helpers so entity-degree sorting
-    produces real ints (not MagicMock) and _gr_write_json_if_changed so
-    persistence round-trip tests actually write files.
-    """
-    from axon.main import AxonBrain
-
-    brain._graph_rag_cache = {}
-    brain._gr_cache_get = AxonBrain._gr_cache_get.__get__(brain, AxonBrain)
-    brain._gr_cache_put = AxonBrain._gr_cache_put.__get__(brain, AxonBrain)
-    brain._gr_cache_store = AxonBrain._gr_cache_store.__get__(brain, AxonBrain)
-    brain._gr_text_hash = AxonBrain._gr_text_hash.__get__(brain, AxonBrain)
-    brain._gr_llm_complete_cached = AxonBrain._gr_llm_complete_cached.__get__(brain, AxonBrain)
-    brain._parse_extracted_entities = AxonBrain._parse_extracted_entities.__get__(brain, AxonBrain)
-    brain._parse_extracted_relations = AxonBrain._parse_extracted_relations.__get__(
-        brain, AxonBrain
-    )
-    brain._load_graph_rag_extraction_cache = AxonBrain._load_graph_rag_extraction_cache.__get__(
-        brain, AxonBrain
-    )
-    brain._save_graph_rag_extraction_cache = AxonBrain._save_graph_rag_extraction_cache.__get__(
-        brain, AxonBrain
-    )
-    brain._extract_graph_llm_batches = AxonBrain._extract_graph_llm_batches.__get__(
-        brain, AxonBrain
-    )
-    brain._build_graph_edge_payload = AxonBrain._build_graph_edge_payload.__get__(brain, AxonBrain)
-    brain._build_networkx_graph_from_edges = AxonBrain._build_networkx_graph_from_edges
-    brain._graph_connected_components = AxonBrain._graph_connected_components
-    brain._build_synthetic_community_hierarchy = AxonBrain._build_synthetic_community_hierarchy
-    brain._get_incoming_relation_index = AxonBrain._get_incoming_relation_index.__get__(
-        brain, AxonBrain
-    )
-    brain._get_incoming_relation_count_map = AxonBrain._get_incoming_relation_count_map.__get__(
-        brain, AxonBrain
-    )
-    brain._gr_write_json_if_changed = AxonBrain._gr_write_json_if_changed.__get__(brain, AxonBrain)
 
 
 class TestAxonConfig:
@@ -1731,11 +1693,11 @@ class TestGraphRAG:
 
         brain._ingested_hashes = set()
 
-        brain._entity_graph = {}
+        brain._graph_backend._engine._entity_graph = {}
 
         brain._save_hash_store = MagicMock()
 
-        brain._save_entity_graph = MagicMock()
+        brain._graph_backend._engine._save_entity_graph = MagicMock()
 
         return brain
 
@@ -1751,7 +1713,7 @@ class TestGraphRAG:
         brain.llm.complete = MagicMock(return_value="Attention")
         brain.ingest(docs)
         # Entity graph should remain empty since graph_rag=False
-        assert brain._entity_graph == {}
+        assert brain._graph_backend._engine._entity_graph == {}
 
     def test_graph_rag_populates_entity_graph_on_ingest(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
@@ -1767,10 +1729,11 @@ class TestGraphRAG:
         brain.llm.complete = MagicMock(return_value="BERT\ntransformer")
         brain.ingest(docs)
         # At least one entity should be in the graph
-        assert len(brain._entity_graph) >= 1
+        entity_graph = brain._graph_backend._engine._entity_graph
+        assert len(entity_graph) >= 1
         # doc id (possibly with chunk suffix from splitter) should appear under at least one entity
         all_ids = set()
-        for node in brain._entity_graph.values():
+        for node in entity_graph.values():
             all_ids.update(node["chunk_ids"])
         assert any(doc_id.startswith("d1") for doc_id in all_ids)
 
@@ -1788,8 +1751,15 @@ class TestGraphRAG:
             similarity_threshold=0.0,
             query_router="off",  # disable router so graph_rag=True is preserved
         )
-        # Pre-populate entity graph
-        brain._entity_graph = {"transformer": {"description": "", "chunk_ids": ["d2"]}}
+        # Pre-populate entity graph. Also rebuild the token index the
+        # real ingest path keeps in sync incrementally (_token_index_add) —
+        # otherwise a non-empty index left over from construction-time load
+        # (e.g. real store data) would shadow this injected entity instead
+        # of falling back to a full scan.
+        brain._graph_backend._engine._entity_graph = {
+            "transformer": {"description": "", "chunk_ids": ["d2"]}
+        }
+        brain._graph_backend._engine._rebuild_entity_token_index()
         brain.embedding.embed_query = MagicMock(return_value=[0.1])
         # Primary retrieval returns only d1
         brain.vector_store.search = MagicMock(
@@ -1824,7 +1794,7 @@ class TestGraphRAG:
             graph_rag=True,
             similarity_threshold=0.0,
         )
-        brain._entity_graph = {
+        brain._graph_backend._engine._entity_graph = {
             "transformer": {"description": "", "chunk_ids": ["d1"]}
         }  # d1 already in primary results
         brain.embedding.embed_query = MagicMock(return_value=[0.1])
@@ -1865,14 +1835,14 @@ class TestExtractEntitiesStripping:
         # New format: each line is "NAME | description"; lines without pipe yield {"name": x, "description": ""}
         brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
         brain.llm.complete = MagicMock(return_value="Axon\nOpenAI\nQdrant\nPython\nFastAPI")
-        entities = brain._extract_entities("some text")
+        entities = brain._graph_backend._engine._extract_entities("some text")
         names = [e["name"] for e in entities]
         assert names == ["Axon", "OpenAI", "Qdrant", "Python", "FastAPI"]
 
     def test_clean_lines_unchanged(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
         brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
         brain.llm.complete = MagicMock(return_value="Axon\nOpenAI\nQdrant")
-        entities = brain._extract_entities("some text")
+        entities = brain._graph_backend._engine._extract_entities("some text")
         names = [e["name"] for e in entities]
         assert names == ["Axon", "OpenAI", "Qdrant"]
 
@@ -1881,14 +1851,14 @@ class TestExtractEntitiesStripping:
     ):
         brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
         brain.llm.complete = MagicMock(return_value="")
-        assert brain._extract_entities("some text") == []
+        assert brain._graph_backend._engine._extract_entities("some text") == []
 
     def test_llm_exception_returns_empty_list(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
         brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
         brain.llm.complete = MagicMock(side_effect=RuntimeError("llm down"))
-        assert brain._extract_entities("some text") == []
+        assert brain._graph_backend._engine._extract_entities("some text") == []
 
 
 # ---------------------------------------------------------------------------
@@ -3023,25 +2993,21 @@ class TestGraphRAGRobustness:
 
         # Wire the token index property to the real internal dict, not a mock
         type(brain)._entity_token_index = property(lambda self: self._entity_token_index_internal)
-        brain._rebuild_entity_token_index = AxonBrain._rebuild_entity_token_index.__get__(
-            brain, AxonBrain
-        )
+        brain._rebuild_entity_token_index = _bare_graphrag_engine(brain)._rebuild_entity_token_index
 
-        brain._entity_matches = AxonBrain._entity_matches.__get__(brain, AxonBrain)
+        brain._entity_matches = _bare_graphrag_engine(brain)._entity_matches
 
-        brain._prune_entity_graph = AxonBrain._prune_entity_graph.__get__(brain, AxonBrain)
+        brain._prune_entity_graph = _bare_graphrag_engine(brain)._prune_entity_graph
 
-        brain._extract_relations = AxonBrain._extract_relations.__get__(brain, AxonBrain)
+        brain._extract_relations = _bare_graphrag_engine(brain)._extract_relations
 
-        brain._expand_with_entity_graph = AxonBrain._expand_with_entity_graph.__get__(
-            brain, AxonBrain
-        )
+        brain._expand_with_entity_graph = _bare_graphrag_engine(brain).expand_with_entity_graph
 
-        brain._extract_entities = AxonBrain._extract_entities.__get__(brain, AxonBrain)
+        brain._extract_entities = _bare_graphrag_engine(brain)._extract_entities
 
-        brain._match_entities_by_embedding = AxonBrain._match_entities_by_embedding.__get__(
-            brain, AxonBrain
-        )
+        brain._match_entities_by_embedding = _bare_graphrag_engine(
+            brain
+        )._match_entities_by_embedding
 
         brain._save_entity_graph = MagicMock()
 
@@ -3334,7 +3300,6 @@ class TestGraphRAGRobustness:
     # ── Phase 1.5: extraction text cap ───────────────────────────────────
     def test_extraction_cap_at_3000_chars(self):
         """Entity extraction prompt includes text[:3000], not text[:1500]."""
-        from axon.main import AxonBrain
 
         brain = self._make_brain()
         captured_prompts = []
@@ -3349,7 +3314,7 @@ class TestGraphRAGRobustness:
 
         long_text = "x" * 4000
 
-        brain._extract_entities = AxonBrain._extract_entities.__get__(brain, AxonBrain)
+        brain._extract_entities = _bare_graphrag_engine(brain)._extract_entities
 
         brain._extract_entities(long_text)
 
@@ -3481,55 +3446,49 @@ class TestGraphRAGCommunity:
 
         # Bind real implementations
 
-        brain._extract_entities = AxonBrain._extract_entities.__get__(brain, AxonBrain)
+        brain._extract_entities = _bare_graphrag_engine(brain)._extract_entities
 
-        brain._extract_relations = AxonBrain._extract_relations.__get__(brain, AxonBrain)
+        brain._extract_relations = _bare_graphrag_engine(brain)._extract_relations
 
-        brain._prune_entity_graph = AxonBrain._prune_entity_graph.__get__(brain, AxonBrain)
+        brain._prune_entity_graph = _bare_graphrag_engine(brain)._prune_entity_graph
 
-        brain._expand_with_entity_graph = AxonBrain._expand_with_entity_graph.__get__(
-            brain, AxonBrain
-        )
+        brain._expand_with_entity_graph = _bare_graphrag_engine(brain).expand_with_entity_graph
 
-        brain._run_community_detection = AxonBrain._run_community_detection.__get__(
-            brain, AxonBrain
-        )
+        brain._run_community_detection = _bare_graphrag_engine(brain)._run_community_detection
 
-        brain._run_hierarchical_community_detection = (
-            AxonBrain._run_hierarchical_community_detection.__get__(brain, AxonBrain)
-        )
+        brain._run_hierarchical_community_detection = _bare_graphrag_engine(
+            brain
+        )._run_hierarchical_community_detection
 
-        brain._build_networkx_graph = AxonBrain._build_networkx_graph.__get__(brain, AxonBrain)
+        brain._build_networkx_graph = _bare_graphrag_engine(brain)._build_networkx_graph
 
-        brain._generate_community_summaries = AxonBrain._generate_community_summaries.__get__(
-            brain, AxonBrain
-        )
+        brain._generate_community_summaries = _bare_graphrag_engine(
+            brain
+        )._generate_community_summaries
 
-        brain._global_search_map_reduce = AxonBrain._global_search_map_reduce.__get__(
-            brain, AxonBrain
-        )
+        brain._global_search_map_reduce = _bare_graphrag_engine(brain)._global_search_map_reduce
 
-        brain._local_search_context = AxonBrain._local_search_context.__get__(brain, AxonBrain)
+        brain._local_search_context = _bare_graphrag_engine(brain)._local_search_context
 
-        brain._get_incoming_relations = AxonBrain._get_incoming_relations.__get__(brain, AxonBrain)
+        brain._get_incoming_relations = _bare_graphrag_engine(brain)._get_incoming_relations
 
-        brain._entity_matches = AxonBrain._entity_matches.__get__(brain, AxonBrain)
+        brain._entity_matches = _bare_graphrag_engine(brain)._entity_matches
 
-        brain._match_entities_by_embedding = AxonBrain._match_entities_by_embedding.__get__(
-            brain, AxonBrain
-        )
+        brain._match_entities_by_embedding = _bare_graphrag_engine(
+            brain
+        )._match_entities_by_embedding
 
-        brain._embed_entities = AxonBrain._embed_entities.__get__(brain, AxonBrain)
+        brain._embed_entities = _bare_graphrag_engine(brain)._embed_entities
 
-        brain._extract_claims = AxonBrain._extract_claims.__get__(brain, AxonBrain)
+        brain._extract_claims = _bare_graphrag_engine(brain)._extract_claims
 
-        brain._canonicalize_entity_descriptions = (
-            AxonBrain._canonicalize_entity_descriptions.__get__(brain, AxonBrain)
-        )
+        brain._canonicalize_entity_descriptions = _bare_graphrag_engine(
+            brain
+        )._canonicalize_entity_descriptions
 
-        brain._index_community_reports_in_vector_store = (
-            AxonBrain._index_community_reports_in_vector_store.__get__(brain, AxonBrain)
-        )
+        brain._index_community_reports_in_vector_store = _bare_graphrag_engine(
+            brain
+        )._index_community_reports_in_vector_store
 
         brain._save_entity_graph = MagicMock()
 
@@ -3633,11 +3592,9 @@ class TestGraphRAGCommunity:
         brain = MagicMock(spec=AxonBrain)
         brain.config = AxonConfig(bm25_path=str(tmp_path))
         brain._community_levels = {0: {"entityA": 0, "entityB": 1}}
-        brain._save_community_levels = AxonBrain._save_community_levels.__get__(brain, AxonBrain)
-        brain._load_community_levels = AxonBrain._load_community_levels.__get__(brain, AxonBrain)
-        brain._gr_write_json_if_changed = AxonBrain._gr_write_json_if_changed.__get__(
-            brain, AxonBrain
-        )
+        brain._save_community_levels = _bare_graphrag_engine(brain)._save_community_levels
+        brain._load_community_levels = _bare_graphrag_engine(brain)._load_community_levels
+        brain._gr_write_json_if_changed = _bare_graphrag_engine(brain)._gr_write_json_if_changed
         brain._save_community_levels()
         loaded = brain._load_community_levels()
         assert loaded == {0: {"entityA": 0, "entityB": 1}}
@@ -4001,6 +3958,12 @@ class TestGraphRAGRealImplementation:
         brain = MagicMock(spec=AxonBrain)
 
         brain.config = AxonConfig()
+        # This fixture doesn't isolate bm25_path to a tmp dir, so
+        # _get_incoming_relation_index()'s on-disk cache
+        # (.relation_graph.incoming.json under the real store) can leak
+        # stale content across test runs — force the always-correct
+        # in-memory scan fallback instead (graph_rag.py:873).
+        brain.config.graph_rag_local_cached_incoming = False
 
         brain.llm = MagicMock()
 
@@ -4038,33 +4001,31 @@ class TestGraphRAGRealImplementation:
 
         # Bind real implementations
 
-        brain._extract_entities = AxonBrain._extract_entities.__get__(brain, AxonBrain)
+        brain._extract_entities = _bare_graphrag_engine(brain)._extract_entities
 
-        brain._extract_relations = AxonBrain._extract_relations.__get__(brain, AxonBrain)
+        brain._extract_relations = _bare_graphrag_engine(brain)._extract_relations
 
-        brain._run_hierarchical_community_detection = (
-            AxonBrain._run_hierarchical_community_detection.__get__(brain, AxonBrain)
-        )
+        brain._run_hierarchical_community_detection = _bare_graphrag_engine(
+            brain
+        )._run_hierarchical_community_detection
 
-        brain._build_networkx_graph = AxonBrain._build_networkx_graph.__get__(brain, AxonBrain)
+        brain._build_networkx_graph = _bare_graphrag_engine(brain)._build_networkx_graph
 
-        brain._generate_community_summaries = AxonBrain._generate_community_summaries.__get__(
-            brain, AxonBrain
-        )
+        brain._generate_community_summaries = _bare_graphrag_engine(
+            brain
+        )._generate_community_summaries
 
-        brain._global_search_map_reduce = AxonBrain._global_search_map_reduce.__get__(
-            brain, AxonBrain
-        )
+        brain._global_search_map_reduce = _bare_graphrag_engine(brain)._global_search_map_reduce
 
-        brain._local_search_context = AxonBrain._local_search_context.__get__(brain, AxonBrain)
+        brain._local_search_context = _bare_graphrag_engine(brain)._local_search_context
 
-        brain._get_incoming_relations = AxonBrain._get_incoming_relations.__get__(brain, AxonBrain)
+        brain._get_incoming_relations = _bare_graphrag_engine(brain)._get_incoming_relations
 
-        brain._entity_matches = AxonBrain._entity_matches.__get__(brain, AxonBrain)
+        brain._entity_matches = _bare_graphrag_engine(brain)._entity_matches
 
-        brain._extract_claims = AxonBrain._extract_claims.__get__(brain, AxonBrain)
+        brain._extract_claims = _bare_graphrag_engine(brain)._extract_claims
 
-        brain._rebuild_communities = AxonBrain._rebuild_communities.__get__(brain, AxonBrain)
+        brain._rebuild_communities = _bare_graphrag_engine(brain)._rebuild_communities
 
         brain._save_entity_graph = MagicMock()
 
@@ -4552,9 +4513,7 @@ class TestGraphRAGAuditFixes:
 
         brain._entity_token_index_internal = {}
         type(brain)._entity_token_index = property(lambda self: self._entity_token_index_internal)
-        brain._rebuild_entity_token_index = AxonBrain._rebuild_entity_token_index.__get__(
-            brain, AxonBrain
-        )
+        brain._rebuild_entity_token_index = _bare_graphrag_engine(brain)._rebuild_entity_token_index
 
         llm = MagicMock()
 
@@ -4575,9 +4534,7 @@ class TestGraphRAGAuditFixes:
             "_match_entities_by_embedding",
             "_extract_entities",
         ]:
-            method = getattr(AxonBrain, method_name)
-
-            setattr(brain, method_name, lambda *a, m=method, **kw: m(brain, *a, **kw))
+            _bind_graphrag_method(brain, method_name)
 
         _bind_gr_cache_methods(brain)
 
@@ -4806,10 +4763,9 @@ class TestGraphRAGAuditFixes:
 
         from axon.main import (
             _GRAPHRAG_REDUCE_SYSTEM_PROMPT,  # noqa: F401
-            AxonBrain,
         )
 
-        AxonBrain._global_search_map_reduce(b, "what is the answer?", b.config)
+        _bare_graphrag_engine(b)._global_search_map_reduce("what is the answer?", b.config)
 
         # With chunking, the long report should produce >=2 map LLM calls (one per chunk)
 
@@ -4826,7 +4782,6 @@ class TestGraphRAGAuditFixes:
 
     def test_union_embedding_and_llm_entity_extraction(self):
         """_expand_with_entity_graph must union LLM-extracted and embedding-matched entities."""
-        from axon.main import AxonBrain
 
         b = self._make_brain()
         b.config.graph_rag_entity_embedding_match = True
@@ -4860,7 +4815,9 @@ class TestGraphRAGAuditFixes:
         b._executor = SyncExecutor()
         b.vector_store = MagicMock()
         b.vector_store.get_by_ids = MagicMock(return_value=[])
-        results, matched = AxonBrain._expand_with_entity_graph(b, "apple music", [], b.config)
+        results, matched = _bare_graphrag_engine(b).expand_with_entity_graph(
+            "apple music", [], b.config
+        )
         b._executor.shutdown(wait=False)
         # Both apple (LLM) and beatles (embedding) should appear in matched entities
         matched_lower = [m.lower() for m in matched]
@@ -5001,9 +4958,7 @@ class TestGraphRAGTask6Fixes:
             "_match_entities_by_embedding",
             "_extract_entities",
         ]:
-            method = getattr(AxonBrain, method_name)
-
-            setattr(brain, method_name, lambda *a, m=method, **kw: m(brain, *a, **kw))
+            _bind_graphrag_method(brain, method_name)
 
         _bind_gr_cache_methods(brain)
 
@@ -5143,7 +5098,6 @@ class TestGraphRAGTask6Fixes:
     def test_leiden_child_substitution_finds_summary(self):
         """When community context exceeds token budget, _generate_community_summaries
         substitutes ranked child reports by rank (highest rank first)."""
-        from axon.main import AxonBrain
 
         b = self._make_brain()
         b.config.graph_rag_community_max_context_tokens = (
@@ -5204,7 +5158,7 @@ class TestGraphRAGTask6Fixes:
 
         # Run the real _generate_community_summaries to exercise the substitution path
 
-        AxonBrain._generate_community_summaries(b)
+        _bare_graphrag_engine(b)._generate_community_summaries()
 
         # The prompt for the parent community must include child sub-reports
 
@@ -5226,7 +5180,6 @@ class TestGraphRAGTask6Fixes:
 
     def test_community_prompt_no_hard_truncation(self):
         """Community prompt must include context beyond 3000 chars (no hard truncation)."""
-        from axon.main import AxonBrain
 
         b = self._make_brain()
         b.config.graph_rag_community_max_context_tokens = 999999  # do not trigger substitution
@@ -5257,7 +5210,7 @@ class TestGraphRAGTask6Fixes:
 
         # Call the real _generate_community_summaries which uses the nested _summarise closure
 
-        AxonBrain._generate_community_summaries(b)
+        _bare_graphrag_engine(b)._generate_community_summaries()
 
         assert captured_prompts, "LLM was never called"
 
@@ -5271,7 +5224,6 @@ class TestGraphRAGTask6Fixes:
 
     def test_global_search_map_length_config_respected(self):
         """graph_rag_global_map_max_length=100 must produce chunk size of ~400 chars."""
-        from axon.main import AxonBrain
 
         b = self._make_brain()
         b.config.graph_rag_global_map_max_length = 100  # 100 * 4 = 400 chars per chunk
@@ -5304,7 +5256,7 @@ class TestGraphRAGTask6Fixes:
 
         b._executor = SyncExecutor()
 
-        AxonBrain._global_search_map_reduce(b, "query", b.config)
+        _bare_graphrag_engine(b)._global_search_map_reduce("query", b.config)
 
         map_calls = [c for c in calls if "Community Report" in c]
 
@@ -5460,9 +5412,7 @@ class TestGraphRAGTask7Fixes:
             "_match_entities_by_embedding",
             "_extract_entities",
         ]:
-            method = getattr(AxonBrain, method_name)
-
-            setattr(brain, method_name, lambda *a, m=method, **kw: m(brain, *a, **kw))
+            _bind_graphrag_method(brain, method_name)
 
         _bind_gr_cache_methods(brain)
 
@@ -5599,23 +5549,21 @@ class TestGraphRAGTask7Fixes:
 
     def test_finalize_graph_triggers_rebuild(self):
         """finalize_graph() on a dirty brain calls _rebuild_communities exactly once."""
-        from axon.main import AxonBrain
 
         b = self._make_brain()
         b._community_graph_dirty = True
         b._rebuild_communities = MagicMock()
-        AxonBrain.finalize_graph(b)
+        _bare_graphrag_engine(b).finalize_graph()
         b._rebuild_communities.assert_called_once()
         assert b._community_graph_dirty is False
 
     def test_finalize_graph_force_rebuilds_when_not_dirty(self):
         """finalize_graph(force=True) rebuilds even when dirty flag is not set."""
-        from axon.main import AxonBrain
 
         b = self._make_brain()
         b._community_graph_dirty = False
         b._rebuild_communities = MagicMock()
-        AxonBrain.finalize_graph(b, force=True)
+        _bare_graphrag_engine(b).finalize_graph(force=True)
         b._rebuild_communities.assert_called_once()
         assert b._community_graph_dirty is False
 
@@ -5625,8 +5573,6 @@ class TestGraphRAGTask7Fixes:
     def test_community_summary_cache_hit_skips_llm(self):
         """Unchanged membership hash skips LLM on second _generate_community_summaries."""
         import hashlib
-
-        from axon.main import AxonBrain
 
         b = self._make_brain()
         b._community_levels = {0: {"entity_a": 0, "entity_b": 0}}
@@ -5651,13 +5597,12 @@ class TestGraphRAGTask7Fixes:
             return_value='{"title":"New","summary":"new","findings":[],"rank":5.0}'
         )
         b.llm.complete = llm_mock
-        AxonBrain._generate_community_summaries(b)
+        _bare_graphrag_engine(b)._generate_community_summaries()
         llm_mock.assert_not_called()
         assert b._community_summaries["0_0"]["title"] == "Cached Title"
 
     def test_community_summary_cache_miss_triggers_llm(self):
         """Changed membership hash calls LLM for that community."""
-        from axon.main import AxonBrain
 
         b = self._make_brain()
         b._community_levels = {0: {"entity_a": 0, "entity_b": 0, "entity_c": 0}}
@@ -5680,7 +5625,7 @@ class TestGraphRAGTask7Fixes:
             return_value='{"title":"New","summary":"new","findings":[],"rank":5.0}'
         )
         b.llm.complete = llm_mock
-        AxonBrain._generate_community_summaries(b)
+        _bare_graphrag_engine(b)._generate_community_summaries()
         llm_mock.assert_called_once()
 
     # ------------------------------------------------------------------
@@ -5874,7 +5819,9 @@ class TestRaptorTask8Fixes:
         )
         brain.llm.complete = MagicMock(return_value=entity_json)
         brain.ingest(docs)
-        assert len(brain._entity_graph) > 0, "Small source must populate entity graph"
+        assert (
+            len(brain._graph_backend._engine._entity_graph) > 0
+        ), "Small source must populate entity graph"
 
     # ------------------------------------------------------------------
     # P1: RAPTOR drill-down
@@ -6313,7 +6260,6 @@ class TestRaptorTask9Fixes:
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
         """Entity node dict missing chunk_ids must not crash _expand_with_entity_graph."""
-        from axon.main import AxonBrain
 
         brain = self._make_brain(
             MockReranker,
@@ -6332,14 +6278,15 @@ class TestRaptorTask9Fixes:
         brain._match_entities_by_embedding = MagicMock(return_value=[])
         existing = [{"id": "doc1", "text": "some text", "score": 0.7, "metadata": {}}]
         # Must not raise KeyError
-        expanded, matched = AxonBrain._expand_with_entity_graph(brain, "who is alice?", existing)
+        expanded, matched = _bare_graphrag_engine(brain).expand_with_entity_graph(
+            "who is alice?", existing
+        )
         assert len(expanded) >= len(existing)
 
     def test_entity_graph_pruning_missing_chunk_ids_safe(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
         """_prune_entity_graph must not crash when a node dict lacks chunk_ids."""
-        from axon.main import AxonBrain
 
         brain = self._make_brain(
             MockReranker,
@@ -6355,7 +6302,7 @@ class TestRaptorTask9Fixes:
         brain._relation_graph = {}
         brain._save_relation_graph = MagicMock()
         # Must not raise KeyError
-        AxonBrain._prune_entity_graph(brain, deleted_ids={"some_deleted_id"})
+        _bare_graphrag_engine(brain)._prune_entity_graph(deleted_ids={"some_deleted_id"})
         # Bob not pruned — his empty chunk list has nothing matching the deleted id
         assert "bob" in brain._entity_graph
 
@@ -6572,12 +6519,12 @@ class TestRaptorTask10Fixes:
         brain = AxonBrain(config)
         brain._ingested_hashes = set()
         brain._save_hash_store = MagicMock()
-        brain._save_entity_graph = MagicMock()
-        brain._save_relation_graph = MagicMock()
+        brain._graph_backend._engine._save_entity_graph = MagicMock()
+        brain._graph_backend._engine._save_relation_graph = MagicMock()
         brain.embedding.embed = MagicMock(side_effect=lambda texts: [[0.1] * 384] * len(texts))
         brain.vector_store.add = MagicMock()
         # Pre-seed an entity dict WITHOUT chunk_ids (simulates old/migrated disk data)
-        brain._entity_graph["alice"] = {
+        brain._graph_backend._engine._entity_graph["alice"] = {
             "description": "a person",
             "type": "PERSON",
             "frequency": 0,
@@ -6599,7 +6546,7 @@ class TestRaptorTask10Fixes:
             ]
         )
         assert (
-            "chunk_ids" in brain._entity_graph["alice"]
+            "chunk_ids" in brain._graph_backend._engine._entity_graph["alice"]
         ), "setdefault should have created chunk_ids during ingest"
 
     # ------------------------------------------------------------------
@@ -6726,9 +6673,7 @@ class TestFundamentalFixes:
             "_expand_with_entity_graph",
             "_raptor_group_by_structure",
         ]:
-            method = getattr(AxonBrain, method_name)
-
-            setattr(brain, method_name, lambda *a, m=method, **kw: m(brain, *a, **kw))
+            _bind_graphrag_method(brain, method_name)
 
         _bind_gr_cache_methods(brain)
 
@@ -6880,7 +6825,6 @@ class TestFundamentalFixes:
     # ------------------------------------------------------------------
     def test_unified_ranking_no_section_cap(self):
         """With tight token budget, a high-scoring text unit beats a low-scoring community."""
-        from axon.main import AxonBrain
 
         brain = self._make_brain()
         # One entity, one community (low rank), one text unit with high relation count
@@ -6912,7 +6856,7 @@ class TestFundamentalFixes:
         brain.config.graph_rag_local_relation_weight = 2.0
         brain.config.graph_rag_local_community_weight = 1.5
         brain.config.graph_rag_local_text_unit_weight = 1.0
-        ctx = AxonBrain._local_search_context(brain, "alpha", ["alpha"], brain.config)
+        ctx = _bare_graphrag_engine(brain)._local_search_context("alpha", ["alpha"], brain.config)
         # With unified ranking, text unit (score = 1.0 * 1.0) should appear even if community
         # would have consumed the budget first under fixed-split.
         # The key assertion: no hard floor for community means text_unit can appear.
@@ -6920,7 +6864,6 @@ class TestFundamentalFixes:
 
     def test_unified_ranking_respects_token_budget(self):
         """Total tokens in selected candidates must not exceed graph_rag_local_max_context_tokens."""
-        from axon.main import AxonBrain
 
         brain = self._make_brain()
         brain._entity_graph = {
@@ -6942,7 +6885,7 @@ class TestFundamentalFixes:
         budget = 100
         brain.config.graph_rag_local_max_context_tokens = budget
         entities = list(brain._entity_graph.keys())
-        ctx = AxonBrain._local_search_context(brain, "entity", entities, brain.config)
+        ctx = _bare_graphrag_engine(brain)._local_search_context("entity", entities, brain.config)
         used_tokens = len(ctx) // 4
         # Allow some slack for section headers; greedy-fill should stay near budget
         assert (
@@ -7066,11 +7009,11 @@ class TestRuntimeFixes:
 
         brain._executor = SyncExecutor()
 
-        brain._generate_community_summaries = AxonBrain._generate_community_summaries.__get__(
-            brain, AxonBrain
-        )
+        brain._generate_community_summaries = _bare_graphrag_engine(
+            brain
+        )._generate_community_summaries
 
-        brain._rebuild_communities = AxonBrain._rebuild_communities.__get__(brain, AxonBrain)
+        brain._rebuild_communities = _bare_graphrag_engine(brain)._rebuild_communities
 
         return brain
 
@@ -7229,7 +7172,6 @@ class TestRuntimeFixes:
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
         """graph_rag_community_lazy=True: _rebuild_communities skips _generate_community_summaries."""
-        from axon.main import AxonBrain
 
         brain = self._make_triage_brain()
         brain.config.graph_rag_community_lazy = True
@@ -7238,7 +7180,7 @@ class TestRuntimeFixes:
         )
         brain._generate_community_summaries = MagicMock()
         brain._index_community_reports_in_vector_store = MagicMock()
-        AxonBrain._rebuild_communities(brain)
+        _bare_graphrag_engine(brain)._rebuild_communities()
         brain._generate_community_summaries.assert_not_called()
 
     # ------------------------------------------------------------------
@@ -7248,9 +7190,10 @@ class TestRuntimeFixes:
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
         """graph_rag_global_top_communities=2 limits map phase to 2 communities (≤2 LLM calls)."""
-        from axon.main import AxonBrain
+        from axon.main import AxonBrain, AxonConfig
 
         brain = MagicMock(spec=AxonBrain)
+        brain.config = AxonConfig()
         brain._community_summaries = {
             "0_0": {
                 "title": "machine learning",
@@ -7310,7 +7253,7 @@ class TestRuntimeFixes:
 
             graph_rag_global_top_communities = 2
 
-        AxonBrain._global_search_map_reduce(brain, "machine learning", _Cfg())
+        _bare_graphrag_engine(brain)._global_search_map_reduce("machine learning", _Cfg())
 
         # With 5 communities but top_communities=2, only 2 map LLM calls should fire
 
@@ -7421,8 +7364,10 @@ class TestBatchModeDefer:
             parent_chunk_size=0,
         )
         docs = [{"id": "d1", "text": "hello", "metadata": {"source": "test.txt"}}]
-        with patch.object(brain, "_save_entity_graph") as mock_save_eg, patch.object(
-            brain, "_extract_entities", return_value=[]
+        with patch.object(
+            brain._graph_backend._engine, "_save_entity_graph"
+        ) as mock_save_eg, patch.object(
+            brain._graph_backend._engine, "_extract_entities", return_value=[]
         ):
             brain.ingest(docs)
             mock_save_eg.assert_not_called()
@@ -7444,8 +7389,10 @@ class TestBatchModeDefer:
             parent_chunk_size=0,
         )
         docs = [{"id": "d1", "text": "hello", "metadata": {"source": "test.txt"}}]
-        with patch.object(brain, "_save_entity_graph") as mock_save_eg, patch.object(
-            brain,
+        with patch.object(
+            brain._graph_backend._engine, "_save_entity_graph"
+        ) as mock_save_eg, patch.object(
+            brain._graph_backend._engine,
             "_extract_entities",
             return_value=[{"name": "entity1", "type": "PERSON", "description": "a person"}],
         ):
@@ -7464,8 +7411,8 @@ class TestBatchModeDefer:
             MockBM25,
             ingest_batch_mode=True,
         )
-        brain._community_graph_dirty = True
-        with patch.object(brain, "_rebuild_communities") as mock_rebuild:
+        brain._graph_backend._engine._community_graph_dirty = True
+        with patch.object(brain._graph_backend._engine, "_rebuild_communities") as mock_rebuild:
             brain.finalize_ingest()
             mock_rebuild.assert_called_once()
 
@@ -7836,7 +7783,9 @@ class TestSourcePolicy:
                 "metadata": {"source": "package.json", "dataset_type": "manifest"},
             }
         ]
-        with patch.object(brain, "_extract_entities", return_value=[]) as mock_extract:
+        with patch.object(
+            brain._graph_backend._engine, "_extract_entities", return_value=[]
+        ) as mock_extract:
             brain.ingest(docs)
             mock_extract.assert_not_called()
 
@@ -7867,7 +7816,7 @@ class TestSourcePolicy:
             }
         ]
         with patch.object(
-            brain,
+            brain._graph_backend._engine,
             "_extract_entities",
             return_value=[{"name": "Foo", "type": "FUNCTION", "description": ""}],
         ) as mock_extract:
@@ -7911,11 +7860,8 @@ class TestGraspoLogicFallbackWarning:
 
     def test_warning_message_content(self):
         """The warning text in the source code mentions axon[graphrag]."""
-        import inspect
 
-        from axon.main import AxonBrain
-
-        src = inspect.getsource(AxonBrain._run_hierarchical_community_detection)
+        src = inspect.getsource(GraphRagEngine._run_hierarchical_community_detection)
         assert "axon[graphrag]" in src
         assert "graspologic not available" in src
 
@@ -7947,7 +7893,7 @@ class TestGraspoLogicFallbackWarning:
         with caplog.at_level(logging.WARNING, logger="Axon"):
             with patch("builtins.__import__", side_effect=fake_import):
                 try:
-                    AxonBrain._run_hierarchical_community_detection(brain)
+                    _bare_graphrag_engine(brain)._run_hierarchical_community_detection()
 
                 except Exception:
                     pass
@@ -8022,8 +7968,6 @@ class TestMapReduceDedicatedPool:
         """When graph_rag_map_workers>0, a separate ThreadPoolExecutor must be created."""
         from concurrent.futures import ThreadPoolExecutor
 
-        from axon.main import AxonBrain
-
         brain = self._make_brain()
         cfg = self._make_cfg(map_workers=2)
         pool_instances = []
@@ -8037,7 +7981,7 @@ class TestMapReduceDedicatedPool:
 
         with patch("concurrent.futures.ThreadPoolExecutor", CapturingTPE):
             try:
-                AxonBrain._global_search_map_reduce(brain, "query", cfg)
+                _bare_graphrag_engine(brain)._global_search_map_reduce("query", cfg)
 
             except Exception:
                 pass
@@ -8047,8 +7991,6 @@ class TestMapReduceDedicatedPool:
     def test_shared_pool_used_when_map_workers_zero(self):
         """When graph_rag_map_workers==0, the shared _executor is used (no new TPE)."""
         from concurrent.futures import ThreadPoolExecutor
-
-        from axon.main import AxonBrain
 
         brain = self._make_brain()
         cfg = self._make_cfg(map_workers=0)
@@ -8063,7 +8005,7 @@ class TestMapReduceDedicatedPool:
 
         with patch("concurrent.futures.ThreadPoolExecutor", CapturingTPE):
             try:
-                AxonBrain._global_search_map_reduce(brain, "query", cfg)
+                _bare_graphrag_engine(brain)._global_search_map_reduce("query", cfg)
 
             except Exception:
                 pass
@@ -8103,32 +8045,29 @@ class TestGLiNERExtraction:
 
     def test_gliner_path_skips_llm(self):
         """When ner_backend=gliner, _extract_entities_gliner is called, not llm.complete."""
-        from axon.main import AxonBrain
 
         brain = self._make_brain(backend="gliner")
         mock_result = [{"name": "Paris", "type": "GEO", "description": ""}]
         # Patch the instance attribute so the MagicMock self picks it up
         mock_fn = MagicMock(return_value=mock_result)
         brain._extract_entities_gliner = mock_fn
-        result = AxonBrain._extract_entities(brain, "Paris is the capital of France.")
+        result = _bare_graphrag_engine(brain)._extract_entities("Paris is the capital of France.")
         mock_fn.assert_called_once()
         brain.llm.complete.assert_not_called()
         assert result == mock_result
 
     def test_llm_path_used_when_backend_is_llm(self):
         """When ner_backend=llm, the LLM is used."""
-        from axon.main import AxonBrain
 
         brain = self._make_brain(backend="llm")
         mock_fn = MagicMock()
         brain._extract_entities_gliner = mock_fn
-        AxonBrain._extract_entities(brain, "Paris is the capital of France.")
+        _bare_graphrag_engine(brain)._extract_entities("Paris is the capital of France.")
         mock_fn.assert_not_called()
         brain.llm.complete.assert_called_once()
 
     def test_extract_entities_gliner_deduplicates(self):
         """_extract_entities_gliner deduplicates case-insensitively."""
-        from axon.main import AxonBrain
 
         brain = self._make_brain()
         mock_model = MagicMock()
@@ -8141,7 +8080,7 @@ class TestGLiNERExtraction:
         )
         # Patch the instance so self._ensure_gliner() returns mock_model
         brain._ensure_gliner = MagicMock(return_value=mock_model)
-        result = AxonBrain._extract_entities_gliner(brain, "Paris and France.")
+        result = _bare_graphrag_engine(brain)._extract_entities_gliner("Paris and France.")
         names = [e["name"] for e in result]
         assert "Paris" in names
         assert "France" in names
@@ -8149,7 +8088,6 @@ class TestGLiNERExtraction:
 
     def test_extract_entities_gliner_type_mapping(self):
         """_extract_entities_gliner maps GLiNER labels to internal type strings."""
-        from axon.main import AxonBrain
 
         brain = self._make_brain()
         mock_model = MagicMock()
@@ -8161,7 +8099,7 @@ class TestGLiNERExtraction:
             ]
         )
         brain._ensure_gliner = MagicMock(return_value=mock_model)
-        result = AxonBrain._extract_entities_gliner(brain, "text")
+        result = _bare_graphrag_engine(brain)._extract_entities_gliner("text")
         types = {e["name"]: e["type"] for e in result}
         assert types["Alice"] == "PERSON"
         assert types["Acme"] == "ORGANIZATION"
@@ -8225,8 +8163,6 @@ class TestLLMLinguaCompression:
         return cfg
 
     def test_compress_called_when_enabled(self):
-        from axon.main import AxonBrain
-
         brain = self._make_brain()
         cfg = self._make_cfg(compress=True)
         mock_compressor = MagicMock()
@@ -8236,34 +8172,30 @@ class TestLLMLinguaCompression:
         # Patch instance so self._ensure_llmlingua() returns mock_compressor
         brain._ensure_llmlingua = MagicMock(return_value=mock_compressor)
         try:
-            AxonBrain._global_search_map_reduce(brain, "test query", cfg)
+            _bare_graphrag_engine(brain)._global_search_map_reduce("test query", cfg)
         except Exception:
             pass
         mock_compressor.compress_prompt.assert_called()
 
     def test_compress_skipped_when_disabled(self):
-        from axon.main import AxonBrain
-
         brain = self._make_brain()
         cfg = self._make_cfg(compress=False)
         mock_compressor = MagicMock()
         brain._ensure_llmlingua = MagicMock(return_value=mock_compressor)
         try:
-            AxonBrain._global_search_map_reduce(brain, "test query", cfg)
+            _bare_graphrag_engine(brain)._global_search_map_reduce("test query", cfg)
         except Exception:
             pass
         mock_compressor.compress_prompt.assert_not_called()
 
     def test_compress_falls_back_on_chunk_error(self):
-        from axon.main import AxonBrain
-
         brain = self._make_brain()
         cfg = self._make_cfg(compress=True)
         mock_compressor = MagicMock()
         mock_compressor.compress_prompt = MagicMock(side_effect=RuntimeError("compress fail"))
         brain._ensure_llmlingua = MagicMock(return_value=mock_compressor)
         try:
-            result = AxonBrain._global_search_map_reduce(brain, "test query", cfg)
+            result = _bare_graphrag_engine(brain)._global_search_map_reduce("test query", cfg)
             assert isinstance(result, str)
         except RuntimeError as exc:
             assert "compress fail" not in str(exc)
@@ -8290,71 +8222,70 @@ class TestAutoRoute:
         return brain
 
     def test_heuristic_holistic_query_returns_true(self):
-        from axon.main import AxonBrain
-
         brain = self._make_brain()
         assert (
-            AxonBrain._classify_query_needs_graphrag(brain, "summarize all documents", "heuristic")
+            _bare_graphrag_engine(brain)._classify_query_needs_graphrag(
+                "summarize all documents", "heuristic"
+            )
             is True
         )
 
     def test_heuristic_short_factual_returns_false(self):
-        from axon.main import AxonBrain
-
         brain = self._make_brain()
         assert (
-            AxonBrain._classify_query_needs_graphrag(brain, "what is Python?", "heuristic") is False
+            _bare_graphrag_engine(brain)._classify_query_needs_graphrag(
+                "what is Python?", "heuristic"
+            )
+            is False
         )
 
     def test_heuristic_long_query_returns_true(self):
-        from axon.main import AxonBrain
-
         brain = self._make_brain()
         long_q = (
             "please tell me about history cultural context significance ancient Rome "
             "detail extra words to pass the twenty word threshold for this test case"
         )
         assert len(long_q.split()) > 20
-        assert AxonBrain._classify_query_needs_graphrag(brain, long_q, "heuristic") is True
+        assert (
+            _bare_graphrag_engine(brain)._classify_query_needs_graphrag(long_q, "heuristic") is True
+        )
 
     def test_heuristic_overview_keyword_returns_true(self):
-        from axon.main import AxonBrain
-
         brain = self._make_brain()
         assert (
-            AxonBrain._classify_query_needs_graphrag(
+            GraphRagEngine._classify_query_needs_graphrag(
                 brain, "give me an overview of this codebase", "heuristic"
             )
             is True
         )
 
     def test_llm_yes_returns_true(self):
-        from axon.main import AxonBrain
-
         brain = self._make_brain()
         brain.llm.complete = MagicMock(return_value="YES")
-        assert AxonBrain._classify_query_needs_graphrag(brain, "any query", "llm") is True
+        assert (
+            _bare_graphrag_engine(brain)._classify_query_needs_graphrag("any query", "llm") is True
+        )
 
     def test_llm_no_returns_false(self):
-        from axon.main import AxonBrain
-
         brain = self._make_brain()
         brain.llm.complete = MagicMock(return_value="NO")
-        assert AxonBrain._classify_query_needs_graphrag(brain, "what is X?", "llm") is False
+        assert (
+            _bare_graphrag_engine(brain)._classify_query_needs_graphrag("what is X?", "llm")
+            is False
+        )
 
     def test_llm_exception_returns_false(self):
-        from axon.main import AxonBrain
-
         brain = self._make_brain()
         brain.llm.complete = MagicMock(side_effect=RuntimeError("timeout"))
-        assert AxonBrain._classify_query_needs_graphrag(brain, "query", "llm") is False
+        assert _bare_graphrag_engine(brain)._classify_query_needs_graphrag("query", "llm") is False
 
     def test_off_mode_returns_false(self):
-        from axon.main import AxonBrain
-
         brain = self._make_brain()
         assert (
-            AxonBrain._classify_query_needs_graphrag(brain, "summarize everything", "off") is False
+            _bare_graphrag_engine(brain)._classify_query_needs_graphrag(
+                "summarize everything", "off"
+            )
+            is False
         )
 
 
@@ -8671,6 +8602,16 @@ class TestREBELRelationExtraction:
 
         brain._rebel_pipeline = None
 
+        engine = _bare_graphrag_engine(brain)
+
+        brain._extract_relations = engine._extract_relations
+
+        brain._extract_relations_rebel = engine._extract_relations_rebel
+
+        brain._rebuild_communities = engine._rebuild_communities
+
+        brain._resolve_entity_aliases = engine._resolve_entity_aliases
+
         return brain
 
     def test_rebel_backend_skips_llm(self, tmp_path):
@@ -8700,10 +8641,9 @@ class TestREBELRelationExtraction:
 
     def test_parse_rebel_output_single_triplet(self):
         """A single well-formed REBEL triplet is parsed correctly."""
-        from axon.main import AxonBrain
 
         raw = "<triplet> Apple <subj> Steve Jobs <obj> founded"
-        triplets = AxonBrain._parse_rebel_output(raw)
+        triplets = GraphRagEngine._parse_rebel_output(raw)
         assert len(triplets) == 1
         assert triplets[0]["subject"] == "Apple"
         assert triplets[0]["object"] == "Steve Jobs"
@@ -8711,29 +8651,30 @@ class TestREBELRelationExtraction:
 
     def test_parse_rebel_output_multiple_triplets(self):
         """Multiple consecutive REBEL triplets are all parsed."""
-        from axon.main import AxonBrain
 
         raw = (
             "<triplet> Apple <subj> Steve Jobs <obj> founded"
             " <triplet> Microsoft <subj> Bill Gates <obj> co-founded"
         )
-        triplets = AxonBrain._parse_rebel_output(raw)
+        triplets = GraphRagEngine._parse_rebel_output(raw)
         assert len(triplets) == 2
         assert triplets[0]["subject"] == "Apple"
         assert triplets[1]["subject"] == "Microsoft"
 
     def test_parse_rebel_output_empty_string(self):
         """Empty or whitespace-only output returns an empty list."""
-        from axon.main import AxonBrain
 
-        assert AxonBrain._parse_rebel_output("") == []
-        assert AxonBrain._parse_rebel_output("   ") == []
-        assert AxonBrain._parse_rebel_output("<pad></s>") == []
+        assert GraphRagEngine._parse_rebel_output("") == []
+        assert GraphRagEngine._parse_rebel_output("   ") == []
+        assert GraphRagEngine._parse_rebel_output("<pad></s>") == []
 
     def test_rebel_missing_import_returns_empty(self, tmp_path):
         """ImportError inside _ensure_rebel logs a warning and returns []."""
         brain = self._make_brain(tmp_path, graph_rag_relation_backend="rebel")
-        with patch("axon.main.AxonBrain._ensure_rebel", side_effect=ImportError("no transformers")):
+        with patch(
+            "axon.graph_backends.graphrag_engine.GraphRagEngine._ensure_rebel",
+            side_effect=ImportError("no transformers"),
+        ):
             result = brain._extract_relations_rebel("some text")
         assert result == []
 
@@ -8774,6 +8715,12 @@ class TestEntityAliasResolution:
         brain._relation_graph = {}
 
         brain._community_graph_dirty = False
+
+        engine = _bare_graphrag_engine(brain)
+
+        brain._resolve_entity_aliases = engine._resolve_entity_aliases
+
+        brain._rebuild_communities = engine._rebuild_communities
 
         return brain
 
@@ -8949,7 +8896,10 @@ class TestEntityAliasResolution:
         brain._community_graph_dirty = False
         brain._run_hierarchical_community_detection = MagicMock(return_value={})
         brain._save_entity_graph = MagicMock()
-        with patch("axon.main.AxonBrain._resolve_entity_aliases", return_value=0) as mock_resolve:
+        with patch(
+            "axon.graph_backends.graphrag_engine.GraphRagEngine._resolve_entity_aliases",
+            return_value=0,
+        ) as mock_resolve:
             brain._rebuild_communities()
         mock_resolve.assert_called_once()
 
@@ -9352,13 +9302,15 @@ class TestGraphRagPersistence:
                 "degree": 0,
             }
         }
-        brain._entity_graph = data
-        brain._save_entity_graph()
-        brain._entity_graph = {}
-        brain._entity_graph = brain._load_entity_graph()
-        assert "foo" in brain._entity_graph
-        assert brain._entity_graph["foo"]["type"] == "PERSON"
-        assert brain._entity_graph["foo"]["chunk_ids"] == ["c1"]
+        brain._graph_backend._engine._entity_graph = data
+        brain._graph_backend._engine._save_entity_graph()
+        brain._graph_backend._engine._entity_graph = {}
+        brain._graph_backend._engine._entity_graph = (
+            brain._graph_backend._engine._load_entity_graph()
+        )
+        assert "foo" in brain._graph_backend._engine._entity_graph
+        assert brain._graph_backend._engine._entity_graph["foo"]["type"] == "PERSON"
+        assert brain._graph_backend._engine._entity_graph["foo"]["chunk_ids"] == ["c1"]
 
     def test_load_entity_graph_corrupted(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
@@ -9368,7 +9320,7 @@ class TestGraphRagPersistence:
         brain = self._brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path)
         path = pathlib.Path(tmp_path) / ".entity_graph.json"
         path.write_text("not json at all", encoding="utf-8")
-        result = brain._load_entity_graph()
+        result = brain._graph_backend._engine._load_entity_graph()
         assert result == {}
 
     def test_save_and_load_relation_graph(
@@ -9376,12 +9328,14 @@ class TestGraphRagPersistence:
     ):
         brain = self._brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path)
         data = {"alice": [{"target": "bob", "relation": "knows", "chunk_id": "c1"}]}
-        brain._relation_graph = data
-        brain._save_relation_graph()
-        brain._relation_graph = {}
-        brain._relation_graph = brain._load_relation_graph()
-        assert "alice" in brain._relation_graph
-        assert brain._relation_graph["alice"][0]["target"] == "bob"
+        brain._graph_backend._engine._relation_graph = data
+        brain._graph_backend._engine._save_relation_graph()
+        brain._graph_backend._engine._relation_graph = {}
+        brain._graph_backend._engine._relation_graph = (
+            brain._graph_backend._engine._load_relation_graph()
+        )
+        assert "alice" in brain._graph_backend._engine._relation_graph
+        assert brain._graph_backend._engine._relation_graph["alice"][0]["target"] == "bob"
 
     def test_load_relation_graph_corrupted(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
@@ -9391,30 +9345,36 @@ class TestGraphRagPersistence:
         brain = self._brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path)
         path = pathlib.Path(tmp_path) / ".relation_graph.json"
         path.write_text("broken", encoding="utf-8")
-        assert brain._load_relation_graph() == {}
+        assert brain._graph_backend._engine._load_relation_graph() == {}
 
     def test_save_and_load_community_levels(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
     ):
         brain = self._brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path)
         data = {0: {"alice": 0, "bob": 1}, 1: {"alice": 0}}
-        brain._community_levels = data
-        brain._save_community_levels()
-        brain._community_levels = {}
-        brain._community_levels = brain._load_community_levels()
-        assert 0 in brain._community_levels
-        assert brain._community_levels[0]["alice"] == 0
+        brain._graph_backend._engine._community_levels = data
+        brain._graph_backend._engine._save_community_levels()
+        brain._graph_backend._engine._community_levels = {}
+        brain._graph_backend._engine._community_levels = (
+            brain._graph_backend._engine._load_community_levels()
+        )
+        assert 0 in brain._graph_backend._engine._community_levels
+        assert brain._graph_backend._engine._community_levels[0]["alice"] == 0
 
     def test_save_and_load_community_hierarchy(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
     ):
         brain = self._brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path)
         data = {0: None, 1: 0, 2: 0}
-        brain._community_hierarchy = data
-        brain._save_community_hierarchy()
-        brain._community_hierarchy = {}
-        brain._community_hierarchy = brain._load_community_hierarchy()
-        assert 0 in brain._community_hierarchy or "0" in str(brain._community_hierarchy)
+        brain._graph_backend._engine._community_hierarchy = data
+        brain._graph_backend._engine._save_community_hierarchy()
+        brain._graph_backend._engine._community_hierarchy = {}
+        brain._graph_backend._engine._community_hierarchy = (
+            brain._graph_backend._engine._load_community_hierarchy()
+        )
+        assert 0 in brain._graph_backend._engine._community_hierarchy or "0" in str(
+            brain._graph_backend._engine._community_hierarchy
+        )
 
     def test_save_and_load_code_graph(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
@@ -9451,16 +9411,16 @@ class TestBuildGraphPayloadEdgeCases:
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
     ):
         brain = self._brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path)
-        brain._entity_graph = {}
-        brain._relation_graph = {}
-        payload = brain.build_graph_payload()
+        brain._graph_backend._engine._entity_graph = {}
+        brain._graph_backend._engine._relation_graph = {}
+        payload = brain._graph_backend._engine.build_graph_payload()
         assert payload == {"nodes": [], "links": []}
 
     def test_non_dict_node_skipped(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
     ):
         brain = self._brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path)
-        brain._entity_graph = {
+        brain._graph_backend._engine._entity_graph = {
             "alice": {
                 "type": "PERSON",
                 "chunk_ids": [],
@@ -9470,8 +9430,8 @@ class TestBuildGraphPayloadEdgeCases:
             },
             "malformed": "just a string",
         }
-        brain._relation_graph = {}
-        payload = brain.build_graph_payload()
+        brain._graph_backend._engine._relation_graph = {}
+        payload = brain._graph_backend._engine.build_graph_payload()
         node_names = [n["name"] for n in payload["nodes"]]
         assert "alice" in node_names
         assert "malformed" not in node_names
@@ -9480,7 +9440,7 @@ class TestBuildGraphPayloadEdgeCases:
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
     ):
         brain = self._brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path)
-        brain._entity_graph = {
+        brain._graph_backend._engine._entity_graph = {
             "alice": {
                 "type": "PERSON",
                 "chunk_ids": [],
@@ -9489,17 +9449,17 @@ class TestBuildGraphPayloadEdgeCases:
                 "degree": 0,
             },
         }
-        brain._relation_graph = {
+        brain._graph_backend._engine._relation_graph = {
             "alice": [{"relation": "knows", "chunk_id": "c1"}],  # missing "target"
         }
-        payload = brain.build_graph_payload()
+        payload = brain._graph_backend._engine.build_graph_payload()
         assert payload["links"] == []
 
     def test_vector_store_unavailable_evidence_empty(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
     ):
         brain = self._brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path)
-        brain._entity_graph = {
+        brain._graph_backend._engine._entity_graph = {
             "alice": {
                 "type": "PERSON",
                 "chunk_ids": ["c1"],
@@ -9508,9 +9468,9 @@ class TestBuildGraphPayloadEdgeCases:
                 "degree": 0,
             },
         }
-        brain._relation_graph = {}
+        brain._graph_backend._engine._relation_graph = {}
         brain.vector_store.get_by_ids.side_effect = RuntimeError("store down")
-        payload = brain.build_graph_payload()
+        payload = brain._graph_backend._engine.build_graph_payload()
         assert len(payload["nodes"]) == 1
         assert payload["nodes"][0]["evidence"] == []
 
@@ -9649,20 +9609,20 @@ def _make_brain(tmp_path, **cfg_kwargs):
         # Patch all disk-loading methods
         with patch.object(AxonBrain, "_load_hash_store", return_value=set()), patch.object(
             AxonBrain, "_load_doc_versions", return_value=None
-        ), patch.object(AxonBrain, "_load_entity_graph", return_value={}), patch.object(
+        ), patch.object(GraphRagEngine, "_load_entity_graph", return_value={}), patch.object(
             AxonBrain, "_load_code_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_relation_graph", return_value={}
+            GraphRagEngine, "_load_relation_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_levels", return_value={}
+            GraphRagEngine, "_load_community_levels", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_summaries", return_value={}
+            GraphRagEngine, "_load_community_summaries", return_value={}
         ), patch.object(
-            AxonBrain, "_load_entity_embeddings", return_value={}
+            GraphRagEngine, "_load_entity_embeddings", return_value={}
         ), patch.object(
-            AxonBrain, "_load_claims_graph", return_value={}
+            GraphRagEngine, "_load_claims_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_hierarchy", return_value={}
+            GraphRagEngine, "_load_community_hierarchy", return_value={}
         ), patch.object(
             AxonBrain, "_log_startup_summary", return_value=None
         ), patch.object(
@@ -9737,21 +9697,21 @@ class TestInitPaths:
         ), patch.object(
             AxonBrain, "_load_doc_versions", return_value=None
         ), patch.object(
-            AxonBrain, "_load_entity_graph", return_value={}
+            GraphRagEngine, "_load_entity_graph", return_value={}
         ), patch.object(
             AxonBrain, "_load_code_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_relation_graph", return_value={}
+            GraphRagEngine, "_load_relation_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_levels", return_value={}
+            GraphRagEngine, "_load_community_levels", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_summaries", return_value={}
+            GraphRagEngine, "_load_community_summaries", return_value={}
         ), patch.object(
-            AxonBrain, "_load_entity_embeddings", return_value={}
+            GraphRagEngine, "_load_entity_embeddings", return_value={}
         ), patch.object(
-            AxonBrain, "_load_claims_graph", return_value={}
+            GraphRagEngine, "_load_claims_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_hierarchy", return_value={}
+            GraphRagEngine, "_load_community_hierarchy", return_value={}
         ), patch.object(
             AxonBrain, "_log_startup_summary", return_value=None
         ), patch.object(
@@ -9777,21 +9737,21 @@ class TestInitPaths:
         ), patch.object(
             AxonBrain, "_load_doc_versions", return_value=None
         ), patch.object(
-            AxonBrain, "_load_entity_graph", return_value={}
+            GraphRagEngine, "_load_entity_graph", return_value={}
         ), patch.object(
             AxonBrain, "_load_code_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_relation_graph", return_value={}
+            GraphRagEngine, "_load_relation_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_levels", return_value={}
+            GraphRagEngine, "_load_community_levels", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_summaries", return_value={}
+            GraphRagEngine, "_load_community_summaries", return_value={}
         ), patch.object(
-            AxonBrain, "_load_entity_embeddings", return_value={}
+            GraphRagEngine, "_load_entity_embeddings", return_value={}
         ), patch.object(
-            AxonBrain, "_load_claims_graph", return_value={}
+            GraphRagEngine, "_load_claims_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_hierarchy", return_value={}
+            GraphRagEngine, "_load_community_hierarchy", return_value={}
         ), patch.object(
             AxonBrain, "_log_startup_summary", return_value=None
         ), patch.object(
@@ -9818,21 +9778,21 @@ class TestInitPaths:
         ), patch.object(
             AxonBrain, "_load_doc_versions", return_value=None
         ), patch.object(
-            AxonBrain, "_load_entity_graph", return_value={}
+            GraphRagEngine, "_load_entity_graph", return_value={}
         ), patch.object(
             AxonBrain, "_load_code_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_relation_graph", return_value={}
+            GraphRagEngine, "_load_relation_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_levels", return_value={}
+            GraphRagEngine, "_load_community_levels", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_summaries", return_value={}
+            GraphRagEngine, "_load_community_summaries", return_value={}
         ), patch.object(
-            AxonBrain, "_load_entity_embeddings", return_value={}
+            GraphRagEngine, "_load_entity_embeddings", return_value={}
         ), patch.object(
-            AxonBrain, "_load_claims_graph", return_value={}
+            GraphRagEngine, "_load_claims_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_hierarchy", return_value={}
+            GraphRagEngine, "_load_community_hierarchy", return_value={}
         ), patch.object(
             AxonBrain, "_log_startup_summary", return_value=None
         ), patch.object(
@@ -9858,21 +9818,21 @@ class TestInitPaths:
         ), patch.object(
             AxonBrain, "_load_doc_versions", return_value=None
         ), patch.object(
-            AxonBrain, "_load_entity_graph", return_value={}
+            GraphRagEngine, "_load_entity_graph", return_value={}
         ), patch.object(
             AxonBrain, "_load_code_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_relation_graph", return_value={}
+            GraphRagEngine, "_load_relation_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_levels", return_value={}
+            GraphRagEngine, "_load_community_levels", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_summaries", return_value={}
+            GraphRagEngine, "_load_community_summaries", return_value={}
         ), patch.object(
-            AxonBrain, "_load_entity_embeddings", return_value={}
+            GraphRagEngine, "_load_entity_embeddings", return_value={}
         ), patch.object(
-            AxonBrain, "_load_claims_graph", return_value={}
+            GraphRagEngine, "_load_claims_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_hierarchy", return_value={}
+            GraphRagEngine, "_load_community_hierarchy", return_value={}
         ), patch.object(
             AxonBrain, "_log_startup_summary", return_value=None
         ), patch.object(
@@ -9902,21 +9862,21 @@ class TestInitPaths:
         ), patch.object(
             AxonBrain, "_load_doc_versions", return_value=None
         ), patch.object(
-            AxonBrain, "_load_entity_graph", return_value={}
+            GraphRagEngine, "_load_entity_graph", return_value={}
         ), patch.object(
             AxonBrain, "_load_code_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_relation_graph", return_value={}
+            GraphRagEngine, "_load_relation_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_levels", return_value={}
+            GraphRagEngine, "_load_community_levels", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_summaries", return_value={}
+            GraphRagEngine, "_load_community_summaries", return_value={}
         ), patch.object(
-            AxonBrain, "_load_entity_embeddings", return_value={}
+            GraphRagEngine, "_load_entity_embeddings", return_value={}
         ), patch.object(
-            AxonBrain, "_load_claims_graph", return_value={}
+            GraphRagEngine, "_load_claims_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_hierarchy", return_value={}
+            GraphRagEngine, "_load_community_hierarchy", return_value={}
         ), patch.object(
             AxonBrain, "_log_startup_summary", return_value=None
         ), patch.object(
@@ -9942,21 +9902,21 @@ class TestInitPaths:
         ), patch.object(
             AxonBrain, "_load_doc_versions", return_value=None
         ), patch.object(
-            AxonBrain, "_load_entity_graph", return_value={}
+            GraphRagEngine, "_load_entity_graph", return_value={}
         ), patch.object(
             AxonBrain, "_load_code_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_relation_graph", return_value={}
+            GraphRagEngine, "_load_relation_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_levels", return_value={}
+            GraphRagEngine, "_load_community_levels", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_summaries", return_value={}
+            GraphRagEngine, "_load_community_summaries", return_value={}
         ), patch.object(
-            AxonBrain, "_load_entity_embeddings", return_value={}
+            GraphRagEngine, "_load_entity_embeddings", return_value={}
         ), patch.object(
-            AxonBrain, "_load_claims_graph", return_value={}
+            GraphRagEngine, "_load_claims_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_hierarchy", return_value={}
+            GraphRagEngine, "_load_community_hierarchy", return_value={}
         ), patch.object(
             AxonBrain, "_log_startup_summary", return_value=None
         ), patch.object(
@@ -9982,21 +9942,21 @@ class TestInitPaths:
         ), patch.object(
             AxonBrain, "_load_doc_versions", return_value=None
         ), patch.object(
-            AxonBrain, "_load_entity_graph", return_value={}
+            GraphRagEngine, "_load_entity_graph", return_value={}
         ), patch.object(
             AxonBrain, "_load_code_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_relation_graph", return_value={}
+            GraphRagEngine, "_load_relation_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_levels", return_value={}
+            GraphRagEngine, "_load_community_levels", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_summaries", return_value={}
+            GraphRagEngine, "_load_community_summaries", return_value={}
         ), patch.object(
-            AxonBrain, "_load_entity_embeddings", return_value={}
+            GraphRagEngine, "_load_entity_embeddings", return_value={}
         ), patch.object(
-            AxonBrain, "_load_claims_graph", return_value={}
+            GraphRagEngine, "_load_claims_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_hierarchy", return_value={}
+            GraphRagEngine, "_load_community_hierarchy", return_value={}
         ), patch.object(
             AxonBrain, "_log_startup_summary", return_value=None
         ), patch.object(
@@ -10079,21 +10039,21 @@ class TestPreflightModelAudit:
         ), patch.object(
             AxonBrain, "_load_doc_versions", return_value=None
         ), patch.object(
-            AxonBrain, "_load_entity_graph", return_value={}
+            GraphRagEngine, "_load_entity_graph", return_value={}
         ), patch.object(
             AxonBrain, "_load_code_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_relation_graph", return_value={}
+            GraphRagEngine, "_load_relation_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_levels", return_value={}
+            GraphRagEngine, "_load_community_levels", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_summaries", return_value={}
+            GraphRagEngine, "_load_community_summaries", return_value={}
         ), patch.object(
-            AxonBrain, "_load_entity_embeddings", return_value={}
+            GraphRagEngine, "_load_entity_embeddings", return_value={}
         ), patch.object(
-            AxonBrain, "_load_claims_graph", return_value={}
+            GraphRagEngine, "_load_claims_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_hierarchy", return_value={}
+            GraphRagEngine, "_load_community_hierarchy", return_value={}
         ), patch.object(
             AxonBrain, "_log_startup_summary", return_value=None
         ):
@@ -10456,10 +10416,14 @@ class TestQueryAdvancedRAG:
         brain.config.graph_rag_mode = "local"
         brain.config.query_router = "off"
 
-        brain._entity_graph = {"entity1": {"chunk_ids": ["doc1"], "description": "desc"}}
+        brain._graph_backend._engine._entity_graph = {
+            "entity1": {"chunk_ids": ["doc1"], "description": "desc"}
+        }
         retrieval = {**_mock_retrieval(), "matched_entities": ["entity1"]}
         brain._execute_retrieval = MagicMock(return_value=retrieval)
-        brain._local_search_context = MagicMock(return_value="Local graph context here.")
+        brain._graph_backend._engine._local_search_context = MagicMock(
+            return_value="Local graph context here."
+        )
         brain._build_context = MagicMock(return_value=("doc context", False))
         brain._validate_embedding_meta = MagicMock()
         brain.llm.complete = MagicMock(return_value="local graph answer")
@@ -10864,13 +10828,13 @@ class TestSwitchProject:
             mock_vs_cls.return_value = MagicMock()
             mock_bm25_cls.return_value = MagicMock()
             brain._load_hash_store = MagicMock(return_value=set())
-            brain._load_entity_graph = MagicMock(return_value={})
-            brain._load_relation_graph = MagicMock(return_value={})
-            brain._load_community_levels = MagicMock(return_value={})
-            brain._load_community_summaries = MagicMock(return_value={})
-            brain._load_entity_embeddings = MagicMock(return_value={})
-            brain._load_claims_graph = MagicMock(return_value={})
-            brain._load_community_hierarchy = MagicMock(return_value={})
+            brain._graph_backend._engine._load_entity_graph = MagicMock(return_value={})
+            brain._graph_backend._engine._load_relation_graph = MagicMock(return_value={})
+            brain._graph_backend._engine._load_community_levels = MagicMock(return_value={})
+            brain._graph_backend._engine._load_community_summaries = MagicMock(return_value={})
+            brain._graph_backend._engine._load_entity_embeddings = MagicMock(return_value={})
+            brain._graph_backend._engine._load_claims_graph = MagicMock(return_value={})
+            brain._graph_backend._engine._load_community_hierarchy = MagicMock(return_value={})
 
             brain.switch_project("default")
 
@@ -10952,13 +10916,13 @@ class TestSwitchProject:
             mock_vs_cls.return_value = MagicMock()
             mock_bm25_cls.return_value = MagicMock()
             brain._load_hash_store = MagicMock(return_value=set())
-            brain._load_entity_graph = MagicMock(return_value={})
-            brain._load_relation_graph = MagicMock(return_value={})
-            brain._load_community_levels = MagicMock(return_value={})
-            brain._load_community_summaries = MagicMock(return_value={})
-            brain._load_entity_embeddings = MagicMock(return_value={})
-            brain._load_claims_graph = MagicMock(return_value={})
-            brain._load_community_hierarchy = MagicMock(return_value={})
+            brain._graph_backend._engine._load_entity_graph = MagicMock(return_value={})
+            brain._graph_backend._engine._load_relation_graph = MagicMock(return_value={})
+            brain._graph_backend._engine._load_community_levels = MagicMock(return_value={})
+            brain._graph_backend._engine._load_community_summaries = MagicMock(return_value={})
+            brain._graph_backend._engine._load_entity_embeddings = MagicMock(return_value={})
+            brain._graph_backend._engine._load_claims_graph = MagicMock(return_value={})
+            brain._graph_backend._engine._load_community_hierarchy = MagicMock(return_value={})
 
             brain.switch_project("myproject")
 
@@ -11011,20 +10975,20 @@ def _make_wired_brain(tmp_path, **cfg_kwargs):
     ), patch("axon.main.OpenReranker"), patch("axon.retrievers.BM25Retriever"):
         with patch.object(AxonBrain, "_load_hash_store", return_value=set()), patch.object(
             AxonBrain, "_load_doc_versions", return_value=None
-        ), patch.object(AxonBrain, "_load_entity_graph", return_value={}), patch.object(
+        ), patch.object(GraphRagEngine, "_load_entity_graph", return_value={}), patch.object(
             AxonBrain, "_load_code_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_relation_graph", return_value={}
+            GraphRagEngine, "_load_relation_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_levels", return_value={}
+            GraphRagEngine, "_load_community_levels", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_summaries", return_value={}
+            GraphRagEngine, "_load_community_summaries", return_value={}
         ), patch.object(
-            AxonBrain, "_load_entity_embeddings", return_value={}
+            GraphRagEngine, "_load_entity_embeddings", return_value={}
         ), patch.object(
-            AxonBrain, "_load_claims_graph", return_value={}
+            GraphRagEngine, "_load_claims_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_hierarchy", return_value={}
+            GraphRagEngine, "_load_community_hierarchy", return_value={}
         ), patch.object(
             AxonBrain, "_log_startup_summary", return_value=None
         ), patch.object(
@@ -11097,20 +11061,20 @@ class TestGraphBackendWiring:
         from axon.projects import ensure_project
 
         brain = _make_wired_brain(tmp_path)
+        # Populate leftover GraphRAG state on the initial (default,
+        # graphrag-backed) project's engine — this is what must not survive
+        # a detour through a non-GraphRAG backend and back.
+        brain._graph_backend._engine._entity_graph = {"alice": {"chunk_ids": ["c1"]}}
+        brain._graph_backend._engine._claims_graph = {"c1": [{"subject": "alice"}]}
         with patch("axon.main.OpenVectorStore"), patch("axon.retrievers.BM25Retriever"), patch(
             "axon.runtime.get_registry"
         ):
             ensure_project("dgproj5", graph_backend="dynamic_graph")
             brain.switch_project("dgproj5")
-            # Populate leftover GraphRAG-shaped state that a prior graphrag
-            # project might have left in memory (dynamic_graph doesn't use
-            # these dicts, but nothing should assume that).
-            brain._entity_graph = {"alice": {"chunk_ids": ["c1"]}}
-            brain._claims_graph = {"c1": [{"subject": "alice"}]}
             brain.switch_project("@projects")
         assert isinstance(brain._graph_backend, GraphRagBackend)
-        assert brain._entity_graph == {}
-        assert brain._claims_graph == {}
+        assert brain._graph_backend._engine._entity_graph == {}
+        assert brain._graph_backend._engine._claims_graph == {}
 
     def test_federated_config_not_overridden_by_project_switch(self, tmp_path):
         from axon.graph_backends.federated_backend import FederatedGraphBackend
@@ -11513,30 +11477,48 @@ class TestFinalizeIngest:
         brain._assert_write_allowed = MagicMock()
         brain.config.ingest_batch_mode = True
         brain._own_bm25 = MagicMock()
-        brain._save_entity_graph = MagicMock()
-        brain._save_relation_graph = MagicMock()
-        brain._save_claims_graph = MagicMock()
+        brain._graph_backend._engine._save_entity_graph = MagicMock()
+        brain._graph_backend._engine._save_relation_graph = MagicMock()
+        brain._graph_backend._engine._save_claims_graph = MagicMock()
         brain._save_code_graph = MagicMock()
         brain.finalize_graph = MagicMock()
 
         brain.finalize_ingest()
 
         brain._own_bm25.flush.assert_called_once()
-        brain._save_entity_graph.assert_called_once()
-        brain._save_relation_graph.assert_called_once()
+        brain._graph_backend._engine._save_entity_graph.assert_called_once()
+        brain._graph_backend._engine._save_relation_graph.assert_called_once()
+
+    def test_finalize_flushes_dirty_extraction_cache_in_batch_mode(self, brain):
+        """Regression: GraphRagEngine.ingest_chunks() defers the extraction
+        cache save during batch-mode ingest (_defer_saves=True); finalize_ingest()
+        must flush a dirty cache, or the changes are silently lost until some
+        later close()/flush() happens to run."""
+        brain._assert_write_allowed = MagicMock()
+        brain.config.ingest_batch_mode = True
+        brain._own_bm25 = MagicMock()
+        brain._graph_backend._engine._save_entity_graph = MagicMock()
+        brain._graph_backend._engine._save_relation_graph = MagicMock()
+        brain._graph_backend._engine._graph_rag_cache_dirty = True
+        brain._graph_backend._engine._save_graph_rag_extraction_cache = MagicMock()
+        brain.finalize_graph = MagicMock()
+
+        brain.finalize_ingest()
+
+        brain._graph_backend._engine._save_graph_rag_extraction_cache.assert_called_once()
 
     def test_finalize_noop_when_not_batch_mode(self, brain):
         brain._assert_write_allowed = MagicMock()
         brain.config.ingest_batch_mode = False
         brain._own_bm25 = MagicMock()
-        brain._save_entity_graph = MagicMock()
-        brain.finalize_graph = MagicMock()
+        brain._graph_backend._engine._save_entity_graph = MagicMock()
+        brain._graph_backend.finalize = MagicMock()
 
         brain.finalize_ingest()
 
         brain._own_bm25.flush.assert_not_called()
-        brain._save_entity_graph.assert_not_called()
-        brain.finalize_graph.assert_called_once()
+        brain._graph_backend._engine._save_entity_graph.assert_not_called()
+        brain._graph_backend.finalize.assert_called_once()
 
 
 # ===========================================================================
@@ -12134,14 +12116,14 @@ def _make_brain(tmp_path, **cfg_kwargs):
         patch("axon.projects.ensure_project"),
         patch.object(AxonBrain, "_load_hash_store", return_value=set()),
         patch.object(AxonBrain, "_load_doc_versions", return_value=None),
-        patch.object(AxonBrain, "_load_entity_graph", return_value={}),
+        patch.object(GraphRagEngine, "_load_entity_graph", return_value={}),
         patch.object(AxonBrain, "_load_code_graph", return_value={}),
-        patch.object(AxonBrain, "_load_relation_graph", return_value={}),
-        patch.object(AxonBrain, "_load_community_levels", return_value={}),
-        patch.object(AxonBrain, "_load_community_summaries", return_value={}),
-        patch.object(AxonBrain, "_load_entity_embeddings", return_value={}),
-        patch.object(AxonBrain, "_load_claims_graph", return_value={}),
-        patch.object(AxonBrain, "_load_community_hierarchy", return_value={}),
+        patch.object(GraphRagEngine, "_load_relation_graph", return_value={}),
+        patch.object(GraphRagEngine, "_load_community_levels", return_value={}),
+        patch.object(GraphRagEngine, "_load_community_summaries", return_value={}),
+        patch.object(GraphRagEngine, "_load_entity_embeddings", return_value={}),
+        patch.object(GraphRagEngine, "_load_claims_graph", return_value={}),
+        patch.object(GraphRagEngine, "_load_community_hierarchy", return_value={}),
         patch.object(AxonBrain, "_log_startup_summary", return_value=None),
         patch.object(AxonBrain, "_preflight_model_audit", return_value=None),
     ):
@@ -12151,11 +12133,11 @@ def _make_brain(tmp_path, **cfg_kwargs):
 
     brain._ingested_hashes = set()
 
-    brain._save_entity_graph = MagicMock()
+    brain._graph_backend._engine._save_entity_graph = MagicMock()
 
-    brain._save_relation_graph = MagicMock()
+    brain._graph_backend._engine._save_relation_graph = MagicMock()
 
-    brain._save_claims_graph = MagicMock()
+    brain._graph_backend._engine._save_claims_graph = MagicMock()
 
     brain._save_code_graph = MagicMock()
 
@@ -12163,19 +12145,19 @@ def _make_brain(tmp_path, **cfg_kwargs):
 
     brain._save_embedding_meta = MagicMock()
 
-    brain._extract_entities = MagicMock(return_value=[])
+    brain._graph_backend._engine._extract_entities = MagicMock(return_value=[])
 
-    brain._extract_relations = MagicMock(return_value=[])
+    brain._graph_backend._engine._extract_relations = MagicMock(return_value=[])
 
-    brain._extract_claims = MagicMock(return_value=[])
+    brain._graph_backend._engine._extract_claims = MagicMock(return_value=[])
 
-    brain._embed_entities = MagicMock()
+    brain._graph_backend._engine._embed_entities = MagicMock()
 
-    brain._canonicalize_entity_descriptions = MagicMock()
+    brain._graph_backend._engine._canonicalize_entity_descriptions = MagicMock()
 
-    brain._canonicalize_relation_descriptions = MagicMock()
+    brain._graph_backend._engine._canonicalize_relation_descriptions = MagicMock()
 
-    brain._rebuild_communities = MagicMock()
+    brain._graph_backend._engine._rebuild_communities = MagicMock()
 
     brain._build_code_graph_from_chunks = MagicMock()
 
@@ -12461,35 +12443,37 @@ class TestFinalizeIngestV2:
 
         brain._own_bm25 = MagicMock()
 
-        brain._claims_graph = {"chunk1": [{"subject": "a", "object": "b", "type": "x"}]}
+        brain._graph_backend._engine._claims_graph = {
+            "chunk1": [{"subject": "a", "object": "b", "type": "x"}]
+        }
 
         brain._code_graph = {"nodes": {"fn1": {}}}
 
-        brain.finalize_graph = MagicMock()
+        brain._graph_backend.finalize = MagicMock()
 
         brain.finalize_ingest()
 
-        brain._save_claims_graph.assert_called()
+        brain._graph_backend._engine._save_claims_graph.assert_called()
 
         brain._save_code_graph.assert_called()
 
-        brain.finalize_graph.assert_called()
+        brain._graph_backend.finalize.assert_called()
 
     def test_finalize_ingest_no_batch_mode_calls_finalize_graph(self, brain):
         brain.config.ingest_batch_mode = False
 
-        brain.finalize_graph = MagicMock()
+        brain._graph_backend.finalize = MagicMock()
 
         brain.finalize_ingest()
 
-        brain.finalize_graph.assert_called()
+        brain._graph_backend.finalize.assert_called()
 
     def test_finalize_ingest_empty_claims_skips_save(self, brain):
         brain.config.ingest_batch_mode = True
 
         brain._own_bm25 = MagicMock()
 
-        brain._claims_graph = {}
+        brain._graph_backend._engine._claims_graph = {}
 
         brain._code_graph = {}
 
@@ -12497,7 +12481,7 @@ class TestFinalizeIngestV2:
 
         brain.finalize_ingest()
 
-        brain._save_claims_graph.assert_not_called()
+        brain._graph_backend._engine._save_claims_graph.assert_not_called()
 
         brain._save_code_graph.assert_not_called()
 
@@ -12515,7 +12499,7 @@ class TestRaptorSummaries:
     def _make_raptor_brain(self, tmp_path):
         b = _make_brain(tmp_path, raptor=True, raptor_chunk_group_size=2)
 
-        b._extract_entities = MagicMock(return_value=[])
+        b._graph_backend._engine._extract_entities = MagicMock(return_value=[])
 
         return b
 
@@ -13257,7 +13241,7 @@ class TestGraphRagEntityExtraction:
     def test_graphrag_new_entity_added_to_graph(self, tmp_path):
         brain = self._graph_brain(tmp_path)
 
-        brain._extract_entities = MagicMock(
+        brain._graph_backend._engine._extract_entities = MagicMock(
             return_value=[{"name": "Alice", "type": "PERSON", "description": "A developer"}]
         )
 
@@ -13265,7 +13249,7 @@ class TestGraphRagEntityExtraction:
 
         brain.ingest([_simple_doc("d1", "Alice wrote code.")])
 
-        assert "alice" in brain._entity_graph
+        assert "alice" in brain._graph_backend._engine._entity_graph
 
         brain.close()
 
@@ -13274,7 +13258,7 @@ class TestGraphRagEntityExtraction:
 
         brain = self._graph_brain(tmp_path)
 
-        brain._entity_graph = {
+        brain._graph_backend._engine._entity_graph = {
             "alice": {
                 "type": "UNKNOWN",
                 "chunk_ids": [],
@@ -13284,7 +13268,7 @@ class TestGraphRagEntityExtraction:
             }
         }
 
-        brain._extract_entities = MagicMock(
+        brain._graph_backend._engine._extract_entities = MagicMock(
             return_value=[{"name": "Alice", "type": "PERSON", "description": "dev"}]
         )
 
@@ -13292,7 +13276,7 @@ class TestGraphRagEntityExtraction:
 
         brain.ingest([_simple_doc("d1", "Alice did things.")])
 
-        assert brain._entity_graph["alice"]["type"] == "PERSON"
+        assert brain._graph_backend._engine._entity_graph["alice"]["type"] == "PERSON"
 
         brain.close()
 
@@ -13301,7 +13285,7 @@ class TestGraphRagEntityExtraction:
 
         brain = self._graph_brain(tmp_path)
 
-        brain._entity_graph = {
+        brain._graph_backend._engine._entity_graph = {
             "bob": {
                 "type": "PERSON",
                 "chunk_ids": [],
@@ -13311,7 +13295,7 @@ class TestGraphRagEntityExtraction:
             }
         }
 
-        brain._extract_entities = MagicMock(
+        brain._graph_backend._engine._extract_entities = MagicMock(
             return_value=[{"name": "Bob", "type": "PERSON", "description": "An engineer"}]
         )
 
@@ -13319,7 +13303,7 @@ class TestGraphRagEntityExtraction:
 
         brain.ingest([_simple_doc("d1", "Bob built systems.")])
 
-        assert brain._entity_graph["bob"]["description"] == "An engineer"
+        assert brain._graph_backend._engine._entity_graph["bob"]["description"] == "An engineer"
 
         brain.close()
 
@@ -13328,9 +13312,9 @@ class TestGraphRagEntityExtraction:
 
         brain = self._graph_brain(tmp_path)
 
-        brain._entity_graph = {"charlie": ["existing_chunk"]}
+        brain._graph_backend._engine._entity_graph = {"charlie": ["existing_chunk"]}
 
-        brain._extract_entities = MagicMock(
+        brain._graph_backend._engine._extract_entities = MagicMock(
             return_value=[{"name": "Charlie", "type": "ORG", "description": ""}]
         )
 
@@ -13340,7 +13324,7 @@ class TestGraphRagEntityExtraction:
 
         # After migration, the list should have d2 appended
 
-        assert "d2" in brain._entity_graph["charlie"]
+        assert "d2" in brain._graph_backend._engine._entity_graph["charlie"]
 
         brain.close()
 
@@ -13351,7 +13335,7 @@ class TestGraphRagEntityExtraction:
 
         brain = self._graph_brain(tmp_path)
 
-        brain._extract_entities = MagicMock(return_value=[])
+        brain._graph_backend._engine._extract_entities = MagicMock(return_value=[])
 
         brain.embedding.embed.side_effect = lambda texts: [[0.1] * 10] * len(texts)
 
@@ -13373,7 +13357,7 @@ class TestGraphRagEntityExtraction:
 
         brain._SOURCE_POLICY_DEFAULT = (True, True)
 
-        brain._extract_entities = MagicMock(
+        brain._graph_backend._engine._extract_entities = MagicMock(
             return_value=[{"name": "X", "type": "T", "description": ""}]
         )
 
@@ -13390,7 +13374,7 @@ class TestGraphRagEntityExtraction:
 
         # Source should have been skipped for GraphRAG
 
-        assert "alice" not in brain._entity_graph
+        assert "alice" not in brain._graph_backend._engine._entity_graph
 
         brain.close()
 
@@ -13421,11 +13405,11 @@ class TestGraphRagRelations:
     def test_relation_triple_dict_stored(self, tmp_path):
         brain = self._rel_brain(tmp_path)
 
-        brain._extract_entities = MagicMock(
+        brain._graph_backend._engine._extract_entities = MagicMock(
             return_value=[{"name": "Alice", "type": "P", "description": ""}]
         )
 
-        brain._extract_relations = MagicMock(
+        brain._graph_backend._engine._extract_relations = MagicMock(
             return_value=[
                 {
                     "subject": "Alice",
@@ -13441,7 +13425,7 @@ class TestGraphRagRelations:
 
         brain.ingest([_simple_doc("d1", "Alice knows Bob.")])
 
-        assert "alice" in brain._relation_graph
+        assert "alice" in brain._graph_backend._engine._relation_graph
 
         brain.close()
 
@@ -13450,15 +13434,17 @@ class TestGraphRagRelations:
 
         brain = self._rel_brain(tmp_path)
 
-        brain._extract_entities = MagicMock(return_value=[])
+        brain._graph_backend._engine._extract_entities = MagicMock(return_value=[])
 
-        brain._extract_relations = MagicMock(return_value=[("alice", "likes", "python")])
+        brain._graph_backend._engine._extract_relations = MagicMock(
+            return_value=[("alice", "likes", "python")]
+        )
 
         brain.embedding.embed.side_effect = lambda texts: [[0.1] * 10] * len(texts)
 
         brain.ingest([_simple_doc("d1", "alice likes python")])
 
-        assert "alice" in brain._relation_graph
+        assert "alice" in brain._graph_backend._engine._relation_graph
 
         brain.close()
 
@@ -13467,9 +13453,9 @@ class TestGraphRagRelations:
 
         brain = self._rel_brain(tmp_path)
 
-        brain._extract_entities = MagicMock(return_value=[])
+        brain._graph_backend._engine._extract_entities = MagicMock(return_value=[])
 
-        brain._extract_relations = MagicMock(
+        brain._graph_backend._engine._extract_relations = MagicMock(
             return_value=[
                 {"subject": "  ", "relation": "knows", "object": "Bob", "description": ""}
             ]
@@ -13481,9 +13467,9 @@ class TestGraphRagRelations:
 
         # "  " stripped → "", should not be added
 
-        assert "  " not in brain._relation_graph
+        assert "  " not in brain._graph_backend._engine._relation_graph
 
-        assert "" not in brain._relation_graph
+        assert "" not in brain._graph_backend._engine._relation_graph
 
         brain.close()
 
@@ -13492,9 +13478,9 @@ class TestGraphRagRelations:
 
         brain = self._rel_brain(tmp_path)
 
-        brain._extract_entities = MagicMock(return_value=[])
+        brain._graph_backend._engine._extract_entities = MagicMock(return_value=[])
 
-        brain._extract_relations = MagicMock(
+        brain._graph_backend._engine._extract_relations = MagicMock(
             return_value=[
                 {
                     "subject": "alice",
@@ -13520,7 +13506,7 @@ class TestGraphRagRelations:
 
         brain.ingest([_simple_doc("d2", "alice knows bob again")])
 
-        entry = brain._relation_graph["alice"][0]
+        entry = brain._graph_backend._engine._relation_graph["alice"][0]
 
         # support_count should be 2
 
@@ -13535,11 +13521,11 @@ class TestGraphRagRelations:
             tmp_path, graph_rag_relation_budget=1, graph_rag_min_entities_for_relations=0
         )
 
-        brain._extract_entities = MagicMock(
+        brain._graph_backend._engine._extract_entities = MagicMock(
             return_value=[{"name": f"E{i}", "type": "T", "description": ""} for i in range(5)]
         )
 
-        brain._extract_relations = MagicMock(return_value=[])
+        brain._graph_backend._engine._extract_relations = MagicMock(return_value=[])
 
         brain.embedding.embed.side_effect = lambda texts: [[0.1] * 10] * len(texts)
 
@@ -13556,11 +13542,11 @@ class TestGraphRagRelations:
 
         brain = self._rel_brain(tmp_path)
 
-        brain._extract_entities = MagicMock(
+        brain._graph_backend._engine._extract_entities = MagicMock(
             return_value=[{"name": "Alice", "type": "P", "description": ""}]
         )
 
-        brain._extract_relations = MagicMock(
+        brain._graph_backend._engine._extract_relations = MagicMock(
             return_value=[
                 {"subject": "alice", "relation": "knows", "object": "dave", "description": ""}
             ]
@@ -13572,7 +13558,7 @@ class TestGraphRagRelations:
 
         # "dave" should be a stub in entity graph
 
-        assert "dave" in brain._entity_graph
+        assert "dave" in brain._graph_backend._engine._entity_graph
 
         brain.close()
 
@@ -13581,9 +13567,9 @@ class TestGraphRagRelations:
 
         brain = self._rel_brain(tmp_path)
 
-        brain._extract_entities = MagicMock(return_value=[])
+        brain._graph_backend._engine._extract_entities = MagicMock(return_value=[])
 
-        brain._extract_relations = MagicMock(
+        brain._graph_backend._engine._extract_relations = MagicMock(
             return_value=[{"subject": "alice", "relation": "r", "object": "", "description": ""}]
         )
 
@@ -13591,7 +13577,7 @@ class TestGraphRagRelations:
 
         brain.ingest([_simple_doc("d1", "text")])
 
-        assert "" not in brain._entity_graph
+        assert "" not in brain._graph_backend._engine._entity_graph
 
         brain.close()
 
@@ -13602,9 +13588,9 @@ class TestGraphRagRelations:
 
         brain = self._rel_brain(tmp_path, graph_rag_relation_backend="rebel")
 
-        brain._extract_entities = MagicMock(return_value=[])
+        brain._graph_backend._engine._extract_entities = MagicMock(return_value=[])
 
-        brain._extract_relations = MagicMock(return_value=[])
+        brain._graph_backend._engine._extract_relations = MagicMock(return_value=[])
 
         brain.embedding.embed.side_effect = lambda texts: [[0.1] * 10] * len(texts)
 
@@ -13622,9 +13608,9 @@ class TestGraphRagRelations:
 
         brain = self._rel_brain(tmp_path, graph_rag_relation_backend="rebel")
 
-        brain._extract_entities = MagicMock(return_value=[])
+        brain._graph_backend._engine._extract_entities = MagicMock(return_value=[])
 
-        brain._extract_relations = MagicMock(
+        brain._graph_backend._engine._extract_relations = MagicMock(
             return_value=[
                 {"subject": "alice", "relation": "knows", "object": "bob", "description": ""}
             ]
@@ -13655,9 +13641,9 @@ class TestGraphRagClaims:
             tmp_path, graph_rag=True, graph_rag_claims=True, graph_rag_relations=False
         )
 
-        brain._extract_entities = MagicMock(return_value=[])
+        brain._graph_backend._engine._extract_entities = MagicMock(return_value=[])
 
-        brain._extract_claims = MagicMock(
+        brain._graph_backend._engine._extract_claims = MagicMock(
             return_value=[{"subject": "a", "object": "b", "type": "fact"}]
         )
 
@@ -13665,9 +13651,9 @@ class TestGraphRagClaims:
 
         brain.ingest([_simple_doc("d1", "claim text")])
 
-        assert "d1" in brain._claims_graph
+        assert "d1" in brain._graph_backend._engine._claims_graph
 
-        brain._save_claims_graph.assert_called()
+        brain._graph_backend._engine._save_claims_graph.assert_called()
 
         brain.close()
 
@@ -13678,17 +13664,17 @@ class TestGraphRagClaims:
             tmp_path, graph_rag=True, graph_rag_claims=True, graph_rag_relations=False
         )
 
-        brain._extract_entities = MagicMock(return_value=[])
+        brain._graph_backend._engine._extract_entities = MagicMock(return_value=[])
 
         claim = {"subject": "a", "object": "b", "type": "fact"}
 
-        brain._extract_claims = MagicMock(return_value=[claim])
+        brain._graph_backend._engine._extract_claims = MagicMock(return_value=[claim])
 
         brain.embedding.embed.side_effect = lambda texts: [[0.1] * 10] * len(texts)
 
         brain.ingest([_simple_doc("d1", "some claim text")])
 
-        stored = brain._claims_graph.get("d1", [])
+        stored = brain._graph_backend._engine._claims_graph.get("d1", [])
 
         assert stored and stored[0].get("text_unit_id") == "d1"
 
@@ -13701,7 +13687,7 @@ class TestGraphRagClaims:
             tmp_path, graph_rag=True, graph_rag_canonicalize=True, graph_rag_relations=False
         )
 
-        brain._extract_entities = MagicMock(
+        brain._graph_backend._engine._extract_entities = MagicMock(
             return_value=[{"name": "X", "type": "T", "description": "d"}]
         )
 
@@ -13709,7 +13695,7 @@ class TestGraphRagClaims:
 
         brain.ingest([_simple_doc("d1", "text")])
 
-        brain._canonicalize_entity_descriptions.assert_called()
+        brain._graph_backend._engine._canonicalize_entity_descriptions.assert_called()
 
         brain.close()
 
@@ -13724,15 +13710,15 @@ class TestGraphRagClaims:
             graph_rag_min_entities_for_relations=0,
         )
 
-        brain._extract_entities = MagicMock(return_value=[])
+        brain._graph_backend._engine._extract_entities = MagicMock(return_value=[])
 
-        brain._extract_relations = MagicMock(return_value=[])
+        brain._graph_backend._engine._extract_relations = MagicMock(return_value=[])
 
         brain.embedding.embed.side_effect = lambda texts: [[0.1] * 10] * len(texts)
 
         brain.ingest([_simple_doc("d1", "text")])
 
-        brain._canonicalize_relation_descriptions.assert_called()
+        brain._graph_backend._engine._canonicalize_relation_descriptions.assert_called()
 
         brain.close()
 
@@ -13743,15 +13729,15 @@ class TestGraphRagClaims:
             tmp_path, graph_rag=True, graph_rag_depth="deep", graph_rag_relations=False
         )
 
-        brain._extract_entities = MagicMock(return_value=[])
+        brain._graph_backend._engine._extract_entities = MagicMock(return_value=[])
 
-        brain._extract_claims = MagicMock(return_value=[])
+        brain._graph_backend._engine._extract_claims = MagicMock(return_value=[])
 
         brain.embedding.embed.side_effect = lambda texts: [[0.1] * 10] * len(texts)
 
         brain.ingest([_simple_doc("d1", "deep text")])
 
-        brain._extract_claims.assert_called()
+        brain._graph_backend._engine._extract_claims.assert_called()
 
         brain.close()
 
@@ -13777,7 +13763,7 @@ class TestGraphRagCommunityRebuild:
             graph_rag_relations=False,
         )
 
-        brain._extract_entities = MagicMock(
+        brain._graph_backend._engine._extract_entities = MagicMock(
             return_value=[{"name": "E", "type": "T", "description": ""}]
         )
 
@@ -13785,7 +13771,7 @@ class TestGraphRagCommunityRebuild:
 
         brain.ingest([_simple_doc("d1", "entity text")])
 
-        brain._rebuild_communities.assert_not_called()
+        brain._graph_backend._engine._rebuild_communities.assert_not_called()
 
         brain.close()
 
@@ -13801,7 +13787,7 @@ class TestGraphRagCommunityRebuild:
             graph_rag_relations=False,
         )
 
-        brain._extract_entities = MagicMock(
+        brain._graph_backend._engine._extract_entities = MagicMock(
             return_value=[{"name": "Node", "type": "T", "description": ""}]
         )
 
@@ -13809,7 +13795,7 @@ class TestGraphRagCommunityRebuild:
 
         brain.ingest([_simple_doc("d1", "community entity")])
 
-        brain._rebuild_communities.assert_called_once()
+        brain._graph_backend._engine._rebuild_communities.assert_called_once()
 
         brain.close()
 
@@ -13828,7 +13814,7 @@ class TestGraphRagCommunityRebuild:
             graph_rag_relations=False,
         )
 
-        brain._extract_entities = MagicMock(
+        brain._graph_backend._engine._extract_entities = MagicMock(
             return_value=[{"name": "AsyncNode", "type": "T", "description": ""}]
         )
 
@@ -14037,8 +14023,8 @@ class TestDescendantGraphMerge:
             if not doc_ids:
                 continue
 
-            if entity not in brain._entity_graph:
-                brain._entity_graph[entity] = {
+            if entity not in brain._graph_backend._engine._entity_graph:
+                brain._graph_backend._engine._entity_graph[entity] = {
                     "description": node.get("description", ""),
                     "type": node.get("type", "UNKNOWN"),
                     "chunk_ids": [d for d in doc_ids if isinstance(d, str)],
@@ -14046,9 +14032,9 @@ class TestDescendantGraphMerge:
                     "degree": node.get("degree", 0),
                 }
 
-        assert "alice" in brain._entity_graph
+        assert "alice" in brain._graph_backend._engine._entity_graph
 
-        assert brain._entity_graph["alice"]["chunk_ids"] == ["c1", "c2"]
+        assert brain._graph_backend._engine._entity_graph["alice"]["chunk_ids"] == ["c1", "c2"]
 
         brain.close()
 
@@ -14057,7 +14043,7 @@ class TestDescendantGraphMerge:
 
         brain = _make_brain(tmp_path)
 
-        brain._entity_graph = {
+        brain._graph_backend._engine._entity_graph = {
             "alice": {
                 "description": "existing",
                 "type": "PERSON",
@@ -14082,7 +14068,7 @@ class TestDescendantGraphMerge:
             if not doc_ids:
                 continue
 
-            existing = brain._entity_graph.get(entity)
+            existing = brain._graph_backend._engine._entity_graph.get(entity)
 
             if isinstance(existing, dict):
                 existing_ids = set(existing.get("chunk_ids", []))
@@ -14094,9 +14080,9 @@ class TestDescendantGraphMerge:
 
                     existing["frequency"] = len(existing["chunk_ids"])
 
-        assert "c1" in brain._entity_graph["alice"]["chunk_ids"]
+        assert "c1" in brain._graph_backend._engine._entity_graph["alice"]["chunk_ids"]
 
-        assert "old_c" in brain._entity_graph["alice"]["chunk_ids"]
+        assert "old_c" in brain._graph_backend._engine._entity_graph["alice"]["chunk_ids"]
 
         brain.close()
 
@@ -14113,16 +14099,16 @@ class TestDescendantGraphMerge:
 
         for src, entries in raw.items():
             if isinstance(src, str) and isinstance(entries, list):
-                if src not in brain._relation_graph:
-                    brain._relation_graph[src] = []
+                if src not in brain._graph_backend._engine._relation_graph:
+                    brain._graph_backend._engine._relation_graph[src] = []
 
                 for entry in entries:
                     if isinstance(entry, dict):
-                        brain._relation_graph[src].append(entry)
+                        brain._graph_backend._engine._relation_graph[src].append(entry)
 
-        assert "alice" in brain._relation_graph
+        assert "alice" in brain._graph_backend._engine._relation_graph
 
-        assert brain._relation_graph["alice"][0]["target"] == "bob"
+        assert brain._graph_backend._engine._relation_graph["alice"][0]["target"] == "bob"
 
         brain.close()
 
@@ -14131,7 +14117,7 @@ class TestDescendantGraphMerge:
 
         brain = _make_brain(tmp_path)
 
-        brain._entity_embeddings = {}
+        brain._graph_backend._engine._entity_embeddings = {}
 
         desc_dir = tmp_path / "desc4"
 
@@ -14140,10 +14126,10 @@ class TestDescendantGraphMerge:
         raw = json.loads((desc_dir / ".entity_embeddings.json").read_text(encoding="utf-8"))
 
         for key, emb in raw.items():
-            if isinstance(key, str) and key not in brain._entity_embeddings:
-                brain._entity_embeddings[key] = emb
+            if isinstance(key, str) and key not in brain._graph_backend._engine._entity_embeddings:
+                brain._graph_backend._engine._entity_embeddings[key] = emb
 
-        assert "alice" in brain._entity_embeddings
+        assert "alice" in brain._graph_backend._engine._entity_embeddings
 
         brain.close()
 
@@ -14152,7 +14138,7 @@ class TestDescendantGraphMerge:
 
         brain = _make_brain(tmp_path)
 
-        brain._claims_graph = {}
+        brain._graph_backend._engine._claims_graph = {}
 
         desc_dir = tmp_path / "desc5"
 
@@ -14162,14 +14148,14 @@ class TestDescendantGraphMerge:
 
         for chunk_id, claims in raw.items():
             if isinstance(chunk_id, str) and isinstance(claims, list):
-                if chunk_id not in brain._claims_graph:
-                    brain._claims_graph[chunk_id] = []
+                if chunk_id not in brain._graph_backend._engine._claims_graph:
+                    brain._graph_backend._engine._claims_graph[chunk_id] = []
 
                 for claim in claims:
                     if isinstance(claim, dict):
-                        brain._claims_graph[chunk_id].append(claim)
+                        brain._graph_backend._engine._claims_graph[chunk_id].append(claim)
 
-        assert "c1" in brain._claims_graph
+        assert "c1" in brain._graph_backend._engine._claims_graph
 
         brain.close()
 
@@ -14178,7 +14164,7 @@ class TestDescendantGraphMerge:
 
         brain = _make_brain(tmp_path)
 
-        brain._community_summaries = {}
+        brain._graph_backend._engine._community_summaries = {}
 
         desc_name = "subproject"
 
@@ -14192,10 +14178,10 @@ class TestDescendantGraphMerge:
             if isinstance(key, str) and isinstance(summary, dict):
                 namespaced = f"desc_{desc_name}_{key}"
 
-                if namespaced not in brain._community_summaries:
-                    brain._community_summaries[namespaced] = dict(summary)
+                if namespaced not in brain._graph_backend._engine._community_summaries:
+                    brain._graph_backend._engine._community_summaries[namespaced] = dict(summary)
 
-        assert f"desc_{desc_name}_comm_0" in brain._community_summaries
+        assert f"desc_{desc_name}_comm_0" in brain._graph_backend._engine._community_summaries
 
         brain.close()
 
@@ -14271,17 +14257,17 @@ class TestDescendantGraphMerge:
             "axon.projects.ensure_project"
         ):
             with patch.object(AxonBrain, "_load_hash_store", return_value=set()), patch.object(
-                AxonBrain, "_load_entity_graph", return_value={}
-            ), patch.object(AxonBrain, "_load_relation_graph", return_value={}), patch.object(
-                AxonBrain, "_load_community_levels", return_value={}
+                GraphRagEngine, "_load_entity_graph", return_value={}
+            ), patch.object(GraphRagEngine, "_load_relation_graph", return_value={}), patch.object(
+                GraphRagEngine, "_load_community_levels", return_value={}
             ), patch.object(
-                AxonBrain, "_load_community_summaries", return_value={}
+                GraphRagEngine, "_load_community_summaries", return_value={}
             ), patch.object(
-                AxonBrain, "_load_entity_embeddings", return_value={}
+                GraphRagEngine, "_load_entity_embeddings", return_value={}
             ), patch.object(
-                AxonBrain, "_load_claims_graph", return_value={}
+                GraphRagEngine, "_load_claims_graph", return_value={}
             ), patch.object(
-                AxonBrain, "_load_community_hierarchy", return_value={}
+                GraphRagEngine, "_load_community_hierarchy", return_value={}
             ), patch.object(
                 AxonBrain, "_load_code_graph", return_value={}
             ), patch.object(
@@ -14304,27 +14290,27 @@ class TestDescendantGraphMerge:
             "axon.projects.get_project_graph_backend", return_value="graphrag"
         ):
             brain._load_hash_store = MagicMock(return_value=set())
-            brain._load_entity_graph = MagicMock(return_value={})
-            brain._load_relation_graph = MagicMock(return_value={})
-            brain._load_community_levels = MagicMock(return_value={})
-            brain._load_community_summaries = MagicMock(return_value={})
-            brain._load_entity_embeddings = MagicMock(return_value={})
-            brain._load_claims_graph = MagicMock(return_value={})
-            brain._load_community_hierarchy = MagicMock(return_value={})
+            brain._graph_backend._engine._load_entity_graph = MagicMock(return_value={})
+            brain._graph_backend._engine._load_relation_graph = MagicMock(return_value={})
+            brain._graph_backend._engine._load_community_levels = MagicMock(return_value={})
+            brain._graph_backend._engine._load_community_summaries = MagicMock(return_value={})
+            brain._graph_backend._engine._load_entity_embeddings = MagicMock(return_value={})
+            brain._graph_backend._engine._load_claims_graph = MagicMock(return_value={})
+            brain._graph_backend._engine._load_community_hierarchy = MagicMock(return_value={})
 
             brain.switch_project("root_project")
 
         for i in range(n_descendants):
-            assert f"entity_{i}" in brain._entity_embeddings, (
+            assert f"entity_{i}" in brain._graph_backend._engine._entity_embeddings, (
                 f"descendant {i}'s entity embeddings missing — only the last "
                 f"descendant's data survived the merge"
             )
-            assert f"chunk_{i}" in brain._claims_graph, (
+            assert f"chunk_{i}" in brain._graph_backend._engine._claims_graph, (
                 f"descendant {i}'s claims missing — only the last descendant's "
                 f"data survived the merge"
             )
             namespaced_key = f"desc_root_project/child_{i}_comm_{i}"
-            assert namespaced_key in brain._community_summaries, (
+            assert namespaced_key in brain._graph_backend._engine._community_summaries, (
                 f"descendant {i}'s community summary missing — only the last "
                 f"descendant's data survived the merge"
             )
@@ -14658,13 +14644,13 @@ class TestProjectSwitchKinds:
                 },
             ),
             patch("axon.mounts.validate_mount_descriptor", return_value=(True, "")),
-            patch.object(brain, "_load_entity_graph", return_value={}),
-            patch.object(brain, "_load_relation_graph", return_value={}),
-            patch.object(brain, "_load_community_levels", return_value={}),
-            patch.object(brain, "_load_community_summaries", return_value={}),
-            patch.object(brain, "_load_entity_embeddings", return_value={}),
-            patch.object(brain, "_load_claims_graph", return_value={}),
-            patch.object(brain, "_load_community_hierarchy", return_value={}),
+            patch.object(GraphRagEngine, "_load_entity_graph", return_value={}),
+            patch.object(GraphRagEngine, "_load_relation_graph", return_value={}),
+            patch.object(GraphRagEngine, "_load_community_levels", return_value={}),
+            patch.object(GraphRagEngine, "_load_community_summaries", return_value={}),
+            patch.object(GraphRagEngine, "_load_entity_embeddings", return_value={}),
+            patch.object(GraphRagEngine, "_load_claims_graph", return_value={}),
+            patch.object(GraphRagEngine, "_load_community_hierarchy", return_value={}),
             patch.object(brain, "_load_hash_store", return_value=set()),
             patch.object(brain, "_load_doc_versions", return_value=None),
             patch.object(brain, "_load_code_graph", return_value={}),
@@ -15243,7 +15229,7 @@ class TestReplGraphSubcommands:
     def test_graph_finalize_enabled(self):
         brain = _make_mock_brain()
         brain.config.graph_rag = True
-        brain._community_summaries = {"0_0": {"summary": "test"}}
+        brain._graph_backend._engine._community_summaries = {"0_0": {"summary": "test"}}
         brain.finalize_graph = MagicMock()
         output = _run_repl_with_commands(["/graph finalize"], brain=brain)
         assert isinstance(output, str)
@@ -15258,8 +15244,10 @@ class TestReplGraphSubcommands:
     def test_graph_status(self):
         brain = _make_mock_brain()
         brain.config.graph_rag = True
-        brain._entity_graph = {"EntityA": {"type": "PERSON", "chunk_ids": ["c1"]}}
-        brain._community_summaries = {}
+        brain._graph_backend._engine._entity_graph = {
+            "EntityA": {"type": "PERSON", "chunk_ids": ["c1"]}
+        }
+        brain._graph_backend._engine._community_summaries = {}
         output = _run_repl_with_commands(["/graph"], brain=brain)
         assert isinstance(output, str)
 

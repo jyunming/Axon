@@ -212,6 +212,9 @@ async def governance_graph_rebuild(req: Request):
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
     _enforce_write_access(brain, "finalize_graph")
+    backend = getattr(brain, "_graph_backend", None)
+    if backend is None:
+        raise HTTPException(status_code=503, detail="No graph backend attached")
     rid = getattr(req.state, "request_id", "")
     surface = getattr(req.state, "surface", "api")
     project = getattr(brain, "_active_project", "default")
@@ -225,13 +228,8 @@ async def governance_graph_rebuild(req: Request):
         request_id=rid,
     )
     try:
-        backend = getattr(brain, "_graph_backend", None)
-        if backend is not None and callable(getattr(backend, "finalize", None)):
-            result = await asyncio.to_thread(backend.finalize, True)
-            summary_count = getattr(result, "communities_built", 0)
-        else:
-            await asyncio.to_thread(brain.finalize_graph, True)
-            summary_count = len(getattr(brain, "_community_summaries", {}) or {})
+        result = await asyncio.to_thread(backend.finalize, True)
+        summary_count = getattr(result, "communities_built", 0)
         gov.emit(
             "graph_finalize",
             "graph",

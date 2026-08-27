@@ -1702,7 +1702,6 @@ class TestResetGraphState:
         brain._relation_description_buffer = {"alice-bob": "desc"}
         brain._text_unit_entity_map = {"c1": ["alice"]}
         brain._text_unit_relation_map = {"c1": ["alice-bob"]}
-        brain._raptor_summary_cache = {"c1": "summary"}
 
         brain._reset_graph_state()
 
@@ -1719,7 +1718,8 @@ class TestResetGraphState:
         assert brain._relation_description_buffer == {}
         assert brain._text_unit_entity_map == {}
         assert brain._text_unit_relation_map == {}
-        assert brain._raptor_summary_cache == {}
+        # _raptor_summary_cache is brain-owned, not reset by this method —
+        # see GraphRagMixin._reset_graph_state()'s docstring.
 
     def test_rebuilds_token_index(self, tmp_path):
         cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))

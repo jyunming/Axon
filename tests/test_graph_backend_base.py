@@ -26,7 +26,6 @@ from axon.graph_backends.dynamic_graph_backend import DynamicGraphBackend
 from axon.graph_backends.federated_backend import FederatedGraphBackend
 from axon.graph_backends.graphrag_backend import GraphRagBackend
 from axon.graph_backends.none_backend import NoneGraphBackend
-from axon.graph_rag import GraphRagMixin
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -45,14 +44,25 @@ def _make_dynamic_backend(tmp_path) -> DynamicGraphBackend:
 
 
 def _make_graphrag_backend() -> GraphRagBackend:
-    brain = MagicMock()
-    brain._entity_graph = {}
-    brain._relation_graph = {}
-    brain._community_levels = {}
-    brain._community_summaries = {}
-    brain.build_graph_payload.return_value = {"nodes": [], "links": []}
-    brain._expand_with_entity_graph.return_value = ([], [])
-    return GraphRagBackend(brain)
+    """GraphRagBackend.__init__ now composes a real GraphRagEngine and calls
+    its load() (real disk I/O against brain.config.bm25_path) — incompatible
+    with a MagicMock "brain" that has no real config. These tests only check
+    Protocol shape/delegation, not real loading, so bypass __init__ and
+    inject a MagicMock engine directly (same pattern as
+    test_graphrag_parity.py's _make_backend)."""
+    engine = MagicMock()
+    engine._entity_graph = {}
+    engine._relation_graph = {}
+    engine._community_levels = {}
+    engine._community_summaries = {}
+    engine.build_graph_payload.return_value = {"nodes": [], "links": []}
+    engine.expand_with_entity_graph.return_value = ([], [])
+    engine.ingest_chunks.return_value = IngestResult(chunks_processed=1, backend_id="graphrag")
+
+    backend = GraphRagBackend.__new__(GraphRagBackend)
+    backend._brain = MagicMock()
+    backend._engine = engine
+    return backend
 
 
 def _make_none_backend() -> NoneGraphBackend:
@@ -147,7 +157,7 @@ class TestGraphRagBackendProtocol:
 
     def test_has_entities_true_when_populated(self):
         backend = _make_graphrag_backend()
-        backend._brain._entity_graph = {"alice": {"type": "PERSON"}}
+        backend._engine._entity_graph = {"alice": {"type": "PERSON"}}
         assert backend.has_entities() is True
 
     def test_has_community_summaries_false_when_empty(self):
@@ -156,7 +166,7 @@ class TestGraphRagBackendProtocol:
 
     def test_has_community_summaries_true_when_populated(self):
         backend = _make_graphrag_backend()
-        backend._brain._community_summaries = {"0_0": {"full_content": "summary"}}
+        backend._engine._community_summaries = {"0_0": {"full_content": "summary"}}
         assert backend.has_community_summaries() is True
 
 
@@ -176,72 +186,78 @@ class TestGraphRagBackendClearPersist:
     """
 
     @staticmethod
-    def _make_real_graphrag_brain(tmp_path):
+    def _make_real_graphrag_backend(tmp_path) -> GraphRagBackend:
+        """GraphRagBackend.__init__ now composes a real GraphRagEngine and
+        calls its load() (real disk I/O against brain.config.bm25_path) —
+        construct against a real tmp_path so that succeeds cleanly (loading
+        empty state, since nothing is on disk yet), then hand-set fixture
+        state directly on backend._engine (not on ``brain``, which is just
+        the proxy target for config/llm/vector_store now — the real graph
+        state lives only on the engine post-M2).
+        """
         from types import SimpleNamespace
 
-        class _RealFakeBrain(GraphRagMixin):
-            pass
-
-        brain = _RealFakeBrain()
-        brain.config = SimpleNamespace(bm25_path=str(tmp_path))
-        brain._entity_graph = {"alice": {"type": "PERSON", "chunk_ids": ["c1"], "degree": 1}}
-        brain._relation_graph = {
+        cfg = SimpleNamespace(bm25_path=str(tmp_path))
+        brain = SimpleNamespace(config=cfg, _own_vector_store=MagicMock())
+        backend = GraphRagBackend(brain)
+        engine = backend._engine
+        engine._entity_graph = {"alice": {"type": "PERSON", "chunk_ids": ["c1"], "degree": 1}}
+        engine._relation_graph = {
             "alice": [{"target": "bob", "relation": "knows", "chunk_id": "c1"}]
         }
-        brain._community_levels = {0: {"alice": 0}}
-        brain._community_hierarchy = {}
-        brain._community_summaries = {"0_0": {"full_content": "a summary"}}
-        brain._claims_graph = {"c1": [{"subject": "a", "object": "b", "type": "t"}]}
-        brain._entity_embeddings = {"alice": [0.1, 0.2]}
-        brain._own_vector_store = MagicMock()
-        return brain
+        engine._community_levels = {0: {"alice": 0}}
+        engine._community_hierarchy = {}
+        engine._community_summaries = {"0_0": {"full_content": "a summary"}}
+        engine._claims_graph = {"c1": [{"subject": "a", "object": "b", "type": "t"}]}
+        engine._entity_embeddings = {"alice": [0.1, 0.2]}
+        return backend
 
     def test_clear_persist_true_rewrites_files_empty(self, tmp_path):
-        """Reads back through brain._load_entity_graph()/_load_relation_graph()
+        """Reads back through engine._load_entity_graph()/_load_relation_graph()
         rather than hand-parsing a specific on-disk file — persistence may
         take the msgpack fast path (writing .entity_graph.msgpack and
         deleting any stale .entity_graph.json) or the JSON fallback
         depending on rust-bridge availability; the load path handles both
         transparently, which is what actually matters here.
         """
-        brain = self._make_real_graphrag_brain(tmp_path)
-        backend = GraphRagBackend(brain)
+        backend = self._make_real_graphrag_backend(tmp_path)
+        engine = backend._engine
 
         # Write real, non-empty state to disk first — proves clear()
         # actually rewrites persisted state rather than it just never
         # having existed.
         for method_name in GraphRagBackend._PERSISTABLE_SAVE_METHODS:
-            getattr(brain, method_name)()
-        brain._flush_pending_saves()
+            getattr(engine, method_name)()
+        engine._flush_pending_saves()
 
-        assert brain._load_entity_graph()
-        assert brain._load_relation_graph()
+        assert engine._load_entity_graph()
+        assert engine._load_relation_graph()
 
         backend.clear(persist=True)
-        brain._flush_pending_saves()
+        engine._flush_pending_saves()
 
-        assert brain._load_entity_graph() == {}
-        assert brain._load_relation_graph() == {}
+        assert engine._load_entity_graph() == {}
+        assert engine._load_relation_graph() == {}
 
     def test_clear_persist_false_leaves_disk_state_untouched(self, tmp_path):
         """persist=False (the default) resets in-memory state only — matches
         the read-only-scope-switching requirement that switching scope must
         never write project data to disk.
         """
-        brain = self._make_real_graphrag_brain(tmp_path)
-        backend = GraphRagBackend(brain)
+        backend = self._make_real_graphrag_backend(tmp_path)
+        engine = backend._engine
         for method_name in GraphRagBackend._PERSISTABLE_SAVE_METHODS:
-            getattr(brain, method_name)()
-        brain._flush_pending_saves()
+            getattr(engine, method_name)()
+        engine._flush_pending_saves()
 
-        assert brain._load_entity_graph()  # non-empty on disk before clear
+        assert engine._load_entity_graph()  # non-empty on disk before clear
 
         backend.clear()  # persist defaults to False
-        brain._flush_pending_saves()
+        engine._flush_pending_saves()
 
-        assert brain._entity_graph == {}
+        assert engine._entity_graph == {}
         # On-disk state must be untouched — still the pre-clear content.
-        assert brain._load_entity_graph()
+        assert engine._load_entity_graph()
 
 
 # ---------------------------------------------------------------------------
@@ -530,20 +546,13 @@ class TestDataTypes:
 
 
 class TestPhase2ShimRemoval:
-    @pytest.mark.xfail(
-        strict=False,
-        reason=(
-            "Phase 2 target: AxonBrain should not inherit from GraphRagMixin once "
-            "all graph ops are fully routed through self._graph_backend.*. "
-            "Flip to xfail(strict=True) or remove when Phase 2 is complete."
-        ),
-    )
     def test_axon_brain_does_not_inherit_graphragmixin(self):
         """Verify via AST (not grep) that AxonBrain no longer inherits GraphRagMixin.
 
-        This test is currently XFAIL — it marks the Phase 2 architectural goal.
-        When AxonBrain's GraphRagMixin inheritance is removed, this test will pass
-        and should be promoted to a strict (non-xfail) assertion.
+        M2 ownership-inversion target: AxonBrain no longer inherits GraphRagMixin
+        directly — GraphRagMixin now lives only on GraphRagEngine, reachable
+        through self._graph_backend._engine. This assertion is strict (no
+        longer xfail) now that the inversion has landed.
         """
         import ast
         from pathlib import Path

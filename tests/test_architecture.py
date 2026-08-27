@@ -76,29 +76,23 @@ class TestPhase1FilesHaveNoDirectAccess:
 
 
 # ---------------------------------------------------------------------------
-# Files with one documented, intentional direct-read fallback — used only
-# when no _graph_backend is attached at all, or backend.status() itself
-# raises (graceful degradation, matching the pattern already established in
-# repl.py's "/graph status" command before Phase 1). Not zero, but pinned so
-# a *new* violation here gets caught instead of silently joining the pile.
+# Files with a documented, intentional direct-read fallback — used only when
+# no _graph_backend is attached at all, or backend.status() itself raises
+# (graceful degradation, matching the pattern already established in
+# repl.py's "/graph status" command before Phase 1). Pinned so a *new*
+# violation here gets caught instead of silently joining the pile.
+#
+# Phase 4 (GRAPH_BACKEND_NEXT_STEPS.md) relocated query_router.py's
+# _expand_with_entity_graph() body onto GraphRagEngine (reachable via the
+# self._graph_backend.expand_with_entity_graph() bridge) — its former
+# 7-violation entry here is gone, not just zeroed, since it's no longer a
+# file with any GraphRAG-state fallback of its own.
 # ---------------------------------------------------------------------------
 
 _KNOWN_FALLBACK_FILES = {
-    "repl.py": 4,  # /graph status except-fallback (3) + /graph finalize legacy branch (1)
-    str(Path("api_routes") / "graph.py"): 1,  # finalize_graph legacy (no-backend) branch
-    str(Path("api_routes") / "governance.py"): 1,  # governance_graph_rebuild legacy branch
-    # Phase 3 (GRAPH_BACKEND_NEXT_STEPS.md) mechanically redirected all 6
-    # query()/query_stream()/_execute_retrieval_body truthy guards to
-    # self._graph_backend.has_entities()/.has_community_summaries(). What's
-    # left is _expand_with_entity_graph()'s own body (query_router.py:251+)
-    # — deliberately NOT relocated in Phase 3: it's entangled with
-    # QueryRouterMixin-owned _graph_lock/_traversal_cache state and reads
-    # graph_rag_* config fields RetrievalConfig doesn't carry. TEMPORARY
-    # exception, not permanent — Phase 4 relocates this function (and its
-    # _extract_entities/_match_entities_by_embedding/_entity_matches
-    # dependencies) to a home that survives GraphRagMixin leaving
-    # AxonBrain's bases; this entry must be removed once that lands.
-    "query_router.py": 7,
+    "repl.py": 3,  # /graph status except-fallback
+    str(Path("api_routes") / "graph.py"): 0,  # legacy no-backend branch removed in Phase 4
+    str(Path("api_routes") / "governance.py"): 0,  # legacy no-backend branch removed in Phase 4
 }
 
 
@@ -113,28 +107,21 @@ class TestKnownFallbackFilesHaveNotGrown:
 
 
 # ---------------------------------------------------------------------------
-# Not yet migrated — the bulk of remaining M2 work. main.py's load/init/
-# switch paths and its ~370-line ingest() extraction pipeline still access
-# GraphRAG state directly. query_router.py moved to _KNOWN_FALLBACK_FILES
-# above once Phase 3 closed all but _expand_with_entity_graph()'s own body.
-# See GRAPH_BACKEND_NEXT_STEPS.md's Phase 4 for the plan to close this out.
+# M2 exit criterion. main.py's load/init/switch paths and its ingest()
+# extraction pipeline used to access GraphRAG state directly; Phase 4
+# (GRAPH_BACKEND_NEXT_STEPS.md) relocated that state and logic onto
+# GraphRagEngine, reachable only through self._graph_backend._engine.
+# query_router.py closed out the same way back in Phase 3/4 (see
+# _KNOWN_FALLBACK_FILES above). This is now a strict, permanent regression
+# gate — not an aspirational xfail.
 # ---------------------------------------------------------------------------
 
-_NOT_YET_MIGRATED_FILES = ["main.py"]
+_FULLY_MIGRATED_FILES = ["main.py"]
 
 
 class TestFullComplianceTarget:
-    @pytest.mark.xfail(
-        strict=False,
-        reason=(
-            "M2 target (see docs/architecture/GRAPH_BACKEND_NEXT_STEPS.md, "
-            "Phase 4): main.py's load/init/switch paths and ingest() "
-            "extraction pipeline still access GraphRAG state directly. "
-            "Flip to strict / remove once that phase lands."
-        ),
-    )
     def test_main_and_query_router_are_eventually_clean(self):
-        results = {p: _violations_in(p) for p in _NOT_YET_MIGRATED_FILES}
+        results = {p: _violations_in(p) for p in _FULLY_MIGRATED_FILES}
         total = sum(len(v) for v in results.values())
         assert total == 0, "Remaining direct GraphRAG-state access: " + ", ".join(
             f"{p} ({len(v)} site(s))" for p, v in results.items() if v

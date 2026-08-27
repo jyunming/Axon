@@ -149,6 +149,43 @@ class GraphRagMixin:
                     self._entity_token_index_internal: dict[str, set[str]] = {}
         return self._entity_token_index_internal
 
+    # BFS traversal cache for multi-hop entity-graph expansion (LRU + TTL).
+    # Self-contained lazy-init, same pattern as _graph_lock/_gr_cache_lock —
+    # owned here (not proxied to the brain) so GraphRagEngine works whether
+    # or not QueryRouterMixin is anywhere in its MRO. Invalidated by
+    # _reset_graph_state() and by any method that mutates the entity/
+    # relation graph directly (see the lock-order note on _traversal_cache_lock).
+    @property
+    def _traversal_cache(self):
+        from collections import OrderedDict
+
+        if not hasattr(self, "_traversal_cache_internal"):
+            with GraphRagMixin._lazy_init_lock:
+                if not hasattr(self, "_traversal_cache_internal"):
+                    self._traversal_cache_internal: OrderedDict = OrderedDict()
+        return self._traversal_cache_internal
+
+    @property
+    def _traversal_cache_lock(self) -> threading.Lock:
+        """Lock order: _graph_lock before _traversal_cache_lock — never reverse."""
+        if not hasattr(self, "_traversal_cache_lock_internal"):
+            with GraphRagMixin._lazy_init_lock:
+                if not hasattr(self, "_traversal_cache_lock_internal"):
+                    self._traversal_cache_lock_internal = threading.Lock()
+        return self._traversal_cache_lock_internal
+
+    @property
+    def _traversal_cache_maxsize(self) -> int:
+        if not hasattr(self, "_traversal_cache_maxsize_internal"):
+            self._traversal_cache_maxsize_internal = 512
+        return self._traversal_cache_maxsize_internal
+
+    @property
+    def _traversal_cache_ttl(self) -> float:
+        if not hasattr(self, "_traversal_cache_ttl_internal"):
+            self._traversal_cache_ttl_internal = 900.0  # 15 minutes
+        return self._traversal_cache_ttl_internal
+
     def _rebuild_entity_token_index(self) -> None:
         """Build (or rebuild) the token index from the current _entity_graph.
         Called once after loading the entity graph from disk so that subsequent
@@ -191,6 +228,12 @@ class GraphRagMixin:
         so concurrent ``/graph/data`` readers can't observe a half-cleared
         graph (matches the locking already used by ``clear()``/
         ``delete_documents()``/``_prune_entity_graph``).
+
+        Does NOT reset ``_raptor_summary_cache`` — that's brain-owned (used
+        by ``AxonBrain._generate_raptor_summaries``, unrelated to the entity/
+        relation graph) despite historically being reset alongside this
+        state; ``collection_ops.clear_active_project()`` resets it directly
+        for the "wipe this project's data" path.
         """
         with self._graph_lock:
             self._entity_graph = {}
@@ -207,7 +250,9 @@ class GraphRagMixin:
             self._relation_description_buffer = {}
             self._text_unit_entity_map = {}
             self._text_unit_relation_map = {}
-            self._raptor_summary_cache = {}
+            self._community_build_in_progress = False
+            with self._traversal_cache_lock:
+                self._traversal_cache.clear()
 
     def _track_persist_future(self, future: concurrent.futures.Future) -> None:
         """Append *future* to the pending list, pruning already-done entries."""
@@ -3351,59 +3396,6 @@ class GraphRagMixin:
             except Exception:
                 return False
         return False
-
-    # ── keyword sets for multi-class router ───────────────────────────────────
-    _SYNTHESIS_KEYWORDS: frozenset = frozenset(
-        {
-            "summarize",
-            "overview",
-            "compare",
-            "contrast",
-            "explain",
-            "discuss",
-            "survey",
-            "themes",
-            "analysis",
-        }
-    )
-    _TABLE_KEYWORDS: frozenset = frozenset(
-        {
-            "table",
-            "row",
-            "column",
-            "value",
-            "count",
-            "average",
-            "maximum",
-            "minimum",
-            "statistic",
-            "how many",
-            "list all",
-        }
-    )
-    _ENTITY_KEYWORDS: frozenset = frozenset(
-        {
-            "relationship",
-            "related to",
-            "who",
-            "works with",
-            "connected",
-            "linked",
-            "colleague",
-            "dependency",
-            "relate",
-        }
-    )
-    _CORPUS_KEYWORDS: frozenset = frozenset(
-        {
-            "all documents",
-            "entire corpus",
-            "everything",
-            "main topics",
-            "key themes",
-            "across all",
-        }
-    )
 
     def _ensure_llmlingua(self):
         """Lazy-initialise the LLMLingua-2 prompt compressor (TASK 14)."""

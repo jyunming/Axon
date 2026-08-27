@@ -116,8 +116,17 @@ class TestGetGraphBackend:
         backend = get_graph_backend(brain)
         assert isinstance(backend, GraphRagBackend)
 
-    def test_missing_config_falls_back_to_graphrag(self):
-        brain = MagicMock(spec=[])  # no attributes at all
+    def test_missing_config_falls_back_to_graphrag(self, tmp_path):
+        """A config with no graph_backend attribute at all still resolves to
+        GraphRagBackend (the factory's defensive default). Construction
+        needs a minimal real bm25_path now that GraphRagBackend.__init__
+        eagerly loads graph state (M2 ownership inversion) — a fully bare
+        MagicMock(spec=[]) can no longer survive construction, which is an
+        intentional consequence of that inversion, not something this test
+        is about."""
+        brain = MagicMock()
+        del brain.config.graph_backend
+        brain.config.bm25_path = str(tmp_path)
         brain._entity_graph = {}
         brain._relation_graph = {}
         brain._community_levels = {}

@@ -302,8 +302,9 @@ async def get_ingest_status(job_id: str):
             detail=f"Job '{job_id}' not found. It may have already been evicted (TTL: 60 min) or the job_id is invalid.",
         )
     result = {k: v for k, v in job.items() if k != "started_at_ts"}
+    backend = getattr(brain, "_graph_backend", None)
     result["community_build_in_progress"] = bool(
-        getattr(brain, "_community_build_in_progress", False)
+        backend.status().get("community_build_in_progress", False) if backend is not None else False
     )
     return result
 

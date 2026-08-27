@@ -535,7 +535,7 @@ class TestToolGraphStatus:
 
     def test_graph_status_shows_rebuild_flag(self):
         brain = _make_brain()
-        brain._community_build_in_progress = True
+        brain._graph_backend.status.return_value["community_build_in_progress"] = True
         result = _tool_graph_status(brain)
         assert "True" in result
 
