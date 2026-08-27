@@ -746,44 +746,19 @@ class GraphRagMixin:
     def _gr_write_json_if_changed(self, path, payload, *, sort_keys: bool = False) -> bool:
         """Atomically write JSON only when content changed. Returns True if written.
 
-        Uses ``axon.version_marker._atomic_replace`` so the rename
-        survives Windows / OneDrive / cloud-sync transient locks
-        (audit P1: graph_rag bytes/json writers were missing this
-        fallback that ``dynamic_graph_backend`` already implements).
+        Delegates to :func:`axon._atomic_persist.write_json_if_changed` —
+        see its docstring for the digest-cache-gated / cloud-sync-safe
+        rename semantics (audit P1: graph_rag bytes/json writers were
+        missing the atomic-rename fallback ``dynamic_graph_backend``
+        already implements).
         """
-        import hashlib as _hashlib
-        import json as _json
-        import pathlib as _pathlib
+        from axon._atomic_persist import write_json_if_changed
 
-        from axon.version_marker import _atomic_replace as _safe_replace
-
-        p = _pathlib.Path(path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        text = _json.dumps(payload, sort_keys=sort_keys, separators=(",", ":"))
-        digest = _hashlib.sha1(text.encode("utf-8", errors="replace")).hexdigest()
         cache = getattr(self, "_gr_persist_hashes", None)
         if not isinstance(cache, dict):
             cache = {}
             self._gr_persist_hashes = cache
-        p_key = str(p)
-        if cache.get(p_key) == digest and p.exists():
-            return False
-        if p.exists() and cache.get(p_key) is None:
-            try:
-                existing = p.read_text(encoding="utf-8")
-                existing_digest = _hashlib.sha1(
-                    existing.encode("utf-8", errors="replace")
-                ).hexdigest()
-                cache[p_key] = existing_digest
-                if existing_digest == digest:
-                    return False
-            except Exception:
-                pass
-        tmp = p.with_suffix(p.suffix + ".tmp")
-        tmp.write_text(text, encoding="utf-8")
-        _safe_replace(tmp, p)
-        cache[p_key] = digest
-        return True
+        return write_json_if_changed(path, payload, cache, sort_keys=sort_keys)
 
     def _gr_write_bytes_if_changed(self, path, payload: bytes) -> bool:
         """Atomically write bytes only when content changed. Returns True if written.
@@ -1081,28 +1056,6 @@ class GraphRagMixin:
                     logger.debug("entity_graph msgpack save failed: %s", e)
         path = bm25_path / ".entity_graph.json"
         self._gr_write_json_if_changed(path, snapshot)
-
-    def _load_code_graph(self) -> dict:
-        """Load code graph from disk. Returns empty graph if not found."""
-        import json
-        import pathlib
-
-        path = pathlib.Path(self.config.bm25_path) / ".code_graph.json"
-        if path.exists():
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-                if isinstance(data, dict) and "nodes" in data and "edges" in data:
-                    return data
-            except Exception:
-                pass
-        return {"nodes": {}, "edges": []}
-
-    def _save_code_graph(self) -> None:
-        """Persist code graph to disk."""
-        import pathlib
-
-        path = pathlib.Path(self.config.bm25_path) / ".code_graph.json"
-        self._gr_write_json_if_changed(path, self._code_graph)
 
     @staticmethod
     def _normalize_relation_graph(raw: dict) -> dict:

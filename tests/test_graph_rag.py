@@ -12,6 +12,7 @@ import tempfile
 import threading
 from unittest.mock import MagicMock, patch
 
+from axon.code_graph import CodeGraphMixin
 from axon.config import AxonConfig
 from axon.graph_rag import GraphRagMixin
 
@@ -36,7 +37,7 @@ def _make_brain(config=None, **extra_attrs):
     cfg = config or _make_config()
     os.makedirs(cfg.bm25_path, exist_ok=True)
 
-    class FakeBrain(GraphRagMixin):
+    class FakeBrain(GraphRagMixin, CodeGraphMixin):
         pass
 
     brain = FakeBrain()
@@ -2264,7 +2265,7 @@ def _make_brain(config=None, **extra_attrs):
     cfg = config or _make_config()
     os.makedirs(cfg.bm25_path, exist_ok=True)
 
-    class FakeBrain(GraphRagMixin):
+    class FakeBrain(GraphRagMixin, CodeGraphMixin):
         pass
 
     brain = FakeBrain()
