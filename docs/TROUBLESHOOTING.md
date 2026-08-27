@@ -212,7 +212,7 @@ Known limits:
 llm:
   provider: vllm
   model: meta-llama/Llama-3.1-8B-Instruct
-  base_url: http://localhost:8420/v1
+  vllm_base_url: http://localhost:8000/v1
 ```
 
 ---
