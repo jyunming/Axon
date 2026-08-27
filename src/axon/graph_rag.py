@@ -126,6 +126,18 @@ class GraphRagMixin:
                     self._graph_lock_internal = threading.RLock()
         return self._graph_lock_internal
 
+    @property
+    def _gr_cache_lock(self) -> threading.Lock:
+        """Leaf-level lock for the GraphRAG LLM/extraction cache. Never
+        acquire _graph_lock (or _traversal_cache_lock) while holding this —
+        see the comment on _gr_cache_lock_internal's init in main.py for why.
+        """
+        if not hasattr(self, "_gr_cache_lock_internal"):
+            with GraphRagMixin._lazy_init_lock:
+                if not hasattr(self, "_gr_cache_lock_internal"):
+                    self._gr_cache_lock_internal = threading.Lock()
+        return self._gr_cache_lock_internal
+
     # Entity token index (inverted index: token -> set of entity names)
     # Not persisted; rebuilt from _entity_graph after load.
     @property
@@ -372,15 +384,16 @@ class GraphRagMixin:
         if not getattr(self.config, "graph_rag_extraction_cache", True):
             self._graph_rag_cache_dirty = False
             return
-        store = self._gr_cache_store()
-        payload = {
-            "format": "gr_ex_cache_v1",
-            "buckets": {
-                bucket: dict(store.get(bucket, {}))
-                for bucket in self._GR_PERSISTABLE_CACHE_BUCKETS
-                if store.get(bucket)
-            },
-        }
+        with self._gr_cache_lock:
+            store = self._gr_cache_store()
+            payload = {
+                "format": "gr_ex_cache_v1",
+                "buckets": {
+                    bucket: dict(store.get(bucket, {}))
+                    for bucket in self._GR_PERSISTABLE_CACHE_BUCKETS
+                    if store.get(bucket)
+                },
+            }
         mp_path = self._gr_extraction_cache_path()
         json_path = self._gr_extraction_cache_json_path()
         mp_path.parent.mkdir(parents=True, exist_ok=True)
@@ -406,7 +419,7 @@ class GraphRagMixin:
         self._graph_rag_cache_dirty = False
 
     def _gr_cache_get(self, bucket: str, key: str):
-        with self._graph_lock:
+        with self._gr_cache_lock:
             store = self._gr_cache_store()
             return store.get(bucket, {}).get(key)
 
@@ -436,7 +449,7 @@ class GraphRagMixin:
             cap = int(getattr(self.config, "graph_rag_extraction_cache_size", 5000))
         if cap <= 0:
             return
-        with self._graph_lock:
+        with self._gr_cache_lock:
             store = self._gr_cache_store()
             bucket_map = store.setdefault(bucket, {})
             bucket_map[key] = value

@@ -540,6 +540,17 @@ Your primary goal is to help the user by answering questions based on the provid
         # threads holding "different" locks for the same critical section).
         # Doing it once here, single-threaded in __init__, removes the race.
         self._graph_lock_internal: threading.RLock = threading.RLock()
+        # Dedicated leaf lock for the GraphRAG LLM/extraction cache
+        # (_gr_cache_get/_gr_cache_put). Deliberately NOT _graph_lock: those
+        # cache helpers are called from worker threads dispatched by
+        # self._executor.map/.submit (community summarization, claim
+        # extraction, description canonicalization) while the calling thread
+        # may already hold _graph_lock — an RLock only reenters for the
+        # *same* thread, so a worker thread blocks forever waiting on a lock
+        # the dispatching thread still holds. Keeping the cache lock separate
+        # and strictly leaf-level (never acquired while holding _graph_lock
+        # or _traversal_cache_lock) avoids that deadlock class entirely.
+        self._gr_cache_lock_internal: threading.Lock = threading.Lock()
         self._traversal_cache_lock_internal: threading.Lock = threading.Lock()
         self._entity_token_index_internal: dict[str, set[str]] = {}
         self._pending_persist_futures_internal: list[concurrent.futures.Future] = []
