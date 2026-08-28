@@ -234,6 +234,21 @@ class TestComputeDocHash:
         result = bridge.compute_doc_hash(text)
         assert result == hashlib.md5(text.encode("utf-8")).hexdigest()
 
+    def test_python_fallback_matches_native_algorithm(self):
+        """The Python fallback (used when the native call returns no string,
+        e.g. the extension failed to load) must compute the exact same MD5
+        digest as the native path — dedup hashes must be stable regardless
+        of whether the Rust extension happened to be available."""
+        from unittest.mock import patch
+
+        bridge = get_rust_bridge()
+        text = "some document with mixed  whitespace \n content"
+        native_result = bridge.compute_doc_hash(text)
+        with patch.object(bridge, "_call", return_value=None):
+            fallback_result = bridge.compute_doc_hash(text)
+        assert fallback_result == native_result
+        assert fallback_result == hashlib.md5(text.encode("utf-8")).hexdigest()
+
 
 # ---------------------------------------------------------------------------
 # extract_code_query_tokens

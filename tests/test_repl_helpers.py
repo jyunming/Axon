@@ -55,6 +55,80 @@ class TestEstimateTokens:
         assert _estimate_tokens("abc") >= 1
 
 
+class TestConfirm:
+    """Shared yes/no confirmation helper used by /clear, /project new,
+    /project delete, /update, /config reset, and the agent-mode tool gate."""
+
+    def test_accepts_y(self):
+        from axon.repl import _confirm
+
+        assert _confirm("prompt", read_fn=lambda p: "y") is True
+
+    def test_accepts_yes(self):
+        from axon.repl import _confirm
+
+        assert _confirm("prompt", read_fn=lambda p: "yes") is True
+
+    def test_accepts_uppercase_and_whitespace(self):
+        from axon.repl import _confirm
+
+        assert _confirm("prompt", read_fn=lambda p: "  Y  ") is True
+        assert _confirm("prompt", read_fn=lambda p: "YES") is True
+
+    def test_rejects_n(self):
+        from axon.repl import _confirm
+
+        assert _confirm("prompt", read_fn=lambda p: "n") is False
+
+    def test_rejects_empty(self):
+        from axon.repl import _confirm
+
+        assert _confirm("prompt", read_fn=lambda p: "") is False
+
+    def test_rejects_garbage(self):
+        from axon.repl import _confirm
+
+        assert _confirm("prompt", read_fn=lambda p: "sure whatever") is False
+
+    def test_eof_treated_as_no(self):
+        from axon.repl import _confirm
+
+        def _raise(p):
+            raise EOFError
+
+        assert _confirm("prompt", read_fn=_raise) is False
+
+    def test_keyboard_interrupt_treated_as_no(self):
+        from axon.repl import _confirm
+
+        def _raise(p):
+            raise KeyboardInterrupt
+
+        assert _confirm("prompt", read_fn=_raise) is False
+
+    def test_default_read_fn_is_input(self):
+        """read_fn defaults to the builtin input — checked via the function
+        signature rather than by calling it, since the default is bound at
+        def-time and wouldn't observe a later `patch("builtins.input")`."""
+        import inspect
+
+        from axon.repl import _confirm
+
+        assert inspect.signature(_confirm).parameters["read_fn"].default is input
+
+    def test_passes_prompt_through_to_read_fn(self):
+        from axon.repl import _confirm
+
+        captured = []
+
+        def _capture(p):
+            captured.append(p)
+            return "n"
+
+        _confirm("Delete everything? [y/N] ", read_fn=_capture)
+        assert captured == ["Delete everything? [y/N] "]
+
+
 class TestTokenBar:
     def test_zero_usage(self):
         from axon.repl import _token_bar

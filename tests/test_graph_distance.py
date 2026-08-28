@@ -41,7 +41,7 @@ def _make_relation(target: str, weight: float = 1.0, relation: str = "RELATED_TO
 
 
 class TestBuildNxGraph:
-    """Unit tests for GraphRagMixin._build_nx_graph()."""
+    """Unit tests for GraphRagMixin._build_networkx_graph()."""
 
     def _make_mixin(self, entity_graph, relation_graph):
         from axon.graph_rag import GraphRagMixin
@@ -58,7 +58,7 @@ class TestBuildNxGraph:
         eg = _make_entity_graph("alice", "bob", "carol")
         rg = {"alice": [_make_relation("bob")]}
         mixin = self._make_mixin(eg, rg)
-        G = mixin._build_nx_graph()
+        G = mixin._build_networkx_graph()
         assert "alice" in G.nodes
         assert "bob" in G.nodes
         assert "carol" in G.nodes
@@ -67,7 +67,7 @@ class TestBuildNxGraph:
         eg = _make_entity_graph("alice", "bob")
         rg = {"alice": [_make_relation("bob", weight=5.0)]}
         mixin = self._make_mixin(eg, rg)
-        G = mixin._build_nx_graph()
+        G = mixin._build_networkx_graph()
         assert G.has_edge("alice", "bob")
         edge = G.edges["alice", "bob"]
         assert edge["weight"] == 5.0
@@ -82,7 +82,7 @@ class TestBuildNxGraph:
             ]
         }
         mixin = self._make_mixin(eg, rg)
-        G = mixin._build_nx_graph()
+        G = mixin._build_networkx_graph()
         dist_ab = G.edges["a", "b"]["distance"]
         dist_ac = G.edges["a", "c"]["distance"]
         assert dist_ab < dist_ac, "Higher weight should yield smaller distance"
@@ -91,18 +91,18 @@ class TestBuildNxGraph:
         eg = _make_entity_graph("x", "y")
         rg = {"x": [_make_relation("y")]}
         mixin = self._make_mixin(eg, rg)
-        G1 = mixin._build_nx_graph()
+        G1 = mixin._build_networkx_graph()
         assert mixin._nx_graph_dirty is False
-        G2 = mixin._build_nx_graph()
+        G2 = mixin._build_networkx_graph()
         assert G1 is G2, "Should return the same cached object"
 
     def test_dirty_flag_triggers_rebuild(self):
         eg = _make_entity_graph("x", "y")
         rg = {"x": [_make_relation("y")]}
         mixin = self._make_mixin(eg, rg)
-        G1 = mixin._build_nx_graph()
+        G1 = mixin._build_networkx_graph()
         mixin._nx_graph_dirty = True
-        G2 = mixin._build_nx_graph()
+        G2 = mixin._build_networkx_graph()
         assert G1 is not G2, "Dirty flag should cause rebuild"
 
     def test_save_entity_graph_marks_dirty(self):
@@ -335,7 +335,7 @@ class TestExpandWithEntityGraph:
 
 
 def _build_nx_graph_for(obj):
-    """Mirror of GraphRagMixin._build_nx_graph() for test objects."""
+    """Mirror of GraphRagMixin._build_networkx_graph() for test objects."""
     if not getattr(obj, "_nx_graph_dirty", True) and getattr(obj, "_nx_graph", None) is not None:
         return obj._nx_graph
 
