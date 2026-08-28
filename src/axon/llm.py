@@ -291,6 +291,46 @@ def message_text(message) -> str:
     return ""
 
 
+def _probe_openai_compatible_models(url: str, api_key: str | None, timeout: float) -> dict:
+    """``GET <url>/models`` and report reachability + model ids.
+
+    Shared network-probe core for ``OpenLLM.ping_local`` (REPL / REST) and
+    ``doctor.check_local_llm_reachable`` (``axon --doctor``) — both need to
+    answer "is this OpenAI-compatible endpoint up, and what does it serve",
+    just with different presentation. Deliberately uses ``GET /models``
+    rather than a chat completion: it is cheap, needs no model loaded, and
+    is the one management endpoint every OpenAI-compatible server
+    implements.
+
+    Assumes ``url`` is already non-empty and stripped — callers own the
+    "is a base_url even configured" check, since their error messaging for
+    that case differs. Never raises; callers are diagnostics that want to
+    report a failure, not propagate one.
+
+    Returns ``{"reachable": bool, "models": list[str], "error": str | None}``.
+    """
+    result: dict = {"reachable": False, "models": [], "error": None}
+    try:
+        import httpx
+
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        response = httpx.get(f"{url}/models", timeout=timeout, headers=headers)
+        response.raise_for_status()
+        payload = response.json()
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not raise
+        result["error"] = f"{type(exc).__name__}: {exc}"
+        return result
+
+    result["reachable"] = True
+    # OpenAI shape is {"data": [{"id": ...}]}; some servers return a bare list.
+    rows = payload.get("data", payload) if isinstance(payload, dict) else payload
+    if isinstance(rows, list):
+        result["models"] = [
+            str(r["id"]) for r in rows if isinstance(r, dict) and r.get("id") is not None
+        ]
+    return result
+
+
 class OpenLLM:
     """Unified LLM client supporting ollama, gemini, ollama_cloud, openai, grok, vllm, and copilot.
     The ``copilot`` provider routes completions through the VS Code extension
@@ -445,31 +485,15 @@ class OpenLLM:
         want to report a failure, not propagate one.
         """
         url = (base_url or self.config.local_base_url or "").rstrip("/")
-        result = {"reachable": False, "base_url": url, "models": [], "error": None}
         if not url:
-            result["error"] = "no base_url configured"
-            return result
-        try:
-            import httpx
-
-            headers = {}
-            if self.config.local_api_key:
-                headers["Authorization"] = f"Bearer {self.config.local_api_key}"
-            response = httpx.get(f"{url}/models", timeout=timeout, headers=headers)
-            response.raise_for_status()
-            payload = response.json()
-        except Exception as exc:  # noqa: BLE001 - diagnostics must not raise
-            result["error"] = f"{type(exc).__name__}: {exc}"
-            return result
-
-        result["reachable"] = True
-        # OpenAI shape is {"data": [{"id": ...}]}; some servers return a bare list.
-        rows = payload.get("data", payload) if isinstance(payload, dict) else payload
-        if isinstance(rows, list):
-            result["models"] = [
-                str(r["id"]) for r in rows if isinstance(r, dict) and r.get("id") is not None
-            ]
-        return result
+            return {
+                "reachable": False,
+                "base_url": url,
+                "models": [],
+                "error": "no base_url configured",
+            }
+        probe = _probe_openai_compatible_models(url, self.config.local_api_key, timeout)
+        return {"base_url": url, **probe}
 
     def _local_client(self):
         """OpenAI SDK client pointed at the configured local endpoint.

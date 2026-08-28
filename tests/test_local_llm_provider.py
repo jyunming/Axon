@@ -317,6 +317,42 @@ class TestDoctorLocalCheck:
         assert "+3 more" in result.detail
 
 
+class TestSharedProbeHelper:
+    """OpenLLM.ping_local and doctor.check_local_llm_reachable must share one
+    /models probe implementation, not maintain independent copies of the
+    request + response-parsing logic."""
+
+    def test_ping_local_delegates_to_shared_probe(self):
+        from axon import llm as llm_module
+
+        llm = OpenLLM(AxonConfig(llm_provider="local", local_base_url="http://x:8080/v1"))
+        with patch.object(
+            llm_module,
+            "_probe_openai_compatible_models",
+            return_value={"reachable": True, "models": ["m1"], "error": None},
+        ) as mock_probe:
+            result = llm.ping_local()
+        mock_probe.assert_called_once_with("http://x:8080/v1", "", 5.0)
+        assert result == {
+            "base_url": "http://x:8080/v1",
+            "reachable": True,
+            "models": ["m1"],
+            "error": None,
+        }
+
+    def test_doctor_check_delegates_to_shared_probe(self):
+        from axon import llm as llm_module
+
+        with patch.object(
+            llm_module,
+            "_probe_openai_compatible_models",
+            return_value={"reachable": True, "models": ["m1"], "error": None},
+        ) as mock_probe:
+            result = check_local_llm_reachable("local", "http://x:8080/v1", "secret")
+        mock_probe.assert_called_once_with("http://x:8080/v1", "secret", 5.0)
+        assert result.status == "ok"
+
+
 class TestLocalToolCalling:
     """Function calling must work for local models, not just cloud ones."""
 
