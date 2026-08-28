@@ -2060,3 +2060,39 @@ class TestReplUpdate:
         with patch("httpx.get", side_effect=AssertionError("must not hit network in tests")):
             output = _run_repl_with_commands(["/help"], brain=_make_mock_brain())
         assert isinstance(output, str)
+
+
+class TestReplConfigReset:
+    """/config reset writes _DEFAULT_CONFIG_YAML atomically via
+    write_text_if_changed() instead of a bare write_text() — this must not
+    change the observable file content or the confirm-gated behavior."""
+
+    def test_confirmed_writes_default_config_content(self, tmp_path, capsys):
+        from axon.config import _DEFAULT_CONFIG_YAML
+        from axon.repl import _handle_config_cmd
+
+        target = tmp_path / "cfg.yaml"
+        with patch("axon.repl._confirm", return_value=True):
+            _handle_config_cmd("reset", None, str(target))
+        assert target.read_text(encoding="utf-8") == _DEFAULT_CONFIG_YAML
+        assert "Config reset to defaults" in capsys.readouterr().out
+
+    def test_declined_does_not_write(self, tmp_path, capsys):
+        from axon.repl import _handle_config_cmd
+
+        target = tmp_path / "cfg.yaml"
+        with patch("axon.repl._confirm", return_value=False):
+            _handle_config_cmd("reset", None, str(target))
+        assert not target.exists()
+        assert "Cancelled" in capsys.readouterr().out
+
+    def test_second_reset_is_a_no_op_write(self, tmp_path):
+        """Re-running reset when content is already at defaults exercises the
+        skip-if-unchanged path — must not error or leave a stray .tmp file."""
+        from axon.repl import _handle_config_cmd
+
+        target = tmp_path / "cfg.yaml"
+        with patch("axon.repl._confirm", return_value=True):
+            _handle_config_cmd("reset", None, str(target))
+            _handle_config_cmd("reset", None, str(target))
+        assert not target.with_suffix(target.suffix + ".tmp").exists()

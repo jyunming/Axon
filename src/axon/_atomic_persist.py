@@ -57,3 +57,53 @@ def write_json_if_changed(
     _atomic_replace(tmp, p)
     cache[p_key] = digest
     return True
+
+
+def write_bytes_if_changed(
+    path: str | pathlib.Path,
+    payload: bytes,
+    cache: dict[str, str],
+) -> bool:
+    """Atomically write raw *payload* bytes to *path*, skipping unchanged content.
+
+    Same digest-cache / skip-if-unchanged / Windows-safe-replace contract as
+    :func:`write_json_if_changed`, for callers whose payload isn't JSON
+    (msgpack, YAML text already encoded to bytes, key material, etc.).
+    Pass a throwaway ``{}`` for *cache* for one-shot writers that don't
+    need cross-call digest reuse.
+    """
+    p = pathlib.Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha1(payload).hexdigest()
+    p_key = str(p)
+    if cache.get(p_key) == digest and p.exists():
+        return False
+    if p.exists() and cache.get(p_key) is None:
+        try:
+            existing_digest = hashlib.sha1(p.read_bytes()).hexdigest()
+            cache[p_key] = existing_digest
+            if existing_digest == digest:
+                return False
+        except Exception:
+            pass
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    tmp.write_bytes(payload)
+    _atomic_replace(tmp, p)
+    cache[p_key] = digest
+    return True
+
+
+def write_text_if_changed(
+    path: str | pathlib.Path,
+    text: str,
+    cache: dict[str, str],
+    *,
+    encoding: str = "utf-8",
+) -> bool:
+    """Atomically write *text* to *path*, skipping unchanged content.
+
+    Thin wrapper over :func:`write_bytes_if_changed` for plain-text content
+    (YAML, ``.env``-style key=value files, newline-joined lists) that isn't
+    JSON-serializable via :func:`write_json_if_changed`.
+    """
+    return write_bytes_if_changed(path, text.encode(encoding, errors="replace"), cache)

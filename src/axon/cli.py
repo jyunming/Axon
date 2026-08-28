@@ -950,12 +950,13 @@ def main():
         import os as _os
         from pathlib import Path as _Path
 
+        from axon._atomic_persist import write_text_if_changed
         from axon.config import _DEFAULT_CONFIG_YAML
         from axon.config import _USER_CONFIG_PATH as _UCP
 
         _target = args.config or str(_UCP)
         _os.makedirs(_os.path.dirname(_os.path.expanduser(_target)), exist_ok=True)
-        _Path(_os.path.expanduser(_target)).write_text(_DEFAULT_CONFIG_YAML, encoding="utf-8")
+        write_text_if_changed(_Path(_os.path.expanduser(_target)), _DEFAULT_CONFIG_YAML, {})
         print(f"Config reset to defaults at {_target}")
         sys.exit(0)
     if args.setup:
