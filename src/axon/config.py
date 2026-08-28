@@ -1136,9 +1136,11 @@ class AxonConfig:
         if not os.path.exists(path):
             if using_default:
                 try:
+                    from axon._atomic_persist import write_text_if_changed
+
                     cfg_path = Path(path)
                     cfg_path.parent.mkdir(parents=True, exist_ok=True)
-                    cfg_path.write_text(_DEFAULT_CONFIG_YAML, encoding="utf-8")
+                    write_text_if_changed(cfg_path, _DEFAULT_CONFIG_YAML, {})
                     logger.info("Created default config at %s --' edit it to customise Axon.", path)
                     # Fall through so the newly-written file is parsed; do NOT return cls()
                     # here --' that would silently use the dataclass defaults (raptor=True etc.)
@@ -1570,8 +1572,10 @@ class AxonConfig:
             )
             return
         os.makedirs(os.path.dirname(_resolved_target), exist_ok=True)
-        with open(_resolved_target, "w", encoding="utf-8") as f:
-            yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+        from axon._atomic_persist import write_text_if_changed
+
+        _yaml_text = yaml.dump(data, default_flow_style=False, sort_keys=False)
+        write_text_if_changed(_resolved_target, _yaml_text, {})
         logger.info(f"Configuration saved to {target}")
 
     @classmethod

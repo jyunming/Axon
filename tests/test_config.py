@@ -269,6 +269,33 @@ class TestSave:
 
         assert nested.exists()
 
+    def test_save_writes_atomically_no_stray_tmp_file(self, tmp_path):
+        """save() now goes through write_text_if_changed() (temp file +
+        os.replace) instead of a bare open().write() — a crash mid-write
+        must never leave a truncated config.yaml, and a completed save must
+        never leave the .tmp file behind."""
+
+        cfg = AxonConfig()
+        target = tmp_path / "config.yaml"
+
+        cfg.save(str(target))
+
+        assert target.exists()
+        assert not target.with_suffix(target.suffix + ".tmp").exists()
+
+    def test_save_twice_unchanged_is_a_no_op_write(self, tmp_path):
+        """Saving identical content twice in a row must skip the second
+        write (the skip-if-unchanged path) rather than always rewriting."""
+
+        cfg = AxonConfig()
+        target = tmp_path / "config.yaml"
+
+        cfg.save(str(target))
+        mtime_before = target.stat().st_mtime_ns
+        cfg.save(str(target))
+
+        assert target.stat().st_mtime_ns == mtime_before
+
     def test_save_then_load_round_trip(self, tmp_path):
         """save() + load() round-trip preserves core fields."""
 

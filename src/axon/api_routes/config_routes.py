@@ -242,11 +242,12 @@ async def reset_config():
     import os
     from pathlib import Path
 
+    from axon._atomic_persist import write_text_if_changed
     from axon.config import _DEFAULT_CONFIG_YAML, _USER_CONFIG_PATH
 
     target = str(_USER_CONFIG_PATH)
     os.makedirs(os.path.dirname(target), exist_ok=True)
-    Path(target).write_text(_DEFAULT_CONFIG_YAML, encoding="utf-8")
+    write_text_if_changed(Path(target), _DEFAULT_CONFIG_YAML, {})
     logger.info("Config reset to defaults at %s", target)
     return {"written_to": target}
 
