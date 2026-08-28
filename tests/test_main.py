@@ -12252,16 +12252,33 @@ def _simple_doc(doc_id="doc1", text="hello world", source="test.txt"):
 
 class TestIngestBasic:
     def test_ingest_empty_list_returns_early(self, brain):
-        brain.ingest([])
+        result = brain.ingest([])
 
         brain.vector_store.add.assert_not_called()
+        assert result == 0
 
     def test_ingest_single_doc(self, brain):
         brain.embedding.embed.return_value = [[0.1] * 10]
 
-        brain.ingest([_simple_doc()])
+        result = brain.ingest([_simple_doc()])
 
         brain.vector_store.add.assert_called_once()
+        assert result == 1
+
+    def test_ingest_returns_zero_when_everything_deduped(self, brain):
+        """ingest()'s return value must let callers distinguish "nothing new
+        to do" from "wrote N chunks" — the caller-visible surface of the
+        Layer A / Layer B dedup-disagreement fix."""
+        brain.config.dedup_on_ingest = True
+
+        doc = _simple_doc()
+
+        first = brain.ingest([doc])
+
+        second = brain.ingest([doc])
+
+        assert first == 1
+        assert second == 0
 
     def test_ingest_records_doc_versions(self, brain):
         brain.ingest([_simple_doc(source="file.txt")])

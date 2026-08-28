@@ -397,9 +397,19 @@ async def add_text(request: TextIngestRequest):
         for doc in documents:
             doc["metadata"].update(request.metadata)
     try:
-        await asyncio.to_thread(brain.ingest, documents)
+        n_written = await asyncio.to_thread(brain.ingest, documents)
         _api._record_dedup(request.text, doc_id, project_key)
-        return {"status": "success", "doc_id": doc_id, "chunks": len(documents)}
+        if n_written == 0:
+            # Layer B's whole-text hash check (above) saw this as new, but
+            # AxonBrain.ingest()'s own chunk-level dedup found every chunk
+            # already present — nothing was actually written.
+            return {
+                "status": "skipped",
+                "doc_id": doc_id,
+                "chunks": 0,
+                "reason": "already_ingested",
+            }
+        return {"status": "success", "doc_id": doc_id, "chunks": n_written}
     except Exception as e:
         logger.error(f"Error adding text: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -449,9 +459,19 @@ async def add_texts(request: BatchTextIngestRequest):
         results.append({"id": doc_id, "status": "created", "chunks": len(item_docs)})
     if docs_to_ingest:
         try:
-            await asyncio.to_thread(brain.ingest, docs_to_ingest)
+            n_written = await asyncio.to_thread(brain.ingest, docs_to_ingest)
             for doc_id, text in pending_records:
                 _api._record_dedup(text, doc_id, project_key)
+            if n_written == 0:
+                # AxonBrain.ingest()'s own chunk-level dedup found every chunk
+                # in this batch already present, despite Layer B's per-item
+                # whole-text hash check (above) reporting them all as new —
+                # downgrade the optimistic "created" statuses set above so
+                # callers don't see "success" for a batch that wrote nothing.
+                for r in results:
+                    if r["status"] == "created":
+                        r["status"] = "skipped"
+                        r["error"] = None
         except Exception as e:
             logger.error(f"Error batch-ingesting texts: {e}")
             raise HTTPException(status_code=500, detail=str(e))
@@ -494,11 +514,18 @@ async def ingest_url(request: URLIngestRequest, req: Request):
     if skip:
         return {**skip, "doc_id": skip["doc_id"], "url": request.url}
     try:
-        await asyncio.to_thread(brain.ingest, [doc])
+        n_written = await asyncio.to_thread(brain.ingest, [doc])
         _api._record_dedup(doc["text"], doc["id"], project_key)
     except Exception as exc:
         logger.error(f"Error ingesting URL content: {exc}")
         raise HTTPException(status_code=500, detail=str(exc))
+    if n_written == 0:
+        return {
+            "status": "skipped",
+            "doc_id": doc["id"],
+            "url": request.url,
+            "reason": "already_ingested",
+        }
     return {"status": "ingested", "doc_id": doc["id"], "url": request.url}
 
 
@@ -674,13 +701,22 @@ async def delete_documents(
         existing_ids_set = {doc["id"] for doc in existing}
         existing_ids = [i for i in request.doc_ids if i in existing_ids_set]
         not_found = [i for i in request.doc_ids if i not in existing_ids_set]
+        # Source ids (e.g. "agent_doc_x") behind the deleted chunks, so
+        # _purge_dedup can match _source_hashes' source-level records —
+        # comparing against chunk ids alone never matches for a multi-chunk
+        # source. Seed from the directly-matched docs' own metadata; the
+        # not-found expansion below adds any resolved via the BM25 corpus.
+        resolved_sources: set[str] = {
+            doc.get("metadata", {}).get("source", "")
+            for doc in existing
+            if doc.get("metadata", {}).get("source")
+        }
         # Expand any not-found IDs that are source doc IDs (e.g. returned by
         # ingest_text) to their actual chunk IDs via the BM25 corpus, then
         # delete those expanded chunk IDs from both stores.
         if not_found and brain.bm25 is not None:
             not_found_set = set(not_found)
             expanded: list[str] = []
-            resolved_sources: set[str] = set()
             for chunk in brain.bm25.corpus:
                 src = chunk.get("metadata", {}).get("source", "")
                 if src in not_found_set:
@@ -704,7 +740,7 @@ async def delete_documents(
             brain._graph_backend.delete_documents(existing_ids)
             from axon import api as _api
 
-            _api._purge_dedup(existing_ids, project)
+            _api._purge_dedup(existing_ids, project, source_ids=resolved_sources)
         gov.emit(
             "delete",
             "document",

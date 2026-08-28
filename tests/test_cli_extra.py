@@ -18,6 +18,7 @@ All imports inside main() are lazy, so we patch at the source module level:
 from __future__ import annotations
 
 import io
+import os
 import sys
 from contextlib import redirect_stdout
 from unittest.mock import MagicMock, call, patch
@@ -511,6 +512,77 @@ class TestMainIngest:
         docs_passed = brain.ingest.call_args[0][0]
         for doc in docs_passed:
             assert "[File Path:" not in doc["text"]
+
+
+class TestCliRefreshHashMatch:
+    """axon --ingest --refresh must compare like-for-like hashes against the
+    stored MD5 in _doc_versions (main.py), not a SHA-256 — a mismatch here
+    means "skip unchanged" never fires and every refresh re-ingests
+    everything, regardless of whether the file actually changed."""
+
+    def test_refresh_skips_unchanged_file(self, brain, tmp_path):
+        import hashlib
+
+        text = "unchanged content"
+        test_file = tmp_path / "doc.txt"
+        test_file.write_text(text)
+        content_hash = hashlib.md5(text.encode("utf-8", errors="replace")).hexdigest()
+        brain.get_doc_versions.return_value = {str(test_file): {"content_hash": content_hash}}
+        fake_doc = {"text": text, "metadata": {"type": "text"}}
+        loader_mock = MagicMock()
+        loader_mock.loaders = {".txt": MagicMock(load=MagicMock(return_value=[fake_doc]))}
+        with patch("axon.loaders.DirectoryLoader", return_value=loader_mock):
+            run_cli("--refresh")
+        brain.ingest.assert_not_called()
+
+    def test_refresh_reingests_changed_file(self, brain, tmp_path):
+        import hashlib
+
+        old_text = "old content"
+        new_text = "new content"
+        test_file = tmp_path / "doc.txt"
+        test_file.write_text(new_text)
+        old_hash = hashlib.md5(old_text.encode("utf-8", errors="replace")).hexdigest()
+        brain.get_doc_versions.return_value = {str(test_file): {"content_hash": old_hash}}
+        fake_doc = {"text": new_text, "metadata": {"type": "text"}}
+        loader_mock = MagicMock()
+        loader_mock.loaders = {".txt": MagicMock(load=MagicMock(return_value=[fake_doc]))}
+        with patch("axon.loaders.DirectoryLoader", return_value=loader_mock):
+            run_cli("--refresh")
+        brain.ingest.assert_called_once()
+
+
+class TestCliDeleteDocMultiChunk:
+    """--delete-doc's _ingested_hashes cleanup discarded _doc_versions'
+    whole-source combined hash, but _ingested_hashes stores one hash per
+    chunk — for any multi-chunk source this was always a silent no-op,
+    leaving stale hashes that block a legitimate future re-ingest."""
+
+    def test_delete_doc_discards_all_chunk_hashes(self, brain):
+        import hashlib
+
+        chunk0_text = "chunk zero text"
+        chunk1_text = "chunk one text"
+        chunk0_hash = hashlib.md5(chunk0_text.encode("utf-8", errors="replace")).hexdigest()
+        chunk1_hash = hashlib.md5(chunk1_text.encode("utf-8", errors="replace")).hexdigest()
+        unrelated_hash = "unrelated0000000000000000000000"
+
+        brain.list_documents.return_value = [
+            {"source": "doc1.txt", "chunks": 2, "doc_ids": ["doc1_chunk_0", "doc1_chunk_1"]}
+        ]
+        brain._doc_versions = {"doc1.txt": {"content_hash": "whole-source-combined-hash-unused"}}
+        brain._ingested_hashes = {chunk0_hash, chunk1_hash, unrelated_hash}
+        brain.vector_store.get_by_ids.return_value = [
+            {"id": "doc1_chunk_0", "text": chunk0_text},
+            {"id": "doc1_chunk_1", "text": chunk1_text},
+        ]
+        brain._doc_hash = lambda doc: hashlib.md5(
+            doc["text"].encode("utf-8", errors="replace")
+        ).hexdigest()
+
+        run_cli("--delete-doc", "doc1.txt")
+
+        assert brain._ingested_hashes == {unrelated_hash}
 
 
 # ---------------------------------------------------------------------------
@@ -1298,3 +1370,52 @@ class TestAxonUpdateSubcommand:
                     code = run_cli("update", "-y")
         assert code == 1
         assert "axon-api server is live" in capsys.readouterr().out
+
+
+class TestCliGovernance:
+    """--governance must route through server_client's shared helpers (not a
+    hand-rolled urllib call) so it sends X-API-Key like every other routed
+    CLI operation — the old hand-rolled version silently 401'd on any
+    RAG_API_KEY-secured deployment."""
+
+    def test_overview_default_is_a_get_with_api_key_header(self, capsys):
+        with patch.dict(os.environ, {"RAG_API_KEY": "secret123"}, clear=False):
+            with patch("axon.server_client._request", return_value={"ok": True}) as mock_req:
+                run_cli("--governance")
+        mock_req.assert_called_once()
+        method, url, headers = mock_req.call_args[0][:3]
+        assert method == "GET"
+        assert url.endswith("/governance/overview")
+        assert headers["X-API-Key"] == "secret123"
+        assert '"ok": true' in capsys.readouterr().out
+
+    def test_named_subcommand_maps_to_correct_route(self):
+        with patch("axon.server_client._request", return_value={}) as mock_req:
+            run_cli("--governance", "audit")
+        method, url = mock_req.call_args[0][:2]
+        assert method == "GET"
+        assert url.endswith("/governance/audit")
+
+    def test_graph_rebuild_is_a_post_with_empty_body(self):
+        with patch("axon.server_client._request", return_value={}) as mock_req:
+            run_cli("--governance", "graph-rebuild")
+        method, url = mock_req.call_args[0][:2]
+        body = mock_req.call_args.kwargs.get("body", mock_req.call_args[0][3:4])
+        assert method == "POST"
+        assert url.endswith("/governance/graph/rebuild")
+        assert body == {} or body == ({},)
+
+    def test_unknown_subcommand_does_not_call_request(self, capsys):
+        with patch("axon.server_client._request") as mock_req:
+            code = run_cli("--governance", "bogus")
+        mock_req.assert_not_called()
+        assert code == 1
+        assert "Unknown governance subcommand" in capsys.readouterr().out
+
+    def test_server_failure_reports_friendly_message(self, capsys):
+        with patch("axon.server_client._request", side_effect=ConnectionRefusedError("refused")):
+            code = run_cli("--governance")
+        assert code == 1
+        out = capsys.readouterr().out
+        assert "Governance command failed" in out
+        assert "axon-api" in out

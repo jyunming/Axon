@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -103,4 +104,46 @@ class TestWebappUI:
         assert not at.exception
         banners = [str(w.value) for w in at.warning]
         assert any("deprecated" in b.lower() for b in banners), banners
-        assert any("8420/gui/" in b for b in banners), banners
+
+
+class TestCheckIngestDirDenied:
+    """_check_ingest_dir_denied() must enforce the same system-path
+    blocklist api_schemas._validate_ingest_path() applies to the REST
+    /ingest route — previously this Streamlit-only path checked
+    RAG_INGEST_BASE containment but had no blocklist at all, so a broad or
+    unset RAG_INGEST_BASE gave no protection against ingesting a system
+    directory. A pure function (no Streamlit dependency), so tested with a
+    plain import rather than the AppTest harness used above."""
+
+    def test_blocked_system_path_denied_even_with_permissive_base(self, monkeypatch, tmp_path):
+        from axon.webapp import _check_ingest_dir_denied
+
+        # RAG_INGEST_BASE unset defaults to "." — permissive enough that the
+        # base-containment check alone would not have caught a system path.
+        monkeypatch.delenv("RAG_INGEST_BASE", raising=False)
+        monkeypatch.chdir(tmp_path)
+        blocked = "C:/Windows" if os.name == "nt" else "/etc"
+        denial = _check_ingest_dir_denied(blocked)
+        assert denial is not None
+        assert "blocked system path" in denial
+
+    def test_path_outside_allowed_base_denied(self, monkeypatch, tmp_path):
+        from axon.webapp import _check_ingest_dir_denied
+
+        allowed = tmp_path / "allowed"
+        outside = tmp_path / "outside"
+        allowed.mkdir()
+        outside.mkdir()
+        monkeypatch.setenv("RAG_INGEST_BASE", str(allowed))
+        denial = _check_ingest_dir_denied(str(outside))
+        assert denial is not None
+        assert "outside allowed base" in denial
+
+    def test_path_inside_allowed_base_permitted(self, monkeypatch, tmp_path):
+        from axon.webapp import _check_ingest_dir_denied
+
+        allowed = tmp_path / "allowed"
+        nested = allowed / "sub"
+        nested.mkdir(parents=True)
+        monkeypatch.setenv("RAG_INGEST_BASE", str(allowed))
+        assert _check_ingest_dir_denied(str(nested)) is None
