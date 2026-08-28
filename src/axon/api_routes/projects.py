@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -62,11 +61,6 @@ _SENSITIVE_FIELDS = frozenset(
         "local_api_key",
     }
 )
-
-# Session IDs are interpolated directly into ``session_<id>.json`` by
-# ``axon.sessions._session_path`` — restrict to a filesystem-safe
-# alphabet to block traversal-style payloads at the route boundary.
-_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 
 def _mask_if_sensitive(flat_key: str, value):
@@ -502,7 +496,7 @@ async def list_sessions():
 async def get_session(session_id: str):
     """Retrieve a specific session by ID."""
     from axon import api as _api
-    from axon.sessions import _load_session
+    from axon.sessions import _SESSION_ID_RE, _load_session
 
     brain = _api.brain
     if not brain:
