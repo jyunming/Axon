@@ -775,6 +775,7 @@ class AxonConfig:
     raptor_chunk_group_size: int = 5
     raptor_max_levels: int = 2  # recursive summarization depth
     raptor_cache_summaries: bool = True  # skip LLM when window content unchanged
+    raptor_summary_cache_size: int = 500  # max cached summaries; oldest evicted past this
     raptor_drilldown: bool = True  # replace summary hits with leaf chunks
     raptor_drilldown_top_k: int = 5  # max leaves substituted per summary hit
     raptor_retrieval_mode: str = "tree_traversal"  # tree_traversal|summary_first|corpus_overview

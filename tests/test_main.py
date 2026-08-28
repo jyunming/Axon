@@ -11266,6 +11266,24 @@ class TestGenerateRaptorSummaries:
         result = brain._generate_raptor_summaries(docs)
         assert result == []
 
+    def test_raptor_summary_cache_evicts_past_cap(self, brain):
+        brain.config.raptor_chunk_group_size = 1
+        brain.config.raptor_cache_summaries = True
+        brain.config.raptor_summary_cache_size = 5
+        brain.config.raptor_max_levels = 1
+        brain.llm.complete = MagicMock(return_value="Summary text.")
+
+        # Distinct source + text per doc so each yields its own window and
+        # cache key; _summarise_window calls fan out concurrently across
+        # brain._executor, so this also exercises the cache under real
+        # concurrent writers, not just a size assertion.
+        docs = [
+            {"id": f"c{i}", "text": f"Distinct content {i}", "metadata": {"source": f"doc{i}.txt"}}
+            for i in range(20)
+        ]
+        brain._generate_raptor_summaries(docs)
+        assert len(brain._raptor_summary_cache) <= 5
+
 
 # ===========================================================================
 # Class 21: RAPTOR drilldown
