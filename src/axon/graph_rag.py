@@ -111,6 +111,39 @@ _GRAPHRAG_NO_DATA_ANSWER = (
 )
 
 
+def _ensure_shared_model(
+    obj, instance_attr: str, shared_dict: dict, shared_lock, cache_key, loader
+):
+    """Lazy-init a shared (class-level, cross-instance) local ML model.
+
+    Extracted from three near-identical hand-rolled implementations
+    (``_ensure_gliner``, ``_ensure_rebel``, and — previously the odd one out
+    with no sharing or locking at all — ``_ensure_llmlingua``). The fast
+    path reads *obj*'s instance attribute with no lock; a cold instance
+    falls through to the shared, lock-guarded dict keyed by *cache_key*
+    (typically ``(model_name, is_local)``) so multiple
+    ``AxonBrain``/``GraphRagEngine`` instances in the same process don't
+    each hold their own copy of identical model weights, and concurrent
+    first-callers converge on a single load instead of racing.
+
+    Deliberately a module-level function, not a ``GraphRagMixin`` method:
+    the three ``_ensure_*`` callers are exercised in tests via the unbound
+    ``GraphRagEngine._ensure_gliner(brain)`` pattern where ``brain`` may be
+    a bare ``AxonBrain``/``MagicMock`` that doesn't itself inherit
+    ``GraphRagMixin`` — a ``self.`` method call wouldn't resolve there.
+    """
+    cached = getattr(obj, instance_attr, None)
+    if cached is not None:
+        return cached
+    with shared_lock:
+        cached = shared_dict.get(cache_key)
+        if cached is None:
+            cached = loader()
+            shared_dict[cache_key] = cached
+    setattr(obj, instance_attr, cached)
+    return cached
+
+
 class GraphRagMixin:
     # Class-level guard for the rare case where mixin state is touched before
     # AxonBrain.__init__ ran (standalone mixin tests). Production goes through
@@ -310,8 +343,10 @@ class GraphRagMixin:
     # Share heavyweight local model instances across threads and brain instances.
     _shared_gliner_models: dict[tuple[str, bool], object] = {}
     _shared_rebel_pipelines: dict[tuple[str, bool], object] = {}
+    _shared_llmlingua_models: dict[tuple[str, bool], object] = {}
     _shared_gliner_lock = threading.Lock()
     _shared_rebel_lock = threading.Lock()
+    _shared_llmlingua_lock = threading.Lock()
     _GR_PERSISTABLE_CACHE_BUCKETS = ("entities", "relations")
     _GR_CS_KEY_COMPACT = {
         "title": "t",
@@ -3395,25 +3430,35 @@ class GraphRagMixin:
 
     def _ensure_llmlingua(self):
         """Lazy-initialise the LLMLingua-2 prompt compressor (TASK 14)."""
-        if not hasattr(self, "_llmlingua") or self._llmlingua is None:
+        _model = getattr(
+            self.config,
+            "graph_rag_llmlingua_model",
+            "microsoft/llmlingua-2-bert-base-multilingual-cased-meetingbank",
+        )
+        _local = os.path.isabs(_model) or os.path.isdir(_model)
+        _cache_key = (_model, bool(_local))
+
+        def _load():
             from llmlingua import PromptCompressor
 
-            _model = getattr(
-                self.config,
-                "graph_rag_llmlingua_model",
-                "microsoft/llmlingua-2-bert-base-multilingual-cased-meetingbank",
-            )
-            _local = os.path.isabs(_model) or os.path.isdir(_model)
             logger.info(
                 "GraphRAG LLMLingua: loading model '%s'%s…", _model, " (local)" if _local else ""
             )
-            self._llmlingua = PromptCompressor(
+            return PromptCompressor(
                 model_name=_model,
                 use_llmlingua2=True,
                 device_map="cpu",
                 **({"local_files_only": True} if _local else {}),
             )
-        return self._llmlingua
+
+        return _ensure_shared_model(
+            self,
+            "_llmlingua",
+            GraphRagMixin._shared_llmlingua_models,
+            GraphRagMixin._shared_llmlingua_lock,
+            _cache_key,
+            _load,
+        )
 
     def _ensure_gliner(self):
         """Lazy-initialise the GLiNER NER model (TASK 14)."""
@@ -3425,16 +3470,21 @@ class GraphRagMixin:
         _model = getattr(self.config, "graph_rag_gliner_model", "urchade/gliner_medium-v2.1")
         _local = os.path.isabs(_model) or os.path.isdir(_model)
         _cache_key = (_model, bool(_local))
-        with GraphRagMixin._shared_gliner_lock:
-            cached = GraphRagMixin._shared_gliner_models.get(_cache_key)
-            if cached is None:
-                logger.info(
-                    "GraphRAG GLiNER: loading model '%s'%s…", _model, " (local)" if _local else ""
-                )
-                cached = GLiNER.from_pretrained(_model, local_files_only=_local)
-                GraphRagMixin._shared_gliner_models[_cache_key] = cached
-        self._gliner_model = cached
-        return cached
+
+        def _load():
+            logger.info(
+                "GraphRAG GLiNER: loading model '%s'%s…", _model, " (local)" if _local else ""
+            )
+            return GLiNER.from_pretrained(_model, local_files_only=_local)
+
+        return _ensure_shared_model(
+            self,
+            "_gliner_model",
+            GraphRagMixin._shared_gliner_models,
+            GraphRagMixin._shared_gliner_lock,
+            _cache_key,
+            _load,
+        )
 
     _GLINER_LABELS = ["person", "organization", "location", "event", "concept", "product"]
     _GLINER_TYPE_MAP = {
@@ -3459,26 +3509,31 @@ class GraphRagMixin:
         _model = getattr(self.config, "graph_rag_rebel_model", "Babelscape/rebel-large")
         _local = os.path.isabs(_model) or os.path.isdir(_model)
         _cache_key = (_model, bool(_local))
-        with GraphRagMixin._shared_rebel_lock:
-            cached = GraphRagMixin._shared_rebel_pipelines.get(_cache_key)
-            if cached is None:
-                logger.info(
-                    "GraphRAG REBEL: loading model '%s'%s…",
-                    _model,
-                    " (local)" if _local else " (first-run download may take time)",
-                )
-                _load_kwargs = {"local_files_only": True} if _local else {}
-                _model_obj = AutoModelForSeq2SeqLM.from_pretrained(_model, **_load_kwargs)
-                _tokenizer = AutoTokenizer.from_pretrained(_model, **_load_kwargs)
-                cached = _hf_pipeline(
-                    "text2text-generation",
-                    model=_model_obj,
-                    tokenizer=_tokenizer,
-                    device=-1,  # CPU — avoids CUDA dependency
-                )
-                GraphRagMixin._shared_rebel_pipelines[_cache_key] = cached
-        self._rebel_pipeline = cached
-        return cached
+
+        def _load():
+            logger.info(
+                "GraphRAG REBEL: loading model '%s'%s…",
+                _model,
+                " (local)" if _local else " (first-run download may take time)",
+            )
+            _load_kwargs = {"local_files_only": True} if _local else {}
+            _model_obj = AutoModelForSeq2SeqLM.from_pretrained(_model, **_load_kwargs)
+            _tokenizer = AutoTokenizer.from_pretrained(_model, **_load_kwargs)
+            return _hf_pipeline(
+                "text2text-generation",
+                model=_model_obj,
+                tokenizer=_tokenizer,
+                device=-1,  # CPU — avoids CUDA dependency
+            )
+
+        return _ensure_shared_model(
+            self,
+            "_rebel_pipeline",
+            GraphRagMixin._shared_rebel_pipelines,
+            GraphRagMixin._shared_rebel_lock,
+            _cache_key,
+            _load,
+        )
 
     @staticmethod
     def _parse_rebel_output(text: str) -> list[dict]:
