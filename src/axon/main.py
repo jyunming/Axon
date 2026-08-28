@@ -544,8 +544,12 @@ Your primary goal is to help the user by answering questions based on the provid
         # In-memory RAPTOR summary cache {cache_key: summary_text}. RAPTOR
         # summarisation is brain-owned (see _generate_raptor_summaries), not
         # GraphRAG-owned, despite living alongside GraphRAG state in the
-        # pre-M2 load block this was ported from.
+        # pre-M2 load block this was ported from. Capped at
+        # config.raptor_summary_cache_size (oldest-inserted evicted first);
+        # _summarise_window's writes fan out across self._executor, so the
+        # cache needs its own lock to make the size-cap check+evict atomic.
         self._raptor_summary_cache: dict[str, str] = {}
+        self._raptor_cache_lock = threading.Lock()
         # GAP 6: Rebuild lock to prevent concurrent community rebuilds. Must be
         # created before get_graph_backend() below: GraphRagEngine proxies
         # this lock back onto the brain, so it needs to already exist by the
@@ -1781,9 +1785,12 @@ Your primary goal is to help the user by answering questions based on the provid
             ]
             cache_key = f"{source}|L{level}|{i}|{content_hash}"
             # return cached summary when content is unchanged
-            if self.config.raptor_cache_summaries and cache_key in self._raptor_summary_cache:
-                logger.debug(f"RAPTOR cache hit for {source} L{level}[{i}]")
-                return self._raptor_summary_cache[cache_key]
+            if self.config.raptor_cache_summaries:
+                with self._raptor_cache_lock:
+                    cached = self._raptor_summary_cache.get(cache_key)
+                if cached is not None:
+                    logger.debug(f"RAPTOR cache hit for {source} L{level}[{i}]")
+                    return cached
             prompt = (
                 "Summarise the following passage into a concise but comprehensive paragraph "
                 "that captures all key facts and concepts. "
@@ -1798,7 +1805,11 @@ Your primary goal is to help the user by answering questions based on the provid
                     return None
                 text = text.strip()
                 if self.config.raptor_cache_summaries:
-                    self._raptor_summary_cache[cache_key] = text
+                    with self._raptor_cache_lock:
+                        self._raptor_summary_cache[cache_key] = text
+                        cap = self.config.raptor_summary_cache_size
+                        while cap > 0 and len(self._raptor_summary_cache) > cap:
+                            self._raptor_summary_cache.pop(next(iter(self._raptor_summary_cache)))
                 return text
             except Exception as e:
                 logger.debug(f"RAPTOR L{level} summary failed for {source}[{i}]: {e}")
