@@ -1796,10 +1796,6 @@ class GraphRagMixin:
         self._nx_graph_dirty = False
         return self._nx_graph
 
-    def _build_nx_graph(self):
-        """Alias for _build_networkx_graph (used in tests)."""
-        return self._build_networkx_graph()
-
     def _run_community_detection(self) -> dict:
         """Run Louvain community detection. Returns {entity_lower: community_id}."""
         from axon.rust_bridge import get_rust_bridge

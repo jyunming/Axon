@@ -175,7 +175,11 @@ class RustBridge:
         out = self._call("compute_doc_hash", text)
         if isinstance(out, str):
             return out
-        return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
+        # Must match the native implementation exactly (MD5, no stripping) —
+        # this hash feeds ingest dedup, so a fallback that disagrees with the
+        # native path would silently miss/duplicate content depending on
+        # whether the Rust extension happens to be loaded.
+        return hashlib.md5(text.encode("utf-8")).hexdigest()
 
     def can_extract_code_tokens(self) -> bool:
         return self._has("extract_code_query_tokens") or True
@@ -534,7 +538,9 @@ class RustBridge:
         return inserted
 
     def can_entity_merge(self) -> bool:
-        return self._has("merge_entities_into_graph")
+        """Alias of can_merge_entities_into_graph() — kept for callers/tests
+        using this name; both probe the same native capability."""
+        return self.can_merge_entities_into_graph()
 
     def can_relation_merge(self) -> bool:
         return self._has("merge_relations_into_graph")

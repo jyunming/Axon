@@ -987,6 +987,22 @@ _MODEL_CTX: dict[str, int] = {
 }
 
 
+def _confirm(prompt: str, *, read_fn=input) -> bool:
+    """Ask a yes/no confirmation question. True only on an explicit y/yes
+    answer; EOF or Ctrl+C during the read is treated as "no" rather than
+    propagating and killing the surrounding session.
+
+    `read_fn` defaults to plain `input()` — callers running inside
+    `_interactive_repl`'s closure should pass its `_read_input` so scripted
+    test inputs and prompt_toolkit's terminal handling still apply.
+    """
+    try:
+        reply = read_fn(prompt).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return False
+    return reply in ("y", "yes")
+
+
 def _infer_provider(model: str) -> str:
     """Guess LLM provider from model name.
     Returns "gemini" for gemini-* models, "openai" for gpt-*/o1-*/o3-*/o4-*
@@ -1838,11 +1854,7 @@ def _handle_config_cmd(arg: str, brain, cfg_path: str) -> None:
             brain.config.save(cfg_path or None)
             print(f"    Saved {len(changes)} change(s) to {cfg_path or '(default path)'}.")
     elif subcmd == "reset":
-        try:
-            confirm = input("  Overwrite config.yaml with defaults? [y/N] ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            confirm = "n"
-        if confirm == "y":
+        if _confirm("  Overwrite config.yaml with defaults? [y/N] "):
             # use module-level os
             from pathlib import Path
 
@@ -2783,10 +2795,9 @@ def _interactive_repl(
                             print(
                                 "    It is recommended to create a dedicated project to keep your data organized."
                             )
-                            confirm = (
-                                _read_input("    Create a new project now? [y/N]: ").strip().lower()
-                            )
-                            if confirm == "y":
+                            if _confirm(
+                                "    Create a new project now? [y/N]: ", read_fn=_read_input
+                            ):
                                 new_name = _read_input("    New project name: ").strip().lower()
                                 if new_name:
                                     try:
@@ -3015,12 +3026,10 @@ def _interactive_repl(
                 except Exception as _e:
                     print(f"    Failed to export graph: {_e}")
             elif cmd == "/clear":
-                _confirm = (
-                    _read_input("    Clear knowledge base for the current project? [y/N]: ")
-                    .strip()
-                    .lower()
-                )
-                if _confirm not in ("y", "yes"):
+                if not _confirm(
+                    "    Clear knowledge base for the current project? [y/N]: ",
+                    read_fn=_read_input,
+                ):
                     print("    Clear cancelled.")
                     return False
                 try:
@@ -3448,17 +3457,10 @@ def _interactive_repl(
                         print("    Usage: /project delete <name>")
                     else:
                         proj_name = sub_arg.strip().lower()
-                        try:
-                            confirm = (
-                                _read_input(
-                                    f"    !  Delete project '{proj_name}' and ALL its data? [y/N]: "
-                                )
-                                .strip()
-                                .lower()
-                            )
-                        except (EOFError, KeyboardInterrupt):
-                            confirm = "n"
-                        if confirm == "y":
+                        if _confirm(
+                            f"    !  Delete project '{proj_name}' and ALL its data? [y/N]: ",
+                            read_fn=_read_input,
+                        ):
                             try:
                                 if brain._active_project == proj_name:
                                     brain.switch_project("default")
@@ -3652,12 +3654,10 @@ def _interactive_repl(
                     print(f"    Already on the latest version ({_chk.current}).")
                 else:
                     print(f"    Update available: {_chk.current} → {_chk.latest}")
-                    _reply = (
-                        _read_input("    Upgrade axon-rag and the VS Code extension now? [y/N] ")
-                        .strip()
-                        .lower()
-                    )
-                    if _reply not in ("y", "yes"):
+                    if not _confirm(
+                        "    Upgrade axon-rag and the VS Code extension now? [y/N] ",
+                        read_fn=_read_input,
+                    ):
                         print("    Cancelled.")
                     else:
                         _result = run_update(config=brain.config, force_check=False)
@@ -4692,8 +4692,7 @@ def _interactive_repl(
                             _result: list = []
 
                             def _do_confirm() -> None:
-                                ans = input(f"\n  ⚠️  {msg} [y/N]: ").strip().lower()
-                                _result.append(ans == "y")
+                                _result.append(_confirm(f"\n  ⚠️  {msg} [y/N]: "))
 
                             if _pt_app is not None and _repl_event_loop is not None:
                                 import asyncio as _aio
