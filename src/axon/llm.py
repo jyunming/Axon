@@ -172,7 +172,13 @@ def _refresh_copilot_session(oauth_token: str) -> dict:
 
 
 def _get_copilot_session_token(llm: "OpenLLM") -> str:
-    """Return a valid Copilot session token, refreshing if needed."""
+    """Return a valid Copilot session token, refreshing if needed.
+
+    Guarded by ``llm._clients_lock`` (the same lock the client-factory cache
+    uses) so two concurrent requests racing on an expired/absent session
+    don't both fire the token-exchange network call — one refreshes, the
+    other reuses the freshly-stored result.
+    """
     import time
 
     oauth_token = llm.config.copilot_pat
@@ -181,11 +187,21 @@ def _get_copilot_session_token(llm: "OpenLLM") -> str:
             "GitHub Copilot token not set. "
             "Run /keys set github_copilot or export GITHUB_COPILOT_PAT=<oauth_token>."
         )
+
+    def _is_fresh(session) -> bool:
+        return (
+            bool(session) and time.time() < session["expires_at"] - _COPILOT_SESSION_REFRESH_BUFFER
+        )
+
     session = llm._openai_clients.get("_copilot_session")
-    if not session or time.time() >= session["expires_at"] - _COPILOT_SESSION_REFRESH_BUFFER:
-        session = _refresh_copilot_session(oauth_token)
-        llm._openai_clients["_copilot_session"] = session
-    return session["token"]
+    if _is_fresh(session):
+        return session["token"]
+    with llm._clients_lock:
+        session = llm._openai_clients.get("_copilot_session")
+        if not _is_fresh(session):
+            session = _refresh_copilot_session(oauth_token)
+            llm._openai_clients["_copilot_session"] = session
+        return session["token"]
 
 
 # Static fallback used when the Copilot token isn't set or the network call fails.
@@ -291,26 +307,60 @@ class OpenLLM:
     def __init__(self, config: AxonConfig):
         self.config = config
         self._openai_clients: dict = {}
+        # Guards every read/write of _openai_clients below. AxonBrain (and
+        # therefore this OpenLLM) is a single process-wide instance served
+        # by concurrent FastAPI request handlers — without a lock, two
+        # requests racing on a cold cache entry (e.g. the first two queries
+        # after an API-key rotation) could each build their own client and
+        # one silently overwrites the other in the dict (last-write-wins,
+        # not corruption, but wasted construction and a discarded handle).
+        self._clients_lock = threading.Lock()
+
+    def _cached(self, key: str, build):
+        """Thread-safe get-or-build for ``self._openai_clients[key]``.
+
+        For caches with no separate invalidation criterion — the key itself
+        is stable (a fixed slot name) or already encodes everything that
+        should bust the cache (e.g. a compound ``f"{base_url}|{api_key}"``).
+        """
+        if key in self._openai_clients:
+            return self._openai_clients[key]
+        with self._clients_lock:
+            if key not in self._openai_clients:
+                self._openai_clients[key] = build()
+            return self._openai_clients[key]
+
+    def _cached_rebuild_on_change(self, slot_key: str, sentinel_key: str, sentinel_value, build):
+        """Thread-safe get-or-rebuild for ``self._openai_clients[slot_key]``.
+
+        For caches with a fixed slot name whose *content* invalidates when a
+        tracked value (an API key, a session token) changes — the sentinel
+        is stored separately under ``sentinel_key`` and compared each call.
+        """
+        if self._openai_clients.get(sentinel_key) == sentinel_value:
+            return self._openai_clients[slot_key]
+        with self._clients_lock:
+            if self._openai_clients.get(sentinel_key) != sentinel_value:
+                self._openai_clients[slot_key] = build()
+                self._openai_clients[sentinel_key] = sentinel_value
+            return self._openai_clients[slot_key]
 
     def _get_gemini_sdk(self) -> tuple[object, object]:
         """Resolve and cache the Gemini SDK modules (google.genai)."""
-        cached = self._openai_clients.get("_gemini_sdk")
-        if cached:
-            return cached
-        genai_sdk = import_module("google.genai")
-        genai_types = import_module("google.genai.types")
-        sdk = (genai_sdk, genai_types)
-        self._openai_clients["_gemini_sdk"] = sdk
-        return sdk
+
+        def _build():
+            genai_sdk = import_module("google.genai")
+            genai_types = import_module("google.genai.types")
+            return (genai_sdk, genai_types)
+
+        return self._cached("_gemini_sdk", _build)
 
     def _get_gemini_client(self, genai_sdk) -> object:
         """Return a cached ``google.genai.Client`` keyed by API key."""
         key = self.config.gemini_api_key or ""
-        cache_key = "_gemini_client"
-        if self._openai_clients.get("_gemini_client_api_key") != key:
-            self._openai_clients[cache_key] = genai_sdk.Client(api_key=key)
-            self._openai_clients["_gemini_client_api_key"] = key
-        return self._openai_clients[cache_key]
+        return self._cached_rebuild_on_change(
+            "_gemini_client", "_gemini_client_api_key", key, lambda: genai_sdk.Client(api_key=key)
+        )
 
     @staticmethod
     def _build_gemini_contents(
@@ -444,14 +494,16 @@ class OpenLLM:
         resolved_key = api_key or self.config.openai_api_key or self.config.api_key or "sk-dummy"
         base_part = base_url or "default"
         cache_key = f"{base_part}|{resolved_key}"
-        if cache_key not in self._openai_clients:
+
+        def _build():
             from openai import OpenAI
 
             kwargs = {"api_key": resolved_key}
             if base_url:
                 kwargs["base_url"] = base_url
-            self._openai_clients[cache_key] = OpenAI(**kwargs)
-        return self._openai_clients[cache_key]
+            return OpenAI(**kwargs)
+
+        return self._cached(cache_key, _build)
 
     def _get_grok_client(self):
         """Return a cached OpenAI-compatible client for xAI Grok.
@@ -465,14 +517,13 @@ class OpenLLM:
                 "Export XAI_API_KEY=<key> or set llm.grok_api_key in config.yaml."
             )
         cache_key = f"_grok|{self.config.grok_api_key}"
-        if cache_key not in self._openai_clients:
+
+        def _build():
             from openai import OpenAI
 
-            self._openai_clients[cache_key] = OpenAI(
-                api_key=self.config.grok_api_key,
-                base_url="https://api.x.ai/v1",
-            )
-        return self._openai_clients[cache_key]
+            return OpenAI(api_key=self.config.grok_api_key, base_url="https://api.x.ai/v1")
+
+        return self._cached(cache_key, _build)
 
     def _get_copilot_client(self):
         """Return an OpenAI client authenticated with the current Copilot session token.
@@ -481,11 +532,12 @@ class OpenLLM:
         every ~30 minutes; this method refreshes it transparently and rebuilds the
         client only when the token changes.
         """
-        from openai import OpenAI
-
         session_token = _get_copilot_session_token(self)
-        if self._openai_clients.get("_copilot_token") != session_token:
-            self._openai_clients["_copilot"] = OpenAI(
+
+        def _build():
+            from openai import OpenAI
+
+            return OpenAI(
                 base_url="https://api.githubcopilot.com",
                 api_key=session_token,
                 default_headers={
@@ -494,8 +546,8 @@ class OpenLLM:
                     "Copilot-Integration-Id": "axon",
                 },
             )
-            self._openai_clients["_copilot_token"] = session_token
-        return self._openai_clients["_copilot"]
+
+        return self._cached_rebuild_on_change("_copilot", "_copilot_token", session_token, _build)
 
     def complete(
         self, prompt: str, system_prompt: str = None, chat_history: list[dict[str, str]] = None
