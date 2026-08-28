@@ -328,6 +328,70 @@ class TestExpandWithEntityGraph:
         assert "chunk_b" in fetched_ids
         assert "chunk_c" not in fetched_ids
 
+    def test_traversal_cache_hit_skips_bfs_recompute(self):
+        """A second call with the same entity-set/hop params must reuse the
+        cached BFS result via lru_ttl_get() instead of re-walking the
+        relation graph — regression guard for the shared _lru_ttl_cache
+        consolidation (previously a hand-rolled OrderedDict dance here)."""
+
+        class _CountingDict(dict):
+            """Plain dict's .get is a read-only slot and can't be patched
+            directly — count calls via a subclass instead."""
+
+            def __init__(self, *a, **kw):
+                super().__init__(*a, **kw)
+                self.get_calls = 0
+
+            def get(self, *a, **kw):
+                self.get_calls += 1
+                return super().get(*a, **kw)
+
+        eg = _make_entity_graph("alice", "bob")
+        rg = _CountingDict({"alice": [_make_relation("bob", weight=5.0)]})
+        router = self._make_router(eg, rg)
+        router._extract_entities.return_value = [
+            {"name": "alice", "type": "CONCEPT", "description": ""}
+        ]
+        router.vector_store.get_by_ids = MagicMock(
+            return_value=[{"id": "chunk_bob", "text": "Bob content", "score": 0.0}]
+        )
+
+        router.expand_with_entity_graph("alice", [])
+        assert len(router._traversal_cache) == 1
+        calls_after_first = rg.get_calls
+        assert calls_after_first > 0, "BFS hop loop should have called relation_graph.get()"
+
+        router.expand_with_entity_graph("alice", [])
+        assert (
+            rg.get_calls == calls_after_first
+        ), "cache hit must skip re-walking the relation graph"
+        assert len(router._traversal_cache) == 1
+
+    def test_traversal_cache_evicts_lru_when_full(self):
+        """Distinct entity-set cache keys beyond maxsize evict the LRU entry
+        via lru_ttl_put() — regression guard for the consolidated cache."""
+        eg = _make_entity_graph("a", "b", "c", "d")
+        rg = {
+            "a": [_make_relation("x", weight=5.0)],
+            "b": [_make_relation("x", weight=5.0)],
+            "c": [_make_relation("x", weight=5.0)],
+        }
+        router = self._make_router(eg, rg)
+        router._traversal_cache_maxsize_internal = 2
+        router.vector_store.get_by_ids = MagicMock(return_value=[])
+
+        for name in ("a", "b", "c"):
+            router._extract_entities.return_value = [
+                {"name": name, "type": "CONCEPT", "description": ""}
+            ]
+            router.expand_with_entity_graph(name, [])
+
+        assert len(router._traversal_cache) == 2
+        cached_keys = [k[0] for k in router._traversal_cache]
+        assert frozenset({"a"}) not in cached_keys, "oldest entry ('a') should be evicted"
+        assert frozenset({"b"}) in cached_keys
+        assert frozenset({"c"}) in cached_keys
+
 
 # ---------------------------------------------------------------------------
 # Helper: build nx.Graph from a plain object's entity/relation data

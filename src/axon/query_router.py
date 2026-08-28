@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from axon.config import AxonConfig
 
+from axon._lru_ttl_cache import lru_ttl_get, lru_ttl_put  # noqa: E402
 from axon.code_retrieval import (  # noqa: E402
     CodeRetrievalDiagnostics,
     CodeRetrievalTrace,
@@ -1484,36 +1485,31 @@ class QueryRouterMixin:
         cache_key = None
         if cfg.query_cache and not chat_history and cfg.query_cache_size >= 1:
             cache_key = self._make_cache_key(query, filters, cfg)
-            with self._cache_lock:
-                cached = self._query_cache.get(cache_key)
-                if cached is not None:
-                    # Tuple layout:
-                    #   (stored_time, response, citations, provenance, diagnostics)
-                    # Legacy shorter tuples are still accepted for backwards
-                    # compatibility with externally-injected entries (tests).
-                    stored_time, stored_response, *rest = cached
-                    stored_citations = rest[0] if rest else {"sources": [], "citations": []}
-                    stored_provenance = rest[1] if len(rest) > 1 else {}
-                    stored_diagnostics = rest[2] if len(rest) > 2 else None
-                    ttl = getattr(cfg, "query_cache_ttl", 1800)
-                    if ttl <= 0 or time.monotonic() - stored_time < ttl:
-                        logger.info(f"Cache hit for query: {query[:60]}")
-                        self._query_cache.move_to_end(cache_key)
-                        # Restore brain-level state so callers reading
-                        # _last_citations / _last_provenance / _last_diagnostics
-                        # after a cache hit see the cached query's data, not
-                        # stale state from a different prior call. Deep-copy
-                        # everything we return so subsequent mutations of the
-                        # restored dicts can't corrupt the cached originals.
-                        import copy as _copy
+            ttl = getattr(cfg, "query_cache_ttl", 1800)
+            cached = lru_ttl_get(self._query_cache, self._cache_lock, cache_key, ttl)
+            if cached is not None:
+                # Tuple layout:
+                #   (stored_time, response, citations, provenance, diagnostics)
+                # Legacy shorter tuples are still accepted for backwards
+                # compatibility with externally-injected entries (tests).
+                _stored_time, stored_response, *rest = cached
+                stored_citations = rest[0] if rest else {"sources": [], "citations": []}
+                stored_provenance = rest[1] if len(rest) > 1 else {}
+                stored_diagnostics = rest[2] if len(rest) > 2 else None
+                logger.info(f"Cache hit for query: {query[:60]}")
+                # Restore brain-level state so callers reading
+                # _last_citations / _last_provenance / _last_diagnostics
+                # after a cache hit see the cached query's data, not
+                # stale state from a different prior call. Deep-copy
+                # everything we return so subsequent mutations of the
+                # restored dicts can't corrupt the cached originals.
+                import copy as _copy
 
-                        self._last_citations = _copy.deepcopy(stored_citations)
-                        self._last_provenance = _copy.deepcopy(stored_provenance)
-                        if stored_diagnostics is not None:
-                            self._last_diagnostics = _copy.deepcopy(stored_diagnostics)
-                        return stored_response
-                    else:
-                        del self._query_cache[cache_key]
+                self._last_citations = _copy.deepcopy(stored_citations)
+                self._last_provenance = _copy.deepcopy(stored_provenance)
+                if stored_diagnostics is not None:
+                    self._last_diagnostics = _copy.deepcopy(stored_diagnostics)
+                return stored_response
         retrieval = self._execute_retrieval(query, filters, cfg=cfg)
         results = retrieval["results"]
         self._last_diagnostics = retrieval.get("diagnostics", CodeRetrievalDiagnostics())
@@ -1667,28 +1663,26 @@ class QueryRouterMixin:
             cfg=cfg,
         )
         if cache_key is not None:
-            with self._cache_lock:
-                # Evict least-recently-used entry when cache is at capacity
-                if len(self._query_cache) >= cfg.query_cache_size and self._query_cache:
-                    self._query_cache.popitem(last=False)  # pop LRU (front of OrderedDict)
-                # Store citations + provenance + diagnostics alongside the
-                # response so a subsequent cache hit can restore the brain-
-                # level state callers depend on (REST /query reads
-                # _last_citations, _last_provenance, and _last_diagnostics
-                # after brain.query() returns). Deep-copy the mutable metadata
-                # before storing so later mutations of self._last_* by a
-                # subsequent query can't reach back and corrupt this cache
-                # entry.
-                import copy as _copy
+            # Store citations + provenance + diagnostics alongside the
+            # response so a subsequent cache hit can restore the brain-
+            # level state callers depend on (REST /query reads
+            # _last_citations, _last_provenance, and _last_diagnostics
+            # after brain.query() returns). Deep-copy the mutable metadata
+            # before storing so later mutations of self._last_* by a
+            # subsequent query can't reach back and corrupt this cache
+            # entry.
+            import copy as _copy
 
-                self._query_cache[cache_key] = (
-                    time.monotonic(),
-                    response,
-                    _copy.deepcopy(self._last_citations),
-                    _copy.deepcopy(self._last_provenance),
-                    _copy.deepcopy(self._last_diagnostics),
-                )
-                self._query_cache.move_to_end(cache_key)  # mark as most-recently-used
+            lru_ttl_put(
+                self._query_cache,
+                self._cache_lock,
+                cache_key,
+                response,
+                _copy.deepcopy(self._last_citations),
+                _copy.deepcopy(self._last_provenance),
+                _copy.deepcopy(self._last_diagnostics),
+                maxsize=cfg.query_cache_size,
+            )
         return response
 
     def query_stream(
