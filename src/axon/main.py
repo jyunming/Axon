@@ -2293,7 +2293,7 @@ Your primary goal is to help the user by answering questions based on the provid
         self,
         documents: list[dict[str, Any]],
         progress_callback: Any | None = None,
-    ) -> None:
+    ) -> int:
         """Chunk, deduplicate, embed, and store *documents* in the knowledge base.
         Each document must be a dict with keys ``id`` (str), ``text`` (str), and
         optionally ``metadata`` (dict).  Chunking strategy and deduplication are
@@ -2305,6 +2305,13 @@ Your primary goal is to help the user by answering questions based on the provid
             progress_callback: Optional callable(phase: str, **kwargs) invoked at each
                 pipeline phase transition.  Phases: loading, chunking, raptor, graph_build,
                 embedding, code_graph, finalizing.
+        Returns:
+            The number of chunks actually written to the vector store/BM25 in
+            this call — 0 if every chunk was filtered out by dedup (or the
+            input was empty), distinct from a nonzero count. Callers that
+            need to distinguish "nothing new to do" from "wrote N chunks"
+            (e.g. before reporting an ingest as successful) should check
+            this rather than assuming a call always writes something.
         """
 
         def _progress(phase: str, **kwargs: Any) -> None:
@@ -2315,7 +2322,7 @@ Your primary goal is to help the user by answering questions based on the provid
                     pass
 
         if not documents:
-            return
+            return 0
         # Block ingest on read-only scopes and mounted shares
         self._assert_write_allowed("ingest")
         # Acquire a write lease so drain-mode can track in-flight writes.
@@ -2408,7 +2415,7 @@ Your primary goal is to help the user by answering questions based on the provid
                 )
             documents = new_docs
             if not documents:
-                return
+                return 0
         # Contextual retrieval: prepend LLM context to each chunk
         if self.config.contextual_retrieval and self.config.dataset_type in {
             "doc",
@@ -2477,7 +2484,7 @@ Your primary goal is to help the user by answering questions based on the provid
                 "cross-project contamination.",
                 _ingest_lease._project,
             )
-            return
+            return 0
         n_chunks = len(documents)
         if self._own_bm25:
             self._own_bm25.add_documents(documents, save_deferred=_defer_saves)
@@ -2623,6 +2630,7 @@ Your primary goal is to help the user by answering questions based on the provid
             logger.debug("version_marker bump failed (non-fatal): %s", _vm_exc)
         # Explicitly release lease (fallback: _WriteLease.__del__ handles it)
         _ingest_lease.close()
+        return n_chunks
 
 
 # ---------------------------------------------------------------------------

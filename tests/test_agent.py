@@ -625,6 +625,51 @@ class TestToolGetStaleDocs:
 # ---------------------------------------------------------------------------
 
 
+class TestToolIngestPath:
+    def test_ingest_path_handles_real_chunk_count_without_crashing(self, tmp_path):
+        """Regression: AxonBrain.ingest() used to return None unconditionally,
+        and this handler does `total_chunks += n` on its return value — that
+        raised TypeError for any real file (masked in production because
+        ingest_path runs as an MCP tool call whose exception just becomes a
+        tool-error string, so it never surfaced as an obvious crash). Now
+        that ingest() returns an int, this must accumulate correctly."""
+        note = tmp_path / "note.txt"
+        note.write_text("hello world", encoding="utf-8")
+
+        brain = _make_brain()
+        brain.ingest.return_value = 3
+
+        mock_loader = MagicMock()
+        mock_loader.load.return_value = [{"id": "note", "text": "hello world", "metadata": {}}]
+        with patch("axon.loaders.DirectoryLoader") as mock_cls:
+            mock_mgr = MagicMock()
+            mock_mgr.loaders = {".txt": mock_loader}
+            mock_cls.return_value = mock_mgr
+            result = dispatch_tool(brain, "ingest_path", {"path": str(note)})
+
+        assert "Ingested 1 file" in result
+        assert "3 chunk" in result
+
+    def test_ingest_path_zero_chunks_written_reports_dedup_skip(self, tmp_path):
+        """n == 0 (every chunk already ingested) must not be conflated with a
+        None-return crash — it should route through the dedup_skipped branch."""
+        note = tmp_path / "note.txt"
+        note.write_text("hello world", encoding="utf-8")
+
+        brain = _make_brain()
+        brain.ingest.return_value = 0
+
+        mock_loader = MagicMock()
+        mock_loader.load.return_value = [{"id": "note", "text": "hello world", "metadata": {}}]
+        with patch("axon.loaders.DirectoryLoader") as mock_cls:
+            mock_mgr = MagicMock()
+            mock_mgr.loaders = {".txt": mock_loader}
+            mock_cls.return_value = mock_mgr
+            result = dispatch_tool(brain, "ingest_path", {"path": str(note)})
+
+        assert "already in the knowledge base" in result
+
+
 class TestToolIngestUrl:
     def test_invalid_url_returns_error(self):
         brain = _make_brain()

@@ -131,8 +131,21 @@ def _record_dedup(text: str, doc_id: str, project: str = "_global") -> None:
     }
 
 
-def _purge_dedup(doc_ids: list[str], project: str | None = None) -> None:
-    """Remove dedup entries that reference *doc_ids*."""
+def _purge_dedup(
+    doc_ids: list[str], project: str | None = None, *, source_ids: set[str] | None = None
+) -> None:
+    """Remove dedup entries that reference *doc_ids*.
+
+    ``_source_hashes`` records `doc_id` at the *source* level (the id passed
+    to ``add_text``/``add_texts``, e.g. ``"agent_doc_x"``), but ``/delete``
+    callers usually pass *chunk* ids (e.g. ``"agent_doc_x_chunk_0"``) — a
+    bare ``in doc_ids`` check never matches those for a multi-chunk source,
+    so the stale dedup entry survives and silently blocks a legitimate
+    future re-ingest of that same (now-deleted) content. Pass the resolved
+    source ids too via *source_ids* when the caller has them (e.g. from
+    chunk metadata) so multi-chunk sources are purged correctly; single-id
+    exact matches in *doc_ids* still work standalone for callers that don't.
+    """
     targets = []
     if project:
         targets.append(project)
@@ -143,7 +156,8 @@ def _purge_dedup(doc_ids: list[str], project: str | None = None) -> None:
         if not bucket:
             continue
         for content_hash, meta in list(bucket.items()):
-            if meta.get("doc_id") in doc_ids:
+            recorded_id = meta.get("doc_id")
+            if recorded_id in doc_ids or (source_ids and recorded_id in source_ids):
                 bucket.pop(content_hash, None)
         if not bucket:
             _source_hashes.pop(target, None)

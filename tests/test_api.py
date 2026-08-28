@@ -3743,6 +3743,93 @@ class TestAddTextsBatch:
         assert "skipped" in statuses
 
 
+class TestIngestDedupLayerDisagreement:
+    """Layer B (api.py's whole-text _check_dedup cache) and Layer A
+    (AxonBrain.ingest()'s own chunk-level dedup) can disagree: Layer B sees
+    content as new, but Layer A's chunk hashes already match and it writes
+    nothing. These routes must reflect that via brain.ingest()'s return
+    value (chunk count actually written) instead of always reporting
+    success/created/ingested."""
+
+    def test_add_text_reports_skipped_when_ingest_writes_nothing(self):
+        brain = _make_brain()
+        brain._active_project = "default"
+        brain.ingest.return_value = 0
+        api_module.brain = brain
+
+        mock_loader = MagicMock()
+        mock_loader.load_text.return_value = [{"text": "chunk", "id": "doc1", "metadata": {}}]
+
+        with patch("axon.loaders.SmartTextLoader", return_value=mock_loader):
+            resp = client.post("/add_text", json={"text": "already ingested content"})
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "skipped"
+        assert data["chunks"] == 0
+        assert data["reason"] == "already_ingested"
+
+    def test_add_texts_downgrades_created_to_skipped_when_ingest_writes_nothing(self):
+        brain = _make_brain()
+        brain._active_project = "default"
+        brain.ingest.return_value = 0
+        api_module.brain = brain
+
+        mock_loader = MagicMock()
+        mock_loader.load_text.return_value = [{"text": "chunk", "id": "d1", "metadata": {}}]
+
+        with patch("axon.loaders.SmartTextLoader", return_value=mock_loader):
+            resp = client.post(
+                "/add_texts",
+                json={"docs": [{"text": "doc one"}, {"text": "doc two"}]},
+            )
+
+        assert resp.status_code == 200
+        results = resp.json()
+        assert all(r["status"] == "skipped" for r in results)
+
+    def test_ingest_url_reports_skipped_when_ingest_writes_nothing(self):
+        brain = _make_brain()
+        brain._active_project = "default"
+        brain.ingest.return_value = 0
+        api_module.brain = brain
+
+        fake_doc = {
+            "id": "abc123",
+            "text": "Example page content",
+            "metadata": {"source": "https://example.com", "type": "url"},
+        }
+        with patch("axon.loaders.URLLoader") as mock_cls:
+            mock_instance = MagicMock()
+            mock_cls.return_value = mock_instance
+            mock_instance.load.return_value = [fake_doc]
+
+            resp = client.post("/ingest_url", json={"url": "https://example.com"})
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "skipped"
+        assert data["reason"] == "already_ingested"
+
+    def test_add_text_still_reports_success_when_ingest_writes_chunks(self):
+        """Non-regression: n_written > 0 keeps the existing success shape."""
+        brain = _make_brain()
+        brain._active_project = "default"
+        brain.ingest.return_value = 1
+        api_module.brain = brain
+
+        mock_loader = MagicMock()
+        mock_loader.load_text.return_value = [{"text": "chunk", "id": "doc1", "metadata": {}}]
+
+        with patch("axon.loaders.SmartTextLoader", return_value=mock_loader):
+            resp = client.post("/add_text", json={"text": "brand new content"})
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "success"
+        assert data["chunks"] == 1
+
+
 # ===========================================================================
 # maintenance.py
 # ===========================================================================
@@ -4196,6 +4283,30 @@ class TestDeleteDocuments:
         api_module._source_hashes["_global"] = {"hash1": {"doc_id": "doc1"}}
 
         resp = client.post("/delete", json={"doc_ids": ["doc1"]})
+
+        assert resp.status_code == 200
+        assert "research" not in api_module._source_hashes
+        assert "_global" not in api_module._source_hashes
+
+    def test_delete_clears_dedup_cache_for_multi_chunk_source(self):
+        """_source_hashes records the *source* id (e.g. "doc1", what
+        add_text/add_texts were called with), but a multi-chunk source is
+        deleted by its *chunk* ids ("doc1_chunk_0", "doc1_chunk_1", ...) — a
+        bare `doc_id in doc_ids` check never matches those, silently
+        leaving the stale dedup entry behind and blocking a legitimate
+        future re-ingest of the same (now-deleted) content."""
+        brain = _make_brain()
+        brain._active_project = "research"
+        chunks = [
+            {"id": "doc1_chunk_0", "metadata": {"source": "doc1"}},
+            {"id": "doc1_chunk_1", "metadata": {"source": "doc1"}},
+        ]
+        brain.vector_store.get_by_ids.return_value = chunks
+        api_module.brain = brain
+        api_module._source_hashes["research"] = {"hash1": {"doc_id": "doc1"}}
+        api_module._source_hashes["_global"] = {"hash1": {"doc_id": "doc1"}}
+
+        resp = client.post("/delete", json={"doc_ids": ["doc1_chunk_0", "doc1_chunk_1"]})
 
         assert resp.status_code == 200
         assert "research" not in api_module._source_hashes

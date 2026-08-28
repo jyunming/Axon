@@ -1875,36 +1875,34 @@ def main():
         if getattr(args, "governance", None) is not None:
             import json as _json_gov
 
-            sub = (args.governance or "overview").lower().strip()
-            _gov_api_base = os.environ.get("AXON_API_BASE", "http://127.0.0.1:8420").rstrip("/")
-            try:
-                import urllib.request as _ur
+            from axon import server_client as _sc
 
-                if sub == "graph-rebuild":
-                    _req = _ur.Request(
-                        f"{_gov_api_base}/governance/graph/rebuild",
-                        data=b"{}",
-                        method="POST",
-                        headers={"Content-Type": "application/json"},
-                    )
-                    with _ur.urlopen(_req, timeout=30) as _resp:
-                        _data = _json_gov.loads(_resp.read())
-                    print(_json_gov.dumps(_data, indent=2))
-                    return
-                _GOV_URLS = {
-                    "overview": f"{_gov_api_base}/governance/overview",
-                    "audit": f"{_gov_api_base}/governance/audit",
-                    "sessions": f"{_gov_api_base}/governance/copilot/sessions",
-                    "projects": f"{_gov_api_base}/governance/projects",
-                }
-                if sub not in _GOV_URLS:
-                    print(
-                        f"  Unknown governance subcommand '{sub}'. "
-                        "Choose: overview | audit | sessions | projects | graph-rebuild"
-                    )
-                    sys.exit(1)
-                with _ur.urlopen(_GOV_URLS[sub], timeout=30) as _resp:
-                    _data = _json_gov.loads(_resp.read())
+            sub = (args.governance or "overview").lower().strip()
+            _GOV_ROUTES = {
+                "overview": ("GET", "/governance/overview"),
+                "audit": ("GET", "/governance/audit"),
+                "sessions": ("GET", "/governance/copilot/sessions"),
+                "projects": ("GET", "/governance/projects"),
+                "graph-rebuild": ("POST", "/governance/graph/rebuild"),
+            }
+            if sub not in _GOV_ROUTES:
+                print(
+                    f"  Unknown governance subcommand '{sub}'. "
+                    "Choose: overview | audit | sessions | projects | graph-rebuild"
+                )
+                sys.exit(1)
+            _method, _path = _GOV_ROUTES[sub]
+            try:
+                # Route through server_client's shared helpers (not a raw
+                # urllib.request.urlopen call) so this sends X-API-Key like
+                # every other routed CLI operation — the hand-rolled version
+                # silently 401'd on any RAG_API_KEY-secured deployment.
+                _data = _sc._request(
+                    _method,
+                    f"{_sc.resolve_api_base(config)}{_path}",
+                    _sc._headers(config),
+                    body={} if _method == "POST" else None,
+                )
                 print(_json_gov.dumps(_data, indent=2))
             except Exception as exc:
                 print(
@@ -2054,7 +2052,8 @@ def main():
                 print(f"  {d['source']:<60} {d['chunks']:>6}")
         return
     if getattr(args, "refresh", False):
-        from axon.api_schemas import _compute_content_hash
+        import hashlib
+
         from axon.loaders import DirectoryLoader
 
         versions = brain.get_doc_versions()
@@ -2078,7 +2077,11 @@ def main():
                     errors.append(f"{source_id}: loader returned no documents")
                     continue
                 combined = "".join(d.get("text", "") for d in docs)
-                current_hash = _compute_content_hash(combined)
+                # Match the digest AxonBrain.ingest() writes to _doc_versions
+                # (main.py: hashlib.md5(...)) — a SHA-256 comparison here
+                # never matches the stored MD5, so "skip unchanged" silently
+                # never fires and every refresh re-ingests everything.
+                current_hash = hashlib.md5(combined.encode("utf-8", errors="replace")).hexdigest()
                 if current_hash == record.get("content_hash"):
                     skipped.append(source_id)
                     continue
@@ -2250,13 +2253,21 @@ def main():
                     rec = brain._doc_versions.pop(src, None)
                     if rec:
                         removed_sources.append(src)
-                        # Remove the saved content_hash from dedup set if present
-                        ch = rec.get("content_hash")
-                        if ch and hasattr(brain, "_ingested_hashes"):
-                            try:
-                                brain._ingested_hashes.discard(ch)
-                            except Exception:
-                                pass
+            # _doc_versions' content_hash is a whole-source combined MD5, but
+            # _ingested_hashes stores one MD5 per chunk (query_router.py's
+            # _doc_hash) — discarding the combined hash directly was always a
+            # no-op for multi-chunk sources, silently leaving _ingested_hashes
+            # unable to forget a deleted document's chunks. Recompute and
+            # discard each deleted chunk's own hash instead.
+            if ids_to_delete and hasattr(brain, "_ingested_hashes"):
+                try:
+                    for cdoc in brain.vector_store.get_by_ids(ids_to_delete):
+                        try:
+                            brain._ingested_hashes.discard(brain._doc_hash(cdoc))
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
             # Persist changes
             try:
                 if hasattr(brain, "_save_hash_store"):

@@ -696,6 +696,57 @@ class TestReplGraph:
         assert isinstance(output, str)
 
 
+class TestReplGovernance:
+    """/governance must route through server_client's shared helpers (not a
+    hand-rolled urllib call) so it sends X-API-Key like every other routed
+    operation — the old version silently 401'd on any RAG_API_KEY-secured
+    deployment."""
+
+    def test_overview_sends_api_key_header(self):
+        brain = _make_mock_brain()
+        with patch.dict(os.environ, {"RAG_API_KEY": "secret123"}, clear=False):
+            with patch("axon.server_client._request", return_value={"ok": True}) as mock_req:
+                output = _run_repl_with_commands(["/governance"], brain=brain)
+        mock_req.assert_called_once()
+        method, url, headers = mock_req.call_args[0][:3]
+        assert method == "GET"
+        assert url.endswith("/governance/overview")
+        assert headers["X-API-Key"] == "secret123"
+        assert "Governance Overview" in output
+
+    def test_audit_subcommand_routes_correctly(self):
+        brain = _make_mock_brain()
+        with patch("axon.server_client._request", return_value={"events": []}) as mock_req:
+            _run_repl_with_commands(["/governance audit"], brain=brain)
+        method, url = mock_req.call_args[0][:2]
+        assert method == "GET"
+        assert "/governance/audit?" in url
+
+    def test_graph_rebuild_is_a_post_with_body(self):
+        brain = _make_mock_brain()
+        with patch("axon.server_client._request", return_value={"status": "ok"}) as mock_req:
+            output = _run_repl_with_commands(["/governance graph-rebuild"], brain=brain)
+        method, url = mock_req.call_args[0][:2]
+        assert method == "POST"
+        assert url.endswith("/governance/graph/rebuild")
+        assert mock_req.call_args.kwargs.get("body") == {}
+        assert "Graph rebuild triggered" in output
+
+    def test_unknown_subcommand_does_not_call_request(self):
+        brain = _make_mock_brain()
+        with patch("axon.server_client._request") as mock_req:
+            output = _run_repl_with_commands(["/governance bogus"], brain=brain)
+        mock_req.assert_not_called()
+        assert "Unknown sub-command" in output
+
+    def test_server_failure_reports_friendly_message(self):
+        brain = _make_mock_brain()
+        with patch("axon.server_client._request", side_effect=ConnectionRefusedError("refused")):
+            output = _run_repl_with_commands(["/governance"], brain=brain)
+        assert "Governance command failed" in output
+        assert "axon-api" in output
+
+
 class TestReplShellPassthrough:
     def test_shell_command_exclamation(self):
         brain = _make_mock_brain()

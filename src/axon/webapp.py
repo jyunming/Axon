@@ -283,6 +283,32 @@ def save_sessions(sessions_dict):
 
 
 # ---------------------------------------------------------------------------
+# Ingest-directory path safety
+# ---------------------------------------------------------------------------
+def _check_ingest_dir_denied(ingest_dir: str) -> str | None:
+    """Return a user-facing denial message if `ingest_dir` should be refused,
+    or None if it's allowed. Enforces the same system-path blocklist the
+    REST /ingest route applies via api_schemas._validate_ingest_path() (this
+    Streamlit path previously only checked RAG_INGEST_BASE confinement, so a
+    broad or unset RAG_INGEST_BASE got no system-directory protection here),
+    plus the existing RAG_INGEST_BASE containment check.
+    """
+    from axon.api_schemas import _BLOCKED_PATH_PREFIXES
+
+    allowed_base = os.path.abspath(os.getenv("RAG_INGEST_BASE", "."))
+    abs_path = os.path.abspath(ingest_dir)
+    resolved = Path(abs_path).resolve()
+    if any(resolved.is_relative_to(blocked) for blocked in _BLOCKED_PATH_PREFIXES):
+        return f"Access denied: '{ingest_dir}' resolves to a blocked system path."
+    try:
+        if os.path.commonpath([allowed_base, abs_path]) != allowed_base:
+            return f"Access denied: path outside allowed base '{allowed_base}'."
+    except ValueError:
+        return f"Access denied: path outside allowed base '{allowed_base}'."
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Source card renderer
 # ---------------------------------------------------------------------------
 def _render_source_card(i: int, doc: dict):
@@ -1043,15 +1069,10 @@ with st.sidebar:
         )
         if st.button("📂 Ingest Directory", use_container_width=True, type="tertiary"):
             if os.path.isdir(ingest_dir):
-                allowed_base = os.path.abspath(os.getenv("RAG_INGEST_BASE", "."))
                 abs_path = os.path.abspath(ingest_dir)
-                try:
-                    common = os.path.commonpath([allowed_base, abs_path])
-                    if common != allowed_base:
-                        st.error(f"Access denied: path outside allowed base '{allowed_base}'.")
-                        st.stop()
-                except ValueError:
-                    st.error(f"Access denied: path outside allowed base '{allowed_base}'.")
+                denial = _check_ingest_dir_denied(ingest_dir)
+                if denial:
+                    st.error(denial)
                     st.stop()
                 from axon.loaders import DirectoryLoader
 
