@@ -467,6 +467,25 @@ class TestReplSessions:
             output = _run_repl_with_commands(["/resume"], brain=brain)
         assert isinstance(output, str)
 
+    def test_resume_rejects_path_traversal_session_id(self):
+        """/resume interpolates its argument straight into a filename
+        (session_<id>.json) via axon.sessions._session_path — an
+        unvalidated argument is a path-traversal primitive. Must be
+        rejected before _load_session is ever called."""
+        brain = _make_mock_brain()
+        with patch("axon.repl._load_session") as mock_load:
+            output = _run_repl_with_commands(["/resume ../../../../etc/passwd"], brain=brain)
+        mock_load.assert_not_called()
+        assert "Invalid session id" in output
+
+    def test_resume_accepts_a_well_formed_session_id(self):
+        brain = _make_mock_brain()
+        session = {"id": "20260828T142530123", "history": ["hi", "hello"]}
+        with patch("axon.repl._load_session", return_value=session) as mock_load:
+            output = _run_repl_with_commands(["/resume 20260828T142530123"], brain=brain)
+        mock_load.assert_called_once_with("20260828T142530123", project=brain._active_project)
+        assert "Loaded session" in output
+
 
 class TestReplRetry:
     def test_retry_no_history(self):

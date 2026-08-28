@@ -27,6 +27,7 @@ from axon.embeddings import OpenEmbedding  # noqa: E402
 from axon.llm import OpenLLM, _copilot_device_flow, _fetch_copilot_models  # noqa: E402
 from axon.rerank import OpenReranker  # noqa: E402
 from axon.sessions import (  # noqa: E402
+    _SESSION_ID_RE,
     _list_sessions,
     _load_session,
     _new_session,
@@ -3564,6 +3565,8 @@ def _interactive_repl(
             elif cmd == "/resume":
                 if not arg:
                     print("    Usage: /resume <session-id>")
+                elif not _SESSION_ID_RE.match(arg):
+                    print(f"    Invalid session id: '{arg}'")
                 else:
                     loaded = _load_session(arg, project=brain._active_project)
                     if loaded is None:
