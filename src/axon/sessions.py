@@ -1,5 +1,6 @@
 import json as _json
 import os
+import re
 from datetime import datetime as _dt
 from datetime import timezone as _tz
 from typing import TYPE_CHECKING
@@ -8,6 +9,12 @@ if TYPE_CHECKING:
     from axon.main import AxonBrain
 
 _SESSIONS_DIR = os.path.join(os.path.expanduser("~"), ".axon", "sessions")
+
+# Session IDs are interpolated directly into ``session_<id>.json`` by
+# _session_path() below — restrict to a filesystem-safe alphabet so every
+# caller (REST route, REPL /resume, MCP proxy) rejects traversal-style
+# payloads before they ever reach a filesystem path.
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 
 def _sessions_dir(project: str | None = None) -> str:
