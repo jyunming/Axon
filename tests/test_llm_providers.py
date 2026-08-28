@@ -2937,3 +2937,99 @@ class TestOpenAIClientCacheKeyInvalidation:
             assert c1 is c3
             assert c1 is not c2
             assert mock_openai.OpenAI.call_count == 2
+
+
+class TestClientCacheThreadSafety:
+    """Regression: the five client-factory caches previously shared
+    ``_openai_clients`` with zero locking — concurrent requests racing on a
+    cold cache entry could each build their own client, one silently
+    discarded (last-write-wins). Consolidating onto ``_cached()`` /
+    ``_cached_rebuild_on_change()`` added ``_clients_lock`` double-checked
+    locking; these tests prove concurrent callers now converge on exactly
+    one constructed client instead of racing."""
+
+    def _run_concurrently(self, fn, n=16):
+        barrier = threading.Barrier(n)
+        results = [None] * n
+
+        def _worker(i):
+            barrier.wait()  # maximize the chance every thread races the cold check together
+            results[i] = fn()
+
+        threads = [threading.Thread(target=_worker, args=(i,)) for i in range(n)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        return results
+
+    def test_openai_client_built_once_under_concurrent_cold_access(self):
+        from axon.llm import OpenLLM
+
+        cfg = _make_config(llm_provider="openai", llm_model="gpt-4o", openai_api_key="sk-x")
+
+        build_count = 0
+        build_lock = threading.Lock()
+
+        def _slow_openai(**kw):
+            nonlocal build_count
+            with build_lock:
+                build_count += 1
+            time.sleep(0.02)  # widen the race window
+            return MagicMock()
+
+        mock_openai = MagicMock()
+        mock_openai.OpenAI.side_effect = _slow_openai
+
+        with patch.dict("sys.modules", {"openai": mock_openai}):
+            llm = OpenLLM(cfg)
+            results = self._run_concurrently(lambda: llm._get_openai_client(), n=16)
+
+        assert build_count == 1, "client must be constructed exactly once under a race"
+        assert len({id(r) for r in results}) == 1, "every caller must receive the same instance"
+
+    def test_gemini_client_built_once_under_concurrent_cold_access(self):
+        from axon.llm import OpenLLM
+
+        cfg = _make_config(llm_provider="gemini", llm_model="gemini-2.0-flash", gemini_api_key="k")
+        llm = OpenLLM(cfg)
+
+        build_count = 0
+        build_lock = threading.Lock()
+        genai_sdk = MagicMock()
+
+        def _slow_client(**kw):
+            nonlocal build_count
+            with build_lock:
+                build_count += 1
+            time.sleep(0.02)
+            return MagicMock()
+
+        genai_sdk.Client.side_effect = _slow_client
+
+        results = self._run_concurrently(lambda: llm._get_gemini_client(genai_sdk), n=16)
+
+        assert build_count == 1, "client must be constructed exactly once under a race"
+        assert len({id(r) for r in results}) == 1, "every caller must receive the same instance"
+
+    def test_copilot_session_refreshed_once_under_concurrent_cold_access(self):
+        from axon.llm import OpenLLM, _get_copilot_session_token
+
+        cfg = _make_config(llm_provider="copilot", llm_model="gpt-4o", copilot_pat="pat-x")
+        llm = OpenLLM(cfg)
+
+        refresh_count = 0
+        refresh_lock = threading.Lock()
+
+        def _slow_refresh(oauth_token):
+            nonlocal refresh_count
+            with refresh_lock:
+                refresh_count += 1
+            time.sleep(0.02)
+            return {"token": "sess-tok", "expires_at": time.time() + 1800}
+
+        with patch("axon.llm._refresh_copilot_session", side_effect=_slow_refresh):
+            results = self._run_concurrently(lambda: _get_copilot_session_token(llm), n=16)
+
+        assert refresh_count == 1, "session token must be refreshed exactly once under a race"
+        assert set(results) == {"sess-tok"}
