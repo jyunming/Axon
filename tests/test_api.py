@@ -3072,6 +3072,30 @@ def test_update_config_success(mock_brain):
     assert response.json()["status"] == "success"
 
 
+def test_config_reset_writes_default_content(tmp_path):
+    """POST /config/reset must still write _DEFAULT_CONFIG_YAML content
+    after being moved onto write_text_if_changed() for atomicity."""
+    from axon.config import _DEFAULT_CONFIG_YAML
+
+    target = tmp_path / "cfg.yaml"
+    with patch("axon.config._USER_CONFIG_PATH", str(target)):
+        response = client.post("/config/reset")
+    assert response.status_code == 200
+    assert response.json()["written_to"] == str(target)
+    assert target.read_text(encoding="utf-8") == _DEFAULT_CONFIG_YAML
+
+
+def test_config_reset_second_call_is_a_no_op_write(tmp_path):
+    """Re-running reset when content is already at defaults exercises the
+    skip-if-unchanged path — must not error or leave a stray .tmp file."""
+    target = tmp_path / "cfg.yaml"
+    with patch("axon.config._USER_CONFIG_PATH", str(target)):
+        client.post("/config/reset")
+        response = client.post("/config/reset")
+    assert response.status_code == 200
+    assert not target.with_suffix(target.suffix + ".tmp").exists()
+
+
 def test_list_sessions_no_brain():
     api_module.brain = None
     response = client.get("/sessions")

@@ -1858,11 +1858,12 @@ def _handle_config_cmd(arg: str, brain, cfg_path: str) -> None:
             # use module-level os
             from pathlib import Path
 
+            from axon._atomic_persist import write_text_if_changed
             from axon.config import _DEFAULT_CONFIG_YAML, _USER_CONFIG_PATH
 
             target = cfg_path or str(_USER_CONFIG_PATH)
             os.makedirs(os.path.dirname(os.path.expanduser(target)), exist_ok=True)
-            Path(os.path.expanduser(target)).write_text(_DEFAULT_CONFIG_YAML, encoding="utf-8")
+            write_text_if_changed(Path(os.path.expanduser(target)), _DEFAULT_CONFIG_YAML, {})
             print(f"    Config reset to defaults at {target}")
         else:
             print("    Cancelled.")

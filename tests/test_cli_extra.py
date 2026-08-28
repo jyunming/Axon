@@ -1419,3 +1419,29 @@ class TestCliGovernance:
         out = capsys.readouterr().out
         assert "Governance command failed" in out
         assert "axon-api" in out
+
+
+class TestCliConfigReset:
+    """--config-reset writes _DEFAULT_CONFIG_YAML atomically via
+    write_text_if_changed() instead of a bare write_text() — this must not
+    change the observable file content or exit behavior."""
+
+    def test_writes_default_config_content(self, tmp_path, capsys):
+        from axon.config import _DEFAULT_CONFIG_YAML
+
+        target = tmp_path / "cfg.yaml"
+        code = run_cli("--config-reset", "--config", str(target))
+        assert code == 0
+        assert target.read_text(encoding="utf-8") == _DEFAULT_CONFIG_YAML
+        assert "Config reset to defaults" in capsys.readouterr().out
+
+    def test_second_reset_is_a_no_op_write_but_still_reports_success(self, tmp_path, capsys):
+        """Re-running reset when content is already at defaults exercises the
+        skip-if-unchanged path — must not error or leave a stray .tmp file."""
+        target = tmp_path / "cfg.yaml"
+        run_cli("--config-reset", "--config", str(target))
+        capsys.readouterr()
+        code = run_cli("--config-reset", "--config", str(target))
+        assert code == 0
+        assert "Config reset to defaults" in capsys.readouterr().out
+        assert not target.with_suffix(target.suffix + ".tmp").exists()
