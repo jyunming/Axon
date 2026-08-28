@@ -20,6 +20,7 @@ def _reset_graphrag_model_caches():
 
     GraphRagMixin._shared_gliner_models = {}
     GraphRagMixin._shared_rebel_pipelines = {}
+    GraphRagMixin._shared_llmlingua_models = {}
 
 
 # ---------------------------------------------------------------------------
@@ -1256,6 +1257,7 @@ def test_llmlingua_uses_config_model(tmp_path):
     """_ensure_llmlingua reads graph_rag_llmlingua_model from config."""
     from axon.graph_backends.graphrag_engine import GraphRagEngine
 
+    _reset_graphrag_model_caches()
     model_dir = tmp_path / "llmlingua"
     model_dir.mkdir()
     cfg = MagicMock()
@@ -1273,3 +1275,53 @@ def test_llmlingua_uses_config_model(tmp_path):
             model_dir
         )
         assert call_kwargs.kwargs.get("local_files_only") is True
+
+
+@pytest.mark.skipif(importlib.util.find_spec("llmlingua") is None, reason="llmlingua not installed")
+def test_llmlingua_shared_cache_loads_once_across_threads():
+    """Regression: _ensure_llmlingua previously had no class-level sharing
+    or locking at all (unlike its _ensure_gliner/_ensure_rebel siblings) —
+    every instance reloaded its own compressor, and a lock-free
+    hasattr-then-set check-then-set was racy under concurrent first access.
+    Consolidating onto the shared _ensure_shared_model() helper closes both
+    gaps; this mirrors test_gliner_shared_cache_loads_once_across_threads."""
+    from axon.graph_backends.graphrag_engine import GraphRagEngine
+    from axon.main import AxonBrain
+
+    _reset_graphrag_model_caches()
+
+    brains = []
+    for _ in range(8):
+        brain = AxonBrain.__new__(AxonBrain)
+        brain.config = SimpleNamespace(graph_rag_llmlingua_model="shared/llmlingua-model")
+        brain._llmlingua = None
+        brains.append(brain)
+
+    load_calls = 0
+    load_calls_lock = threading.Lock()
+    sentinel = object()
+    results = [None] * len(brains)
+
+    def _fake_load(*_args, **_kwargs):
+        nonlocal load_calls
+        time.sleep(0.05)
+        with load_calls_lock:
+            load_calls += 1
+        return sentinel
+
+    def _worker(idx, brain):
+        results[idx] = GraphRagEngine._ensure_llmlingua(brain)
+
+    with patch("llmlingua.PromptCompressor", side_effect=_fake_load) as mock_compressor:
+        threads = [
+            threading.Thread(target=_worker, args=(idx, brain), daemon=True)
+            for idx, brain in enumerate(brains)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=2)
+
+    assert load_calls == 1
+    assert mock_compressor.call_count == 1
+    assert all(result is sentinel for result in results)
