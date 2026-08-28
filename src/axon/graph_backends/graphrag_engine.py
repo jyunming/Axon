@@ -24,6 +24,7 @@ import logging
 import threading
 from typing import TYPE_CHECKING, Any
 
+from axon._lru_ttl_cache import lru_ttl_get, lru_ttl_put
 from axon.graph_backends.base import IngestResult
 from axon.graph_rag import GraphRagMixin
 
@@ -785,8 +786,6 @@ class GraphRagEngine(GraphRagMixin):
         the traversal cache) that it lives here now rather than dragging
         that state back onto QueryRouterMixin.
         """
-        import time
-
         # Item 5: Union LLM-extracted entities with embedding-based matches.
         # LLM extraction captures exact textual mentions; embedding matching adds semantic neighbors.
         query_entities = self._extract_entities(query)
@@ -875,20 +874,15 @@ class GraphRagEngine(GraphRagMixin):
                 # Cache key covers entity set + hop params so different configs
                 # don't collide.
                 _cache_key = (frozenset(matched_entities), max_hops, hop_decay)
-                _now = time.monotonic()
                 _bfs_scores: dict[str, float] | None = None
-                _tc = self._traversal_cache
-                _tc_ttl: float = self._traversal_cache_ttl
-                if _tc is not None:
-                    with self._traversal_cache_lock:
-                        _cached = _tc.get(_cache_key)
-                        if _cached is not None:
-                            _stored_time, _stored_scores = _cached
-                            if _now - _stored_time < _tc_ttl:
-                                _tc.move_to_end(_cache_key)
-                                _bfs_scores = _stored_scores
-                            else:
-                                del _tc[_cache_key]
+                _cached = lru_ttl_get(
+                    self._traversal_cache,
+                    self._traversal_cache_lock,
+                    _cache_key,
+                    self._traversal_cache_ttl,
+                )
+                if _cached is not None:
+                    _bfs_scores = _cached[1]
                 if _bfs_scores is None:
                     # BFS for multi-hop traversal
                     _bfs_scores = {}
@@ -916,12 +910,13 @@ class GraphRagEngine(GraphRagMixin):
                             break
                         current_hop_entities = next_hop_entities
                     # Store BFS result in traversal cache
-                    if _tc is not None:
-                        _tc_maxsize: int = self._traversal_cache_maxsize
-                        with self._traversal_cache_lock:
-                            if len(_tc) >= _tc_maxsize:
-                                _tc.popitem(last=False)  # evict LRU
-                            _tc[_cache_key] = (time.monotonic(), dict(_bfs_scores))
+                    lru_ttl_put(
+                        self._traversal_cache,
+                        self._traversal_cache_lock,
+                        _cache_key,
+                        dict(_bfs_scores),
+                        maxsize=self._traversal_cache_maxsize,
+                    )
                 # Merge BFS scores into extra_id_scores (skip IDs already in results)
                 for did, hop_score in _bfs_scores.items():
                     if did not in existing_ids:
