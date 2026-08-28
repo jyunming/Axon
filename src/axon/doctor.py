@@ -249,27 +249,20 @@ def check_local_llm_reachable(
             detail="llm_provider is 'local' but local_base_url is empty",
             hint="Set llm.local_base_url in config.yaml, or AXON_LOCAL_LLM_BASE_URL.",
         )
-    try:
-        import httpx
+    from axon.llm import _probe_openai_compatible_models
 
-        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-        response = httpx.get(f"{url}/models", timeout=5.0, headers=headers)
-        response.raise_for_status()
-        payload = response.json()
-    except Exception as exc:  # noqa: BLE001 - the doctor reports, never raises
+    probe = _probe_openai_compatible_models(url, api_key, 5.0)
+    if probe["error"] is not None:
         return Check(
             "Local LLM endpoint",
             "error",
-            detail=f"{url} unreachable ({type(exc).__name__})",
+            detail=f"{url} unreachable ({probe['error']})",
             hint=(
                 "Start your local LLM server (e.g. `las start` for llama.cpp, or "
                 "`vllm serve <model>`), then re-run. Axon does not start it for you."
             ),
         )
-    rows = payload.get("data", payload) if isinstance(payload, dict) else payload
-    models: list[str] = [
-        str(r["id"]) for r in rows if isinstance(r, dict) and r.get("id") is not None
-    ]
+    models: list[str] = probe["models"]
     if not models:
         return Check(
             "Local LLM endpoint",
