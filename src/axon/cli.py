@@ -59,6 +59,45 @@ def _print_knowledge_base_listing(rows: list) -> None:
         print(f"  {r['source']:<60} {r['chunks']:>6}")
 
 
+def _print_shares_listing(
+    sharing: list, shared: list, sealed_sharing: list, *, indent: str = "  "
+) -> None:
+    """Print the share-lifecycle listing shared by ``axon --share-list`` and
+    REPL ``/share list``.
+
+    Pure rendering — callers own fetching (``shares.list_shares()`` for
+    ``sharing``/``shared``, ``security.list_sealed_shares()`` for
+    ``sealed_sharing``) and any exception handling around that fetch
+    (sealed sharing may be unavailable, e.g. the ``cryptography`` extra
+    not installed).
+
+    ``indent`` is the leading whitespace before each section header;
+    entry lines get two extra spaces. cli.py uses ``"  "`` (2 spaces,
+    matching every other cli.py listing); REPL slash-command output
+    uses ``"    "`` (4 spaces, matching every other REPL listing) — each
+    surface keeps its own established convention rather than the two
+    being forced to match.
+    """
+    print(f"\n{indent}Shares — issued by me (legacy):")
+    if sharing:
+        for s in sharing:
+            tag = " [revoked]" if s.get("revoked") else ""
+            print(f"{indent}  {s['project']} → {s['grantee']}  [ro]{tag}")
+    else:
+        print(f"{indent}  (none)")
+    if sealed_sharing:
+        print(f"\n{indent}Shares — issued by me (sealed):")
+        for s in sealed_sharing:
+            print(f"{indent}  {s['project']}  {s['key_id']}  [sealed]")
+    print(f"\n{indent}Shares — received:")
+    if shared:
+        for s in shared:
+            print(f"{indent}  {s['owner']}/{s['project']} mounted as {s.get('mount', '')}")
+    else:
+        print(f"{indent}  (none)")
+    print()
+
+
 def _run_via_server(server: dict, args, config) -> None:
     """Execute store-mutating CLI commands against a detected axon-api server.
 
@@ -1661,33 +1700,16 @@ def main():
             user_dir = Path(config.projects_root)
             _shares_mod.validate_received_shares(user_dir)
             data = _shares_mod.list_shares(user_dir)
-            sharing = data.get("sharing", [])
-            shared = data.get("shared", [])
-            print("\n  Shares — issued by me (legacy):")
-            if sharing:
-                for s in sharing:
-                    tag = " [revoked]" if s.get("revoked") else ""
-                    print(f"    {s['project']} → {s['grantee']}  [ro]{tag}")
-            else:
-                print("    (none)")
+            sealed_sharing: list = []
             try:
                 from axon import security as _security
 
-                _sealed_data = _security.list_sealed_shares(user_dir)
-                _sealed_sharing = _sealed_data.get("sharing", [])
-                if _sealed_sharing:
-                    print("\n  Shares — issued by me (sealed):")
-                    for s in _sealed_sharing:
-                        print(f"    {s['project']}  {s['key_id']}  [sealed]")
+                sealed_sharing = _security.list_sealed_shares(user_dir).get("sharing", [])
             except Exception:
                 pass
-            print("\n  Shares — received:")
-            if shared:
-                for s in shared:
-                    print(f"    {s['owner']}/{s['project']} mounted as {s.get('mount', '')}")
-            else:
-                print("    (none)")
-            print()
+            _print_shares_listing(
+                data.get("sharing", []), data.get("shared", []), sealed_sharing, indent="  "
+            )
             return
         if args.share_generate:
             from axon import shares as _shares_mod

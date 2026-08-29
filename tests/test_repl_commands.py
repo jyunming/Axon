@@ -1660,6 +1660,37 @@ class TestReplShareSubcommands:
             output = _run_repl_with_commands(["/share revoke keyid123"], brain=brain)
         assert isinstance(output, str)
 
+    def test_share_list_shows_issued_and_received(self):
+        brain = _make_mock_brain()
+        brain.config.projects_root = "/tmp/axon/user"
+        shares_data = {
+            "sharing": [{"project": "proj1", "grantee": "bob", "revoked": False}],
+            "shared": [{"owner": "alice", "project": "proj2", "mount": "alice_proj2"}],
+        }
+        with patch("axon.shares.list_shares", return_value=shares_data):
+            with patch("axon.shares.validate_received_shares", return_value=None):
+                with patch("axon.security.list_sealed_shares", return_value={"sharing": []}):
+                    output = _run_repl_with_commands(["/share list"], brain=brain)
+        assert "proj1" in output and "bob" in output
+        assert "alice/proj2" in output and "alice_proj2" in output
+
+    def test_share_list_shows_sealed_shares(self):
+        """Regression: REPL's /share list previously had no sealed-shares
+        section at all — axon --share-list showed it, /share list silently
+        omitted every sealed share the user had issued."""
+        brain = _make_mock_brain()
+        brain.config.projects_root = "/tmp/axon/user"
+        with patch("axon.shares.list_shares", return_value={"sharing": [], "shared": []}):
+            with patch("axon.shares.validate_received_shares", return_value=None):
+                with patch(
+                    "axon.security.list_sealed_shares",
+                    return_value={"sharing": [{"project": "sealed_proj", "key_id": "sk_abc"}]},
+                ):
+                    output = _run_repl_with_commands(["/share list"], brain=brain)
+        assert "sealed_proj" in output
+        assert "sk_abc" in output
+        assert "[sealed]" in output
+
 
 # ---------------------------------------------------------------------------
 # /rag sub-commands (lines 2240-2289)

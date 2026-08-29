@@ -468,6 +468,35 @@ class TestMainList:
         brain.list_documents.assert_not_called()
 
 
+class TestMainShareList:
+    def test_shows_issued_received_and_sealed_shares(self, cfg, tmp_path, capsys):
+        cfg.projects_root = str(tmp_path)
+        shares_data = {
+            "sharing": [{"project": "proj1", "grantee": "bob", "revoked": False}],
+            "shared": [{"owner": "alice", "project": "proj2", "mount": "alice_proj2"}],
+        }
+        with patch("axon.shares.list_shares", return_value=shares_data):
+            with patch("axon.shares.validate_received_shares", return_value=None):
+                with patch(
+                    "axon.security.list_sealed_shares",
+                    return_value={"sharing": [{"project": "sealed_proj", "key_id": "sk_abc"}]},
+                ):
+                    run_cli("--share-list")
+        out = capsys.readouterr().out
+        assert "proj1" in out and "bob" in out
+        assert "alice/proj2" in out and "alice_proj2" in out
+        assert "sealed_proj" in out and "sk_abc" in out and "[sealed]" in out
+
+    def test_empty_shares_prints_none(self, cfg, tmp_path, capsys):
+        cfg.projects_root = str(tmp_path)
+        with patch("axon.shares.list_shares", return_value={"sharing": [], "shared": []}):
+            with patch("axon.shares.validate_received_shares", return_value=None):
+                with patch("axon.security.list_sealed_shares", return_value={"sharing": []}):
+                    run_cli("--share-list")
+        out = capsys.readouterr().out
+        assert "(none)" in out
+
+
 # ---------------------------------------------------------------------------
 # 7.  main() --ingest
 # ---------------------------------------------------------------------------
