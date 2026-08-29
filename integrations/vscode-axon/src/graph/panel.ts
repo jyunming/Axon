@@ -12,7 +12,7 @@ import * as os from 'os';
 
 import * as crypto from 'crypto';
 
-import { state, GRAPH_ANSWER_TIMEOUT_MS } from '../shared';
+import { state, GRAPH_ANSWER_TIMEOUT_MS, resolveApiBase } from '../shared';
 
 import { httpGet, httpPost, parseJsonSafe, formatDetail, normalizeGraphPayload } from '../client/http';
 
@@ -120,7 +120,7 @@ export class AxonGraphPanel {
     const query = this._currentQuery;
     if (!query) { return; }
     const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
+    const apiBase = resolveApiBase();
     const apiKey = config.get<string>('apiKey', '');
     try {
       const result = await httpPost(`${apiBase}/query/visualize`, { query }, apiKey, 60_000);
@@ -313,7 +313,7 @@ export async function showGraphForQuery(
 
 ): Promise<'opened' | 'updated' | 'no_graph_available' | 'query_failed'> {
   const config = vscode.workspace.getConfiguration('axon');
-  const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
+  const apiBase = resolveApiBase();
   const apiKey = config.get<string>('apiKey', '');
   const graphSynthesis = config.get<boolean>('graphSynthesis', true);
   const skipQuery = options?.skipAxonQuery ?? false;

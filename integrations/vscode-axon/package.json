@@ -956,8 +956,8 @@
       "properties": {
         "axon.apiBase": {
           "type": "string",
-          "default": "http://localhost:8420",
-          "description": "Base URL of the Axon REST API server."
+          "default": "",
+          "description": "Base URL of the Axon REST API server. Leave unset (the default) to let Axon auto-discover an already-running server or launch one on a dynamically chosen free port. Set explicitly only to point at a manually-managed or remote Axon API server."
         },
         "axon.apiKey": {
           "type": "string",

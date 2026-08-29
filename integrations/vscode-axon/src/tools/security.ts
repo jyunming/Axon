@@ -3,7 +3,7 @@
  */
 import * as vscode from 'vscode';
 
-import { state } from '../shared';
+import { state, resolveApiBase } from '../shared';
 import { httpGet, httpPost, formatDetail, parseJsonSafe, apiConnectionError } from '../client/http';
 
 function formatSecurityStatus(data: any): string {
@@ -27,7 +27,7 @@ function formatSecurityStatus(data: any): string {
 export class AxonSecurityStatusTool implements vscode.LanguageModelTool<any> {
   async invoke(_options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
+    const apiBase = resolveApiBase();
     const apiKey = config.get<string>('apiKey', '');
     try {
       const result = await httpGet(`${apiBase}/security/status`, apiKey);
@@ -57,7 +57,7 @@ export class AxonSecurityBootstrapTool implements vscode.LanguageModelTool<any> 
   }
   async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
+    const apiBase = resolveApiBase();
     const apiKey = config.get<string>('apiKey', '');
     const { passphrase } = options.input ?? {};
     try {
@@ -88,7 +88,7 @@ export class AxonSecurityUnlockTool implements vscode.LanguageModelTool<any> {
   }
   async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
+    const apiBase = resolveApiBase();
     const apiKey = config.get<string>('apiKey', '');
     const { passphrase } = options.input ?? {};
     try {
@@ -119,7 +119,7 @@ export class AxonSecurityLockTool implements vscode.LanguageModelTool<any> {
   }
   async invoke(_options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
+    const apiBase = resolveApiBase();
     const apiKey = config.get<string>('apiKey', '');
     try {
       const result = await httpPost(`${apiBase}/security/lock`, {}, apiKey);
@@ -149,7 +149,7 @@ export class AxonSecurityChangePassphraseTool implements vscode.LanguageModelToo
   }
   async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
+    const apiBase = resolveApiBase();
     const apiKey = config.get<string>('apiKey', '');
     const { old_passphrase, new_passphrase } = options.input ?? {};
     try {
@@ -304,7 +304,7 @@ export class AxonSealProjectTool implements vscode.LanguageModelTool<any> {
   }
   async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
+    const apiBase = resolveApiBase();
     const apiKey = config.get<string>('apiKey', '');
     const { project_name, migration_mode } = options.input ?? {};
     try {

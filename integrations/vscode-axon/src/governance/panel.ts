@@ -17,6 +17,7 @@
  */
 import * as vscode from 'vscode';
 import { httpGet, httpPost } from '../client/http';
+import { resolveApiBase } from '../shared';
 
 const POLL_INTERVAL_MS = 30_000;
 const PANEL_TITLE = 'Axon Governance';
@@ -330,7 +331,7 @@ export async function showGovernancePanel(
   context: vscode.ExtensionContext,
 ): Promise<void> {
   const config = vscode.workspace.getConfiguration('axon');
-  const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
+  const apiBase = resolveApiBase();
   const apiKey = config.get<string>('apiKey', '');
   AxonGovernancePanel.createOrReveal(context, apiBase, apiKey);
 }

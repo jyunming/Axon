@@ -15,7 +15,7 @@
 
 import * as vscode from 'vscode';
 
-import { state } from './shared';
+import { state, resolveApiBase } from './shared';
 
 import { ensureServerRunning, stopServer, waitForHealth } from './client/server';
 
@@ -72,12 +72,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   state.outputChannel = vscode.window.createOutputChannel('Axon');
   context.subscriptions.push(state.outputChannel);
   const config = vscode.workspace.getConfiguration('axon');
-  const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
   const autoStart = config.get<boolean>('autoStart', true);
-  state.outputChannel.appendLine(`Axon extension activating. API base: ${apiBase}`);
+  state.outputChannel.appendLine('Axon extension activating.');
   if (autoStart) {
-    await ensureServerRunning(apiBase, context);
+    await ensureServerRunning(context);
   }
+  // Resolved after ensureServerRunning (which sets state.apiBase); commands
+  // registered below read it fresh at call time via resolveApiBase() rather
+  // than closing over this snapshot, since the address can change between
+  // activation and any individual command invocation (e.g. autoStart off,
+  // server started later via axon.startServer).
+  const apiBase = resolveApiBase();
   const useCopilotLlm = config.get<boolean>('useCopilotLlm', false);
   const apiKey = config.get<string>('apiKey', '');
   if (useCopilotLlm) {
@@ -98,24 +103,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const participant = vscode.chat.createChatParticipant('axon.chat', makeChatHandler(context));
   participant.iconPath = new vscode.ThemeIcon('database');
   context.subscriptions.push(participant);
-  // Register commands
+  // Register commands. Each reads resolveApiBase() fresh at invocation time
+  // (not a closure-captured snapshot) since the server address can change
+  // between activation and any individual command invocation.
   context.subscriptions.push(
-    vscode.commands.registerCommand('axon.switchProject', () => switchProject(apiBase)),
-    vscode.commands.registerCommand('axon.createProject', () => createNewProject(apiBase)),
-    vscode.commands.registerCommand('axon.ingestFile', () => ingestCurrentFile(apiBase)),
-    vscode.commands.registerCommand('axon.ingestWorkspace', () => ingestWorkspaceFolder(apiBase)),
-    vscode.commands.registerCommand('axon.ingestFolder', () => ingestPickedFolder(apiBase)),
-    vscode.commands.registerCommand('axon.startServer', () => ensureServerRunning(apiBase, context)),
+    vscode.commands.registerCommand('axon.switchProject', () => switchProject(resolveApiBase())),
+    vscode.commands.registerCommand('axon.createProject', () => createNewProject(resolveApiBase())),
+    vscode.commands.registerCommand('axon.ingestFile', () => ingestCurrentFile(resolveApiBase())),
+    vscode.commands.registerCommand('axon.ingestWorkspace', () => ingestWorkspaceFolder(resolveApiBase())),
+    vscode.commands.registerCommand('axon.ingestFolder', () => ingestPickedFolder(resolveApiBase())),
+    vscode.commands.registerCommand('axon.startServer', () => ensureServerRunning(context)),
     vscode.commands.registerCommand('axon.stopServer', () => stopServer()),
-    vscode.commands.registerCommand('axon.initStore', () => initStore(apiBase)),
-    vscode.commands.registerCommand('axon.shareProject', () => shareProject(apiBase)),
-    vscode.commands.registerCommand('axon.redeemShare', () => redeemShare(apiBase)),
-    vscode.commands.registerCommand('axon.revokeShare', () => revokeShare(apiBase)),
-    vscode.commands.registerCommand('axon.listShares', () => listShares(apiBase)),
-    vscode.commands.registerCommand('axon.refreshIngest', () => refreshIngest(apiBase)),
-    vscode.commands.registerCommand('axon.listStaleDocs', () => listStaleDocs(apiBase)),
-    vscode.commands.registerCommand('axon.clearKnowledgeBase', () => clearKnowledgeBase(apiBase)),
-    vscode.commands.registerCommand('axon.showGraphStatus', () => showGraphStatus(apiBase)),
+    vscode.commands.registerCommand('axon.initStore', () => initStore(resolveApiBase())),
+    vscode.commands.registerCommand('axon.shareProject', () => shareProject(resolveApiBase())),
+    vscode.commands.registerCommand('axon.redeemShare', () => redeemShare(resolveApiBase())),
+    vscode.commands.registerCommand('axon.revokeShare', () => revokeShare(resolveApiBase())),
+    vscode.commands.registerCommand('axon.listShares', () => listShares(resolveApiBase())),
+    vscode.commands.registerCommand('axon.refreshIngest', () => refreshIngest(resolveApiBase())),
+    vscode.commands.registerCommand('axon.listStaleDocs', () => listStaleDocs(resolveApiBase())),
+    vscode.commands.registerCommand('axon.clearKnowledgeBase', () => clearKnowledgeBase(resolveApiBase())),
+    vscode.commands.registerCommand('axon.showGraphStatus', () => showGraphStatus(resolveApiBase())),
     vscode.commands.registerCommand('axon.showGraphForQuery', async () => {
       const query = await vscode.window.showInputBox({ prompt: 'Axon: Enter query to visualise' });
       if (query) { await showGraphForQuery(context, query); }
@@ -124,9 +131,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('axon.showGovernancePanel', () => showGovernancePanel(context)),
     vscode.commands.registerCommand('axon.configSetup', async () => {
       const cfg = vscode.workspace.getConfiguration('axon');
-      const apiBase = cfg.get<string>('apiBase', 'http://127.0.0.1:8420');
       const apiKey = cfg.get<string>('apiKey', '');
-      await runConfigSetupWizard(apiBase, apiKey);
+      await runConfigSetupWizard(resolveApiBase(), apiKey);
     }),
   );
   // Register Language Model Tools (for Copilot Agent toolset)

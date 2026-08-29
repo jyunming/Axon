@@ -5,10 +5,32 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
+import * as net from 'net';
 import { spawn } from 'child_process';
 
 import { state, SERVER_START_TIMEOUT_MS } from '../shared';
 import { httpGet, httpPost, sleep } from './http';
+
+const LAST_PORT_KEY = 'axon.lastPort';
+
+/** Ask the OS for a free TCP port (bind to port 0, read back what it assigned, release it). */
+export async function getFreePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.once('error', reject);
+    srv.listen(0, '127.0.0.1', () => {
+      const address = srv.address();
+      const port = typeof address === 'object' && address ? address.port : undefined;
+      srv.close(() => {
+        if (port) {
+          resolve(port);
+        } else {
+          reject(new Error('Could not determine a free port.'));
+        }
+      });
+    });
+  });
+}
 
 export async function getPortPid(port: number): Promise<number | undefined> {
   try {
@@ -96,82 +118,121 @@ export async function discoverPythonPath(): Promise<string> {
   return systemPython;
 }
 
-export async function ensureServerRunning(apiBase: string, context: vscode.ExtensionContext): Promise<void> {
-  const portMatch = apiBase.match(/:(\d+)/);
-  const port = portMatch ? parseInt(portMatch[1], 10) : 8420;
-  if (await isAxonRunning(apiBase)) {
-    state.outputChannel.appendLine('Axon API already running.');
-    // Capture PID so we can stop it on deactivate even if we didn't spawn it
-    state.externalServerPid = await getPortPid(port);
-    if (state.externalServerPid) {
-      state.outputChannel.appendLine(`Tracking external server PID: ${state.externalServerPid}`);
-    }
-    return;
-  }
-  // Detect stale listener: something is bound to the port but not answering /health.
-  // Only auto-kill if the process can be positively identified as an Axon/uvicorn process
-  // to avoid terminating unrelated user services bound to the same port.
+/**
+ * Kill whatever is listening on `port` if — and only if — it can be
+ * positively identified as an Axon/uvicorn process. Used to reap our own
+ * stale/hung processes; never touches a process we can't identify.
+ * Returns true if the port is confirmed free (or nothing was there) after.
+ */
+async function reapStaleAxonProcess(port: number): Promise<boolean> {
   const stalePid = await getPortPid(port);
-  if (stalePid) {
-    let isAxonProcess = false;
-    try {
-      const { execSync } = require('child_process');
-      let cmdLine = '';
-      if (process.platform === 'win32') {
-        // Get the full command line (not just exe path) so we can match axon.api signals
-        cmdLine = execSync(
-          `powershell -Command "(Get-CimInstance Win32_Process -Filter 'ProcessId=${stalePid}').CommandLine"`,
-          { encoding: 'utf8' }
-        ).trim().toLowerCase();
-      } else {
-        cmdLine = execSync(`ps -p ${stalePid} -o command=`, { encoding: 'utf8' }).trim().toLowerCase();
-      }
-      // Only match Axon/uvicorn-specific signals — avoid the generic "python" substring
-      const axonSignals = ['axon.api', 'uvicorn axon.api:app', 'python -m axon.api', 'axon-api'];
-      isAxonProcess = axonSignals.some(signal => cmdLine.includes(signal));
-    } catch {
-      // If we can't inspect the process, don't kill it
+  if (!stalePid) {
+    return true;
+  }
+  let isAxonProcess = false;
+  try {
+    const { execSync } = require('child_process');
+    let cmdLine = '';
+    if (process.platform === 'win32') {
+      // Get the full command line (not just exe path) so we can match axon.api signals
+      cmdLine = execSync(
+        `powershell -Command "(Get-CimInstance Win32_Process -Filter 'ProcessId=${stalePid}').CommandLine"`,
+        { encoding: 'utf8' }
+      ).trim().toLowerCase();
+    } else {
+      cmdLine = execSync(`ps -p ${stalePid} -o command=`, { encoding: 'utf8' }).trim().toLowerCase();
     }
-    if (isAxonProcess) {
-      state.outputChannel.appendLine(
-        `Axon: stale process (PID ${stalePid}) found on port ${port} — terminating and restarting.`
-      );
-      try {
-        // Attempt graceful shutdown first; escalate to force-kill only if needed
-        if (process.platform === 'win32') {
-          require('child_process').execSync('taskkill /PID ' + stalePid);
-        } else {
-          process.kill(stalePid, 'SIGTERM');
-        }
-        await sleep(1500);
-        // Verify it's gone; force-kill if still running
-        const stillRunning = await getPortPid(port);
-        if (stillRunning === stalePid) {
-          if (process.platform === 'win32') {
-            require('child_process').execSync('taskkill /F /PID ' + stalePid);
-          } else {
-            process.kill(stalePid, 'SIGKILL');
-          }
-          await sleep(500);
-        }
-      } catch {
-        state.outputChannel.appendLine(
-          `Could not terminate stale process ${stalePid} — it may have already exited or access was denied.`
-        );
+    // Only match Axon/uvicorn-specific signals — avoid the generic "python" substring
+    const axonSignals = ['axon.api', 'uvicorn axon.api:app', 'python -m axon.api', 'axon-api'];
+    isAxonProcess = axonSignals.some(signal => cmdLine.includes(signal));
+  } catch {
+    // If we can't inspect the process, don't kill it
+  }
+  if (!isAxonProcess) {
+    // Not ours — leave it alone. Not an error: we'll just pick a different
+    // free port rather than fighting this process for its own.
+    return false;
+  }
+  state.outputChannel.appendLine(
+    `Axon: reaping stale process (PID ${stalePid}) found on last-known port ${port}.`
+  );
+  try {
+    // Attempt graceful shutdown first; escalate to force-kill only if needed
+    if (process.platform === 'win32') {
+      require('child_process').execSync('taskkill /PID ' + stalePid);
+    } else {
+      process.kill(stalePid, 'SIGTERM');
+    }
+    await sleep(1500);
+    // Verify it's gone; force-kill if still running
+    const stillRunning = await getPortPid(port);
+    if (stillRunning === stalePid) {
+      if (process.platform === 'win32') {
+        require('child_process').execSync('taskkill /F /PID ' + stalePid);
+      } else {
+        process.kill(stalePid, 'SIGKILL');
       }
+      await sleep(500);
+    }
+  } catch {
+    state.outputChannel.appendLine(
+      `Could not terminate stale process ${stalePid} — it may have already exited or access was denied.`
+    );
+  }
+  return true;
+}
+
+/**
+ * Resolve the Axon API address and, if needed, launch a local server.
+ *
+ * Resolution order:
+ *   1. Explicit axon.apiBase override (user configured a value — respected
+ *      as-is: health-checked, never auto-spawned/auto-ported, since an
+ *      explicit setting signals a manually-managed or remote server).
+ *   2. Last-known port from a previous session (context.workspaceState) —
+ *      if still alive, adopt it rather than spawning a redundant duplicate.
+ *   3. A fresh OS-assigned free port — spawned fresh, with AXON_PORT/
+ *      AXON_HOST set in the child's env so the Python-side lock file
+ *      (server_client.write_store_lock) records the port uvicorn actually
+ *      bound to, not the 8420 fallback default.
+ */
+export async function ensureServerRunning(context: vscode.ExtensionContext): Promise<void> {
+  const config = vscode.workspace.getConfiguration('axon');
+  const override = config.inspect<string>('apiBase');
+  const explicitApiBase = override?.globalValue || override?.workspaceValue || override?.workspaceFolderValue;
+  if (explicitApiBase) {
+    state.outputChannel.appendLine(`Axon: using explicitly configured apiBase (${explicitApiBase}); not auto-managing a server.`);
+    if (await isAxonRunning(explicitApiBase)) {
+      const portMatch = explicitApiBase.match(/:(\d+)/);
+      const port = portMatch ? parseInt(portMatch[1], 10) : undefined;
+      state.externalServerPid = port ? await getPortPid(port) : undefined;
     } else {
       state.outputChannel.appendLine(
-        `Axon: port ${port} is in use by a non-Axon process (PID ${stalePid}). ` +
-        `Cannot auto-start — free the port or change axon.apiBase to a different port.`
+        `Axon: configured apiBase (${explicitApiBase}) is not reachable. Start it yourself, or clear the axon.apiBase setting to let Axon manage it automatically.`
       );
-      vscode.window.showWarningMessage(
-        `Axon: port ${port} is already in use by another process (PID ${stalePid}). ` +
-        `Free the port or update the axon.apiBase setting.`
-      );
+    }
+    state.apiBase = explicitApiBase;
+    return;
+  }
+
+  const lastPort = context.workspaceState.get<number>(LAST_PORT_KEY);
+  if (lastPort) {
+    const lastApiBase = `http://127.0.0.1:${lastPort}`;
+    if (await isAxonRunning(lastApiBase)) {
+      state.outputChannel.appendLine(`Axon API already running on port ${lastPort} (adopted from a previous session).`);
+      state.externalServerPid = await getPortPid(lastPort);
+      if (state.externalServerPid) {
+        state.outputChannel.appendLine(`Tracking external server PID: ${state.externalServerPid}`);
+      }
+      state.apiBase = lastApiBase;
       return;
     }
+    // Not responding — reap it if it's our own stale process; either way,
+    // fall through to picking a fresh free port rather than fighting over
+    // this exact port number.
+    await reapStaleAxonProcess(lastPort);
   }
-  const config = vscode.workspace.getConfiguration('axon');
+
   const pythonPath = await discoverPythonPath();
   const workspaceFolders = vscode.workspace.workspaceFolders;
   if (!workspaceFolders || workspaceFolders.length === 0) {
@@ -179,8 +240,9 @@ export async function ensureServerRunning(apiBase: string, context: vscode.Exten
     return;
   }
   const workspaceRoot = workspaceFolders[0].uri.fsPath;
-  // Port as string for uvicorn spawn argument
-  let portStr = String(port);
+  const port = await getFreePort();
+  const portStr = String(port);
+  const apiBase = `http://127.0.0.1:${portStr}`;
   // Default ingest base to workspaceRoot for safety (prevents ingesting files outside the project).
   // Users can broaden this to the filesystem root via axon.ingestBase in settings.
   const configuredBase = config.get<string>('ingestBase', '');
@@ -198,6 +260,13 @@ export async function ensureServerRunning(apiBase: string, context: vscode.Exten
       ...process.env,
       PYTHONPATH: path.join(workspaceRoot, 'src'),
       RAG_INGEST_BASE: fsRoot,
+      // Keep axon.api's own lock-file bookkeeping (server_client.write_store_lock,
+      // read via os.getenv("AXON_HOST"/"AXON_PORT")) in sync with the port
+      // uvicorn is actually bound to — uvicorn's own --port flag controls the
+      // real bind, but the FastAPI app's lifespan() reads these env vars
+      // independently and would otherwise always fall back to 8420.
+      AXON_HOST: '127.0.0.1',
+      AXON_PORT: portStr,
       ...(storeBase ? { AXON_STORE_BASE: storeBase } : {}),
     },
   });
@@ -217,8 +286,10 @@ export async function ensureServerRunning(apiBase: string, context: vscode.Exten
   });
   const started = await waitForHealth(apiBase, SERVER_START_TIMEOUT_MS);
   if (started) {
-    state.outputChannel.appendLine('Axon API server is ready.');
-    vscode.window.showInformationMessage('Axon API server started successfully.');
+    state.outputChannel.appendLine(`Axon API server is ready on port ${portStr}.`);
+    vscode.window.showInformationMessage(`Axon API server started successfully on port ${portStr}.`);
+    state.apiBase = apiBase;
+    await context.workspaceState.update(LAST_PORT_KEY, port);
   } else {
     state.outputChannel.appendLine(`Axon API server did not become ready within ${Math.round(SERVER_START_TIMEOUT_MS / 1000)} seconds.`);
     vscode.window.showWarningMessage('Axon API server failed to start. Check the Axon output panel.');
