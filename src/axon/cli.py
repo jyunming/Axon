@@ -39,6 +39,26 @@ def _print_project_tree(proj_list: list, active: str, indent: int = 0) -> None:
         _print_project_tree(p.get("children", []), active, indent + 1)
 
 
+def _print_knowledge_base_listing(rows: list) -> None:
+    """Print the ``--list`` knowledge-base table.
+
+    Shared by ``main()``'s two --list code paths: the doc_versions.json
+    fast path (no AxonBrain needed) and the brain.list_documents() path
+    used when a brain is already initialized for another reason. Each
+    row needs only ``source`` and ``chunks``; extra keys (e.g.
+    list_documents()'s ``doc_ids``) are ignored.
+    """
+    if not rows:
+        print("  Knowledge base is empty.")
+        return
+    total_chunks = sum(r["chunks"] for r in rows)
+    print(f"\n  Knowledge Base — {len(rows)} file(s), {total_chunks} chunk(s)\n")
+    print(f"  {'Source':<60} {'Chunks':>6}")
+    print(f"  {'-'*60} {'-'*6}")
+    for r in rows:
+        print(f"  {r['source']:<60} {r['chunks']:>6}")
+
+
 def _run_via_server(server: dict, args, config) -> None:
     """Execute store-mutating CLI commands against a detected axon-api server.
 
@@ -1629,18 +1649,11 @@ def main():
                 except Exception:
                     print("  Failed to read doc versions metadata; falling back to empty list.")
                     dv = {}
-                if not dv:
-                    print("  Knowledge base is empty.")
-                else:
-                    total_chunks = sum(
-                        (v.get("chunk_count") or v.get("chunks") or 0) for v in dv.values()
-                    )
-                    print(f"\n  Knowledge Base — {len(dv)} file(s), {total_chunks} chunk(s)\n")
-                    print(f"  {'Source':<60} {'Chunks':>6}")
-                    print(f"  {'-'*60} {'-'*6}")
-                    for src, info in dv.items():
-                        chunks = info.get("chunk_count") or info.get("chunks") or 0
-                        print(f"  {src:<60} {chunks:>6}")
+                rows = [
+                    {"source": src, "chunks": info.get("chunk_count") or info.get("chunks") or 0}
+                    for src, info in dv.items()
+                ]
+                _print_knowledge_base_listing(rows)
             return
         if args.share_list:
             from axon import shares as _shares_mod
@@ -2041,16 +2054,7 @@ def main():
                         doc["text"] = f"[File Path: {abs_path}]\n{doc['text']}"
                 brain.ingest(docs)
     if args.list:
-        docs = brain.list_documents()
-        if not docs:
-            print("  Knowledge base is empty.")
-        else:
-            total_chunks = sum(d["chunks"] for d in docs)
-            print(f"\n  Knowledge Base — {len(docs)} file(s), {total_chunks} chunk(s)\n")
-            print(f"  {'Source':<60} {'Chunks':>6}")
-            print(f"  {'-'*60} {'-'*6}")
-            for d in docs:
-                print(f"  {d['source']:<60} {d['chunks']:>6}")
+        _print_knowledge_base_listing(brain.list_documents())
         return
     if getattr(args, "refresh", False):
         import hashlib
