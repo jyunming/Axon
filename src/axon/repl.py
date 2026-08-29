@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from axon.main import AxonBrain
 
 
-from axon.cli import _print_project_tree  # noqa: E402
+from axon.cli import _print_project_tree, _print_shares_listing  # noqa: E402
 from axon.collection_ops import clear_active_project  # noqa: E402
 from axon.embeddings import OpenEmbedding  # noqa: E402
 from axon.llm import OpenLLM, _copilot_device_flow, _fetch_copilot_models  # noqa: E402
@@ -3683,24 +3683,19 @@ def _interactive_repl(
                     user_dir = Path(brain.config.projects_root)
                     _shares_mod.validate_received_shares(user_dir)
                     data = _shares_mod.list_shares(user_dir)
-                    sharing = data.get("sharing", [])
-                    shared = data.get("shared", [])
-                    print("\n    Shares — issued by me:")
-                    if sharing:
-                        for s in sharing:
-                            tag = " [revoked]" if s.get("revoked") else ""
-                            print(f"      {s['project']} → {s['grantee']}  [ro]{tag}")
-                    else:
-                        print("      (none)")
-                    print("\n    Shares — received:")
-                    if shared:
-                        for s in shared:
-                            print(
-                                f"      {s['owner']}/{s['project']} mounted as {s['mount']}  [ro]"
-                            )
-                    else:
-                        print("      (none)")
-                    print()
+                    sealed_sharing: list = []
+                    try:
+                        from axon import security as _security
+
+                        sealed_sharing = _security.list_sealed_shares(user_dir).get("sharing", [])
+                    except Exception:
+                        pass
+                    _print_shares_listing(
+                        data.get("sharing", []),
+                        data.get("shared", []),
+                        sealed_sharing,
+                        indent="    ",
+                    )
                 elif sub == "generate":
                     # Usage: /share generate <project> <grantee> [--ttl-days N]
                     parts = sub_arg.split()
