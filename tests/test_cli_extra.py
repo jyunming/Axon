@@ -444,6 +444,29 @@ class TestMainList:
         run_cli("--list")
         assert "12" in capsys.readouterr().out
 
+    def test_list_fast_path_reads_doc_versions_without_brain(self, cfg, brain, tmp_path, capsys):
+        """--list's doc_versions.json fast path must render the same table
+        as the brain.list_documents() path, without constructing a brain."""
+        import json
+
+        cfg.bm25_path = str(tmp_path)
+        (tmp_path / ".doc_versions.json").write_text(
+            json.dumps(
+                {
+                    "doc1.pdf": {"content_hash": "h1", "chunk_count": 5},
+                    "doc2.md": {"content_hash": "h2", "chunk_count": 3},
+                }
+            ),
+            encoding="utf-8",
+        )
+        run_cli("--list")
+        out = capsys.readouterr().out
+        assert "doc1.pdf" in out
+        assert "doc2.md" in out
+        assert "2 file(s)" in out
+        assert "8 chunk(s)" in out
+        brain.list_documents.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # 7.  main() --ingest
