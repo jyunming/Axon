@@ -4,7 +4,7 @@
 
 import * as vscode from 'vscode';
 
-import { state } from '../shared';
+import { state, resolveApiBase } from '../shared';
 
 import { httpGet, httpPost, formatDetail, apiConnectionError } from '../client/http';
 
@@ -17,7 +17,7 @@ import { httpGet, httpPost, formatDetail, apiConnectionError } from '../client/h
 export class AxonListProjectsTool implements vscode.LanguageModelTool<any> {
   async invoke(_options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
+    const apiBase = resolveApiBase();
     const apiKey = config.get<string>('apiKey', '');
     try {
       const result = await httpGet(`${apiBase}/projects`, apiKey);
@@ -42,7 +42,7 @@ export class AxonSwitchProjectTool implements vscode.LanguageModelTool<any> {
   }
   async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
+    const apiBase = resolveApiBase();
     const apiKey = config.get<string>('apiKey', '');
     const { name } = options.input;
     try {
@@ -67,7 +67,7 @@ export class AxonCreateProjectTool implements vscode.LanguageModelTool<any> {
   }
   async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
+    const apiBase = resolveApiBase();
     const apiKey = config.get<string>('apiKey', '');
     const { name, description = '' } = options.input;
     try {
@@ -92,7 +92,7 @@ export class AxonDeleteProjectTool implements vscode.LanguageModelTool<any> {
   }
   async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
+    const apiBase = resolveApiBase();
     const apiKey = config.get<string>('apiKey', '');
     const { name } = options.input;
     try {
@@ -117,7 +117,7 @@ export class AxonDeleteDocumentsTool implements vscode.LanguageModelTool<any> {
   }
   async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
+    const apiBase = resolveApiBase();
     const apiKey = config.get<string>('apiKey', '');
     const { docIds } = options.input;
     try {
@@ -137,7 +137,7 @@ export class AxonDeleteDocumentsTool implements vscode.LanguageModelTool<any> {
 export class AxonListKnowledgeTool implements vscode.LanguageModelTool<any> {
   async invoke(_options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
+    const apiBase = resolveApiBase();
     const apiKey = config.get<string>('apiKey', '');
     try {
       const result = await httpGet(`${apiBase}/collection`, apiKey);
@@ -162,7 +162,7 @@ export class AxonUpdateSettingsTool implements vscode.LanguageModelTool<any> {
   }
   async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
+    const apiBase = resolveApiBase();
     const apiKey = config.get<string>('apiKey', '');
     try {
       const result = await httpPost(`${apiBase}/config/update`, options.input, apiKey);
@@ -181,7 +181,7 @@ export class AxonUpdateSettingsTool implements vscode.LanguageModelTool<any> {
 export class AxonGetCurrentSettingsTool implements vscode.LanguageModelTool<any> {
   async invoke(_options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
+    const apiBase = resolveApiBase();
     const apiKey = config.get<string>('apiKey', '');
     try {
       const result = await httpGet(`${apiBase}/config`, apiKey);
@@ -201,7 +201,7 @@ export class AxonGetCurrentSettingsTool implements vscode.LanguageModelTool<any>
 export class AxonListSessionsTool implements vscode.LanguageModelTool<any> {
   async invoke(_options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
+    const apiBase = resolveApiBase();
     const apiKey = config.get<string>('apiKey', '');
     try {
       const result = await httpGet(`${apiBase}/sessions`, apiKey);
@@ -223,7 +223,7 @@ export class AxonGetSessionTool implements vscode.LanguageModelTool<any> {
   }
   async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
+    const apiBase = resolveApiBase();
     const apiKey = config.get<string>('apiKey', '');
     const { session_id } = options.input ?? {};
     try {

@@ -4,7 +4,7 @@
 
 import * as vscode from 'vscode';
 
-import { state } from '../shared';
+import { state, resolveApiBase } from '../shared';
 
 import { httpGet, httpPost, formatDetail, apiConnectionError } from '../client/http';
 
@@ -22,7 +22,7 @@ export class AxonConfigValidateTool implements vscode.LanguageModelTool<any> {
   }
   async invoke(_options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
+    const apiBase = resolveApiBase();
     const apiKey = config.get<string>('apiKey', '');
     try {
       const result = await httpGet(`${apiBase}/config/validate`, apiKey);
@@ -74,7 +74,7 @@ export class AxonConfigSetTool implements vscode.LanguageModelTool<any> {
    */
   async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
+    const apiBase = resolveApiBase();
     const apiKey = config.get<string>('apiKey', '');
     const changes: Record<string, any> = options.input.changes || {};
     const persist: boolean = options.input.persist !== false; // default true
