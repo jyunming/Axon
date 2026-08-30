@@ -518,6 +518,34 @@ REGISTRY: list[Capability] = [
         },
         api_route="/project/seal",
     ),
+    # ── Pack / unpack project ─────────────────────────────────────────────────
+    Capability(
+        id="pack_project",
+        name="Pack project",
+        category="project",
+        tier=Tier.TWO,
+        description=(
+            "Zip a project's entire on-disk footprint (index files, sessions, "
+            "sub-projects, and .security/ if sealed) for backup, restore, or relocation."
+        ),
+        supported_surfaces=PRIMARY_SURFACES,
+        intentional_exceptions={
+            Surface.WEBAPP: "Filesystem-path-based archive operation not exposed in Streamlit UI",
+        },
+        api_route="/project/pack",
+    ),
+    Capability(
+        id="unpack_project",
+        name="Unpack project",
+        category="project",
+        tier=Tier.TWO,
+        description="Restore a project from a zip archive produced by pack_project into AxonStore.",
+        supported_surfaces=PRIMARY_SURFACES,
+        intentional_exceptions={
+            Surface.WEBAPP: "Filesystem-path-based archive operation not exposed in Streamlit UI",
+        },
+        api_route="/project/unpack",
+    ),
     # ── Mount refresh (SP-B1 parity sweep) ───────────────────────────────────
     Capability(
         id="mount_refresh",

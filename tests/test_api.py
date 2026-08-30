@@ -4712,6 +4712,22 @@ class TestPathTraversalGuards:
         )
         assert resp.status_code == 422
 
+    def test_pack_project_rejects_traversal_name(self):
+        brain = _make_brain()
+        brain.config.projects_root = "/tmp/x"
+        api_module.brain = brain
+        resp = client.post("/project/pack", json={"project_name": "..\\windows"})
+        assert resp.status_code == 422
+
+    def test_unpack_project_rejects_traversal_as_name(self):
+        brain = _make_brain()
+        brain.config.projects_root = "/tmp/x"
+        api_module.brain = brain
+        resp = client.post(
+            "/project/unpack", json={"zip_path": "/tmp/some.zip", "as_name": "..\\windows"}
+        )
+        assert resp.status_code == 422
+
     def test_get_session_rejects_traversal_id(self):
         """Path-style session ids would resolve out of the sessions dir
         and leak any JSON file the API process can read."""
@@ -4736,6 +4752,65 @@ class TestPathTraversalGuards:
         with patch("axon.sessions._load_session", return_value={"id": "abc123", "messages": []}):
             resp = client.get("/session/abc123")
         assert resp.status_code == 200
+
+
+class TestProjectPackUnpackRoutes:
+    def test_pack_project_success(self):
+        brain = _make_brain()
+        brain.config.projects_root = "/tmp/x"
+        brain._active_project = "default"
+        api_module.brain = brain
+        with patch(
+            "axon.project_pack.pack_project",
+            return_value={
+                "status": "packed",
+                "project": "myproj",
+                "out_path": "/tmp/x/myproj.zip",
+                "sealed": False,
+                "file_count": 3,
+                "bytes": 42,
+            },
+        ) as mock_pack:
+            resp = client.post("/project/pack", json={"project_name": "myproj"})
+        assert resp.status_code == 200
+        assert resp.json()["out_path"] == "/tmp/x/myproj.zip"
+        mock_pack.assert_called_once()
+
+    def test_unpack_project_success(self):
+        brain = _make_brain()
+        brain.config.projects_root = "/tmp/x"
+        brain._active_project = "default"
+        api_module.brain = brain
+        with patch(
+            "axon.project_pack.unpack_project",
+            return_value={
+                "status": "unpacked",
+                "project": "myproj",
+                "sealed": False,
+                "file_count": 3,
+                "manifest": {},
+            },
+        ) as mock_unpack:
+            resp = client.post("/project/unpack", json={"zip_path": "/tmp/x/myproj.zip"})
+        assert resp.status_code == 200
+        assert resp.json()["project"] == "myproj"
+        mock_unpack.assert_called_once()
+
+    def test_pack_project_maps_pack_error_to_400(self):
+        brain = _make_brain()
+        brain.config.projects_root = "/tmp/x"
+        brain._active_project = "default"
+        api_module.brain = brain
+        from axon.project_pack import ProjectPackError
+
+        with patch("axon.project_pack.pack_project", side_effect=ProjectPackError("boom")):
+            resp = client.post("/project/pack", json={"project_name": "myproj"})
+        assert resp.status_code == 400
+
+    def test_unpack_project_refuses_without_brain(self):
+        api_module.brain = None
+        resp = client.post("/project/unpack", json={"zip_path": "/tmp/x/myproj.zip"})
+        assert resp.status_code == 503
 
 
 class TestCopilotAgentWhitespaceQuery:

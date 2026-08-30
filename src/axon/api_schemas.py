@@ -543,3 +543,26 @@ class ProjectRotateKeysRequest(BaseModel):
 class ProjectSealRequest(BaseModel):
     project_name: str = Field(..., description="Name of the open project to seal.")
     migration_mode: str = Field("snapshot", description="Migration mode: 'snapshot' or 'live'.")
+
+
+class ProjectPackRequest(BaseModel):
+    project_name: str = Field(..., description="Name of the project to pack.")
+    out_path: str | None = Field(
+        None,
+        description=(
+            "Server-side filesystem path for the output .zip. Defaults to "
+            "~/.axon/packs/<name>-<timestamp>.axonpack.zip."
+        ),
+    )
+
+
+class ProjectUnpackRequest(BaseModel):
+    zip_path: str = Field(
+        ..., description="Server-side filesystem path to a .axonpack.zip produced by /project/pack."
+    )
+    as_name: str | None = Field(
+        None, description="Target project name. Defaults to the pack manifest's original_project."
+    )
+    force: bool = Field(
+        False, description="Overwrite an existing project directory at the target name."
+    )

@@ -39,6 +39,7 @@ import {
   AxonDeleteProjectTool, AxonDeleteDocumentsTool, AxonListKnowledgeTool,
   AxonUpdateSettingsTool, AxonGetCurrentSettingsTool,
   AxonListSessionsTool, AxonGetSessionTool,
+  AxonPackProjectTool, AxonUnpackProjectTool,
   switchProject, createNewProject,
 
 } from './tools/projects';
@@ -186,6 +187,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         (vscode as any).lm.registerTool('seal_project', new AxonSealProjectTool()),
         (vscode as any).lm.registerTool('extend_share', new AxonExtendShareTool()),
         (vscode as any).lm.registerTool('store_whoami', new AxonStoreWhoamiTool()),
+        (vscode as any).lm.registerTool('pack_project', new AxonPackProjectTool()),
+        (vscode as any).lm.registerTool('unpack_project', new AxonUnpackProjectTool()),
       );
       state.outputChannel.appendLine('Successfully registered all Axon tools.');
     } else {

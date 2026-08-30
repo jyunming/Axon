@@ -64,6 +64,8 @@ EXPECTED_MCP_TOOL_NAMES = {
     "security_lock",
     "security_change_passphrase",
     "seal_project",
+    "pack_project",
+    "unpack_project",
     # v0.4.0 Item 1 — passphrase suggestion helper
     "suggest_passphrase",
     # v0.4.0 Item 2 — keyring mode runtime control

@@ -3358,7 +3358,13 @@ def _interactive_repl(
                     )
                     print(
                         "    /project seal <name>                     encrypt at rest "
-                        "(requires /store unlock)\n"
+                        "(requires /store unlock)"
+                    )
+                    print(
+                        "    /project pack <name> [--out <path>]      zip a project's on-disk footprint"
+                    )
+                    print(
+                        "    /project unpack <path> [--as <name>] [--force]   restore a packed project\n"
                     )
                 elif sub == "new":
                     if not sub_arg:
@@ -3523,6 +3529,74 @@ def _interactive_repl(
                         finally:
                             if needs_switch_back:
                                 brain.switch_project(previously_active)
+                elif sub == "pack":
+                    if not sub_arg:
+                        print("    Usage: /project pack <name> [--out <path>]")
+                    else:
+                        from axon.project_pack import ProjectPackError, pack_project
+
+                        parts = sub_arg.split()
+                        pack_name = parts[0].lower()
+                        out_path = None
+                        if "--out" in parts:
+                            _idx = parts.index("--out")
+                            out_path = parts[_idx + 1] if _idx + 1 < len(parts) else None
+                        previously_active = brain._active_project
+                        needs_switch_back = previously_active == pack_name
+                        if needs_switch_back:
+                            brain.switch_project("default")
+                        try:
+                            result = pack_project(
+                                pack_name, Path(brain.config.projects_root), out_path=out_path
+                            )
+                            print(
+                                f"    Packed '{pack_name}' -> {result['out_path']} "
+                                f"({result['file_count']} files)\n"
+                            )
+                        except ProjectPackError as exc:
+                            print(f"    Pack failed: {exc}")
+                        finally:
+                            if needs_switch_back:
+                                brain.switch_project(previously_active)
+                elif sub == "unpack":
+                    if not sub_arg:
+                        print("    Usage: /project unpack <path> [--as <name>] [--force]")
+                    else:
+                        from axon.project_pack import ProjectPackError, unpack_project
+
+                        parts = sub_arg.split()
+                        force = "--force" in parts
+                        if force:
+                            parts.remove("--force")
+                        as_name = None
+                        if "--as" in parts:
+                            _idx = parts.index("--as")
+                            as_name = parts[_idx + 1].lower() if _idx + 1 < len(parts) else None
+                            del parts[_idx : _idx + 2]
+                        zip_path = parts[0] if parts else None
+                        if not zip_path:
+                            print("    Usage: /project unpack <path> [--as <name>] [--force]")
+                        else:
+                            previously_active = brain._active_project
+                            needs_switch_back = force and previously_active == as_name
+                            if needs_switch_back:
+                                brain.switch_project("default")
+                            try:
+                                result = unpack_project(
+                                    zip_path,
+                                    Path(brain.config.projects_root),
+                                    as_name=as_name,
+                                    force=force,
+                                )
+                                print(
+                                    f"    Unpacked '{result['project']}' "
+                                    f"({result['file_count']} files, sealed={result['sealed']})\n"
+                                )
+                            except ProjectPackError as exc:
+                                print(f"    Unpack failed: {exc}")
+                            finally:
+                                if needs_switch_back:
+                                    brain.switch_project(previously_active)
                 elif sub == "rotate-keys":
                     proj = sub_arg.strip().lower() if sub_arg else brain._active_project
                     if not proj or proj == "default":

@@ -1087,7 +1087,7 @@ Copilot will call `list_knowledge` or `list_projects` automatically. You can als
 @axon search for information about neural networks
 ```
 
-### Available tools (39 VS Code LM tools)
+### Available tools (41 VS Code LM tools)
 
 > v0.3.2 added `graph_retrieve` (point-in-time, with `--at TS`), `graph_conflicts`, and capability-flagged `graph_finalize` to this list. Run `axon-ext` (or open the Axon: Show Tools command in VS Code) to list everything live.
 
@@ -1104,6 +1104,8 @@ Copilot will call `list_knowledge` or `list_projects` automatically. You can als
 | `switch_project` | Switch active project |
 | `create_project` | Create a new project |
 | `delete_project` | Delete a project and all its data |
+| `pack_project` | Zip a project's entire on-disk footprint for backup, restore, or relocation |
+| `unpack_project` | Restore a project from a packed zip into AxonStore |
 | `delete_documents` | Remove specific documents by ID |
 | `list_knowledge` | List all ingested files with chunk counts |
 | `clear_knowledge` | Wipe all data from the current project |

@@ -6,7 +6,7 @@ import * as vscode from 'vscode';
 
 import { state, resolveApiBase } from '../shared';
 
-import { httpGet, httpPost, formatDetail, apiConnectionError } from '../client/http';
+import { httpGet, httpPost, formatDetail, apiConnectionError, parseJsonSafe } from '../client/http';
 
 // ---------------------------------------------------------------------------
 
@@ -304,5 +304,61 @@ export async function createNewProject(apiBase: string): Promise<void> {
     vscode.window.showErrorMessage(`Axon: Failed to create project. ${apiConnectionError(err)}`);
   }
 
+}
+
+export class AxonPackProjectTool implements vscode.LanguageModelTool<any> {
+  async prepareInvocation(options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
+    return { invocationMessage: `Packing project "${options.input?.project_name}"…` };
+  }
+  async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
+    const config = vscode.workspace.getConfiguration('axon');
+    const apiBase = resolveApiBase();
+    const apiKey = config.get<string>('apiKey', '');
+    const { project_name, out_path } = options.input ?? {};
+    try {
+      const result = await httpPost(`${apiBase}/project/pack`, { project_name, out_path }, apiKey);
+      const data = parseJsonSafe(result.body);
+      if (result.status !== 200) {
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(
+          `Pack failed: ${formatDetail(data, result.body)}`
+        )]);
+      }
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(
+        `Packed '${data.project}' -> ${data.out_path} (${data.file_count} files).`
+      )]);
+    } catch (err) {
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
+    }
+  }
+}
+
+export class AxonUnpackProjectTool implements vscode.LanguageModelTool<any> {
+  async prepareInvocation(options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
+    return { invocationMessage: `Unpacking "${options.input?.zip_path}"…` };
+  }
+  async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
+    const config = vscode.workspace.getConfiguration('axon');
+    const apiBase = resolveApiBase();
+    const apiKey = config.get<string>('apiKey', '');
+    const { zip_path, as_name, force } = options.input ?? {};
+    try {
+      const result = await httpPost(
+        `${apiBase}/project/unpack`,
+        { zip_path, as_name: as_name ?? null, force: force ?? false },
+        apiKey,
+      );
+      const data = parseJsonSafe(result.body);
+      if (result.status !== 200) {
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(
+          `Unpack failed: ${formatDetail(data, result.body)}`
+        )]);
+      }
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(
+        `Unpacked '${data.project}' (${data.file_count} files, sealed=${data.sealed}).`
+      )]);
+    } catch (err) {
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
+    }
+  }
 }
 

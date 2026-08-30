@@ -1,6 +1,6 @@
 # Axon MCP Tools Reference
 
-Axon exposes a Model Context Protocol (MCP) server (`axon-mcp`) with **55 tools**.
+Axon exposes a Model Context Protocol (MCP) server (`axon-mcp`) with **57 tools**.
 
 > **Which integration should I use?**
 > - **`@axon` chat participant** — install the VS Code extension (VSIX). Gives you a conversational `@axon` inside Copilot Chat. No `.vscode/mcp.json` needed.
@@ -168,7 +168,7 @@ List active write-lease counts per project. Use to check whether it is safe to p
 
 ---
 
-## Project Management (5)
+## Project Management (7)
 
 ### `list_projects`
 
@@ -218,6 +218,29 @@ Encrypt every content file in a project in place (one-shot migration). Walks the
 | `migration_mode` | string | `"in_place"` | Reserved for future variants; only `"in_place"` is implemented |
 
 **Returns:** `{"status": "sealed"|"already_sealed"}`
+
+### `pack_project`
+
+Zip a project's entire on-disk footprint (index files, sessions, sub-projects, and `.security/` if sealed) for backup, restore, or relocation. Requires the MCP client and `axon-api` to share a filesystem — same colocation assumption as `ingest_path`.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `project_name` | string | required | Name of the project to pack |
+| `out_path` | string | `null` | Server-side output path. Defaults to `~/.axon/packs/<name>-<timestamp>.axonpack.zip` |
+
+**Returns:** `{"status": "packed", "project", "out_path", "sealed", "file_count", "bytes"}`
+
+### `unpack_project`
+
+Restore a project from a zip archive produced by `pack_project` into AxonStore. Refuses if the target project already exists unless `force=True`.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `zip_path` | string | required | Server-side filesystem path to a `.axonpack.zip` |
+| `as_name` | string | `null` | Target project name. Defaults to the pack manifest's original project name |
+| `force` | bool | `false` | Overwrite an existing project directory at the target name |
+
+**Returns:** `{"status": "unpacked", "project", "sealed", "file_count", "manifest"}`
 
 ---
 

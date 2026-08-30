@@ -865,6 +865,34 @@ def main():
         help="Encrypt every content file in project NAME at rest, then exit. "
         "Requires the sealed-store to be unlocked (--store-unlock first).",
     )
+    parser.add_argument(
+        "--project-pack",
+        metavar="NAME",
+        help="Pack project NAME into a zip archive, then exit.",
+    )
+    parser.add_argument(
+        "--pack-out",
+        metavar="PATH",
+        help="Output path for --project-pack "
+        "(default: ~/.axon/packs/<name>-<timestamp>.axonpack.zip).",
+    )
+    parser.add_argument(
+        "--project-unpack",
+        metavar="PATH",
+        help="Unpack the zip archive at PATH into AxonStore as a project, then exit.",
+    )
+    parser.add_argument(
+        "--as",
+        dest="project_unpack_as",
+        metavar="NAME",
+        help="Target project name for --project-unpack "
+        "(default: the pack's original project name).",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="With --project-unpack, overwrite an existing project directory at the target name.",
+    )
     # ── Config validator / wizard ────────────────────────────────────────────
     parser.add_argument(
         "--config-validate",
@@ -1370,6 +1398,8 @@ def main():
         and not getattr(args, "store_lock", False)
         and not getattr(args, "store_change_passphrase", None)
         and not getattr(args, "project_seal", None)
+        and not getattr(args, "project_pack", None)
+        and not getattr(args, "project_unpack", None)
         and not getattr(args, "share_list", False)
         and not getattr(args, "share_generate", None)
         and not getattr(args, "share_redeem", None)
@@ -1674,6 +1704,39 @@ def main():
                 print(f"  Project '{project_name}': {status} ({files} files)")
             except _security.SecurityError as exc:
                 print(f"  Seal failed: {exc}")
+                sys.exit(1)
+            return
+        if args.project_pack:
+            from axon.project_pack import ProjectPackError, pack_project
+
+            try:
+                result = pack_project(
+                    args.project_pack.lower(), Path(config.projects_root), out_path=args.pack_out
+                )
+                print(
+                    f"  Packed '{result['project']}' -> {result['out_path']} "
+                    f"({result['file_count']} files)"
+                )
+            except ProjectPackError as exc:
+                print(f"  Pack failed: {exc}")
+                sys.exit(1)
+            return
+        if args.project_unpack:
+            from axon.project_pack import ProjectPackError, unpack_project
+
+            try:
+                result = unpack_project(
+                    args.project_unpack,
+                    Path(config.projects_root),
+                    as_name=args.project_unpack_as.lower() if args.project_unpack_as else None,
+                    force=args.force,
+                )
+                print(
+                    f"  Unpacked '{result['project']}' "
+                    f"({result['file_count']} files, sealed={result['sealed']})"
+                )
+            except ProjectPackError as exc:
+                print(f"  Unpack failed: {exc}")
                 sys.exit(1)
             return
         # Lightweight 'list' command: avoid full AxonBrain init by reading doc_versions metadata

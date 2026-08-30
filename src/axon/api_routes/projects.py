@@ -14,9 +14,11 @@ from axon.api_schemas import (
     _VALID_PROJECT_NAME_RE,
     ConfigUpdateRequest,
     ProjectCreateRequest,
+    ProjectPackRequest,
     ProjectRotateKeysRequest,
     ProjectSealRequest,
     ProjectSwitchRequest,
+    ProjectUnpackRequest,
 )
 
 logger = logging.getLogger("AxonAPI")
@@ -477,6 +479,62 @@ async def seal_project(request: ProjectSealRequest):
         "security_mode": "sealed_v1",
         "migration_mode": request.migration_mode,
     }
+
+
+@router.post("/project/pack")
+async def pack_project_route(request: ProjectPackRequest):
+    """Pack a project into a zip archive at a server-side filesystem path."""
+    from axon import api as _api
+    from axon.project_pack import ProjectPackError, pack_project
+
+    brain = _api.brain
+    if brain is None:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+    if not _VALID_PROJECT_NAME_RE.match(request.project_name):
+        raise HTTPException(
+            status_code=422, detail=f"Invalid project name: '{request.project_name}'"
+        )
+    user_dir = Path(brain.config.projects_root).expanduser().resolve()
+    previously_active = getattr(brain, "_active_project", None)
+    needs_switch_back = previously_active == request.project_name
+    if needs_switch_back:
+        brain.switch_project("default")
+    try:
+        result = pack_project(request.project_name, user_dir, out_path=request.out_path)
+    except ProjectPackError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    finally:
+        if needs_switch_back:
+            brain.switch_project(previously_active)
+    return result
+
+
+@router.post("/project/unpack")
+async def unpack_project_route(request: ProjectUnpackRequest):
+    """Unpack a zip archive (server-side filesystem path) into AxonStore as a project."""
+    from axon import api as _api
+    from axon.project_pack import ProjectPackError, unpack_project
+
+    brain = _api.brain
+    if brain is None:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+    if request.as_name is not None and not _VALID_PROJECT_NAME_RE.match(request.as_name):
+        raise HTTPException(status_code=422, detail=f"Invalid project name: '{request.as_name}'")
+    user_dir = Path(brain.config.projects_root).expanduser().resolve()
+    previously_active = getattr(brain, "_active_project", None)
+    needs_switch_back = request.force and previously_active == request.as_name
+    if needs_switch_back:
+        brain.switch_project("default")
+    try:
+        result = unpack_project(
+            request.zip_path, user_dir, as_name=request.as_name, force=request.force
+        )
+    except ProjectPackError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    finally:
+        if needs_switch_back:
+            brain.switch_project(previously_active)
+    return result
 
 
 @router.get("/sessions")
