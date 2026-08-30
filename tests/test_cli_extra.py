@@ -497,6 +497,99 @@ class TestMainShareList:
         assert "(none)" in out
 
 
+class TestMainProjectPackUnpack:
+    def test_project_pack_flag(self, cfg, tmp_path, capsys):
+        cfg.projects_root = str(tmp_path)
+        with patch(
+            "axon.project_pack.pack_project",
+            return_value={
+                "status": "packed",
+                "project": "myproj",
+                "out_path": str(tmp_path / "myproj.zip"),
+                "sealed": False,
+                "file_count": 3,
+                "bytes": 42,
+            },
+        ) as mock_pack:
+            run_cli("--project-pack", "myproj")
+        out = capsys.readouterr().out
+        assert "myproj" in out
+        mock_pack.assert_called_once()
+
+    def test_project_pack_with_out_flag(self, cfg, tmp_path):
+        cfg.projects_root = str(tmp_path)
+        out_path = str(tmp_path / "custom.zip")
+        with patch(
+            "axon.project_pack.pack_project",
+            return_value={
+                "status": "packed",
+                "project": "myproj",
+                "out_path": out_path,
+                "sealed": False,
+                "file_count": 1,
+                "bytes": 1,
+            },
+        ) as mock_pack:
+            run_cli("--project-pack", "myproj", "--pack-out", out_path)
+        _, kwargs = mock_pack.call_args
+        assert kwargs.get("out_path") == out_path
+
+    def test_project_pack_failure_exits_nonzero(self, cfg, tmp_path):
+        cfg.projects_root = str(tmp_path)
+        from axon.project_pack import ProjectPackError
+
+        with patch("axon.project_pack.pack_project", side_effect=ProjectPackError("boom")):
+            code = run_cli("--project-pack", "myproj")
+        assert code == 1
+
+    def test_project_unpack_flag(self, cfg, tmp_path, capsys):
+        cfg.projects_root = str(tmp_path)
+        zip_path = str(tmp_path / "myproj.zip")
+        with patch(
+            "axon.project_pack.unpack_project",
+            return_value={
+                "status": "unpacked",
+                "project": "myproj",
+                "sealed": False,
+                "file_count": 3,
+                "manifest": {},
+            },
+        ) as mock_unpack:
+            run_cli("--project-unpack", zip_path)
+        out = capsys.readouterr().out
+        assert "myproj" in out
+        mock_unpack.assert_called_once()
+        _, kwargs = mock_unpack.call_args
+        assert kwargs.get("as_name") is None
+        assert kwargs.get("force") is False
+
+    def test_project_unpack_with_as_and_force(self, cfg, tmp_path):
+        cfg.projects_root = str(tmp_path)
+        zip_path = str(tmp_path / "myproj.zip")
+        with patch(
+            "axon.project_pack.unpack_project",
+            return_value={
+                "status": "unpacked",
+                "project": "renamed",
+                "sealed": False,
+                "file_count": 1,
+                "manifest": {},
+            },
+        ) as mock_unpack:
+            run_cli("--project-unpack", zip_path, "--as", "renamed", "--force")
+        _, kwargs = mock_unpack.call_args
+        assert kwargs.get("as_name") == "renamed"
+        assert kwargs.get("force") is True
+
+    def test_project_unpack_failure_exits_nonzero(self, cfg, tmp_path):
+        cfg.projects_root = str(tmp_path)
+        from axon.project_pack import ProjectPackError
+
+        with patch("axon.project_pack.unpack_project", side_effect=ProjectPackError("boom")):
+            code = run_cli("--project-unpack", str(tmp_path / "x.zip"))
+        assert code == 1
+
+
 # ---------------------------------------------------------------------------
 # 7.  main() --ingest
 # ---------------------------------------------------------------------------

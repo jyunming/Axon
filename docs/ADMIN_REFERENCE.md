@@ -140,6 +140,8 @@ If no query string is given, the interactive REPL starts. If a query string is g
 | `--project-new NAME` | Create a new project (if it does not exist) and use it. Combine with `--ingest` to populate in one step |
 | `--project-list` | List all projects and exit |
 | `--project-delete NAME` | Delete a project and all its data, then exit |
+| `--project-pack NAME [--pack-out PATH]` | Zip project NAME's entire on-disk footprint (index files, sessions, sub-projects, and `.security/` if sealed) for backup, restore, or relocation, then exit. Prints the output path. Defaults to `~/.axon/packs/<name>-<timestamp>.axonpack.zip` |
+| `--project-unpack PATH [--as NAME] [--force]` | Restore a project from the zip archive at PATH into AxonStore, then exit. Target name defaults to the pack's original project name; `--force` overwrites an existing project directory at the target name |
 
 ### 2.8 Graph Operations
 
@@ -324,6 +326,8 @@ All RAG flags can be toggled at runtime without restarting.
 | `/project new NAME` | Create a new project explicitly | `/project new research/2026` |
 | `/project delete NAME` | Delete a project and all its data | `/project delete old-proj` |
 | `/project folder` | Show the filesystem path of the active project | `/project folder` |
+| `/project pack NAME [--out PATH]` | Zip a project's entire on-disk footprint for backup, restore, or relocation | `/project pack research --out ~/backup.zip` |
+| `/project unpack PATH [--as NAME] [--force]` | Restore a project from a packed zip into AxonStore | `/project unpack ~/backup.zip --as research2` |
 
 ### 3.8 Sessions
 
@@ -456,6 +460,8 @@ Interactive docs: `/docs` (Swagger UI), `/redoc` — both branded with the Axon 
 | `POST` | `/project/delete/{name}` | Delete a project and all its stored data |
 | `POST` | `/project/rotate-keys` | Rotate sealed-project DEK and re-encrypt all content files |
 | `POST` | `/project/seal` | Encrypt all content files in a project at rest |
+| `POST` | `/project/pack` | Zip a project's entire on-disk footprint for backup, restore, or relocation. Returns the server-side output path |
+| `POST` | `/project/unpack` | Restore a project from a zip archive (server-side path) into AxonStore |
 | `POST` | `/mount/refresh` | Force-refresh a mounted shared project's handles |
 | `GET` | `/sessions` | List saved conversation sessions (most recent first) |
 | `GET` | `/session/{session_id}` | Retrieve a full session transcript |
@@ -584,7 +590,7 @@ Returns: `ingest_path` / `ingest_url` → `{"job_id": "..."}`. `get_job_status` 
 | `get_stale_docs` | `days` (int, default `7`) | List documents not refreshed in N days |
 | `get_active_leases` | — | List active write-lease counts per project |
 
-### 5.4 Project Management (4)
+### 5.4 Project Management (6)
 
 | Tool | Parameters | Description |
 |------|-----------|-------------|
@@ -592,6 +598,8 @@ Returns: `ingest_path` / `ingest_url` → `{"job_id": "..."}`. `get_job_status` 
 | `switch_project` | `project_name` (str, required) | Switch to a named project |
 | `create_project` | `name` (str, required), `description` (str, default `""`) | Create a new project |
 | `delete_project` | `name` (str, required) | Delete a project and all its data |
+| `pack_project` | `project_name` (str, required), `out_path` (str, optional) | Zip a project's entire on-disk footprint for backup, restore, or relocation |
+| `unpack_project` | `zip_path` (str, required), `as_name` (str, optional), `force` (bool, default `false`) | Restore a project from a packed zip into AxonStore |
 
 ### 5.5 Settings (2)
 
@@ -1043,6 +1051,8 @@ curl -X POST http://localhost:8420/graph/finalize
 | Project switch | ✓ | ✓ | ✓ | ✓ |
 | Project create | ✓ | ✓ | ✓ | ✓ |
 | Project delete | ✓ | ✓ | ✓ | ✓ |
+| Project pack | ✓ | ✓ | ✓ | ✓ |
+| Project unpack | ✓ | ✓ | ✓ | ✓ |
 | Config read | ✓ | ✓ | — | ✓ |
 | Config update | ✓ | ✓ | — | ✓ |
 | Config validate | ✓ | — | ✓ | — |

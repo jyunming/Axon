@@ -125,12 +125,12 @@ class TestVsCodeManifestContract:
             pytest.skip("VS Code extension directory not found")
 
     def test_manifest_tool_count(self):
-        """Extension manifest should declare 37 tools (34 original + seal_project + extend_share + store_whoami)."""
+        """Extension manifest should declare 41 tools (39 prior + pack_project + unpack_project)."""
         manifest = _extension_manifest()
         tools = manifest["contributes"]["languageModelTools"]
         assert (
-            len(tools) == 39
-        ), f"Expected 39 tools, got {len(tools)}: {[t['name'] for t in tools]}"
+            len(tools) == 41
+        ), f"Expected 41 tools, got {len(tools)}: {[t['name'] for t in tools]}"
 
     def test_tier1_vscode_capabilities_in_manifest(self):
         """Every Tier 1 capability with VS Code support has a corresponding manifest tool."""

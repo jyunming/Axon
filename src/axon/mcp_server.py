@@ -700,6 +700,34 @@ async def seal_project(project_name: str, migration_mode: str = "in_place") -> A
 
 
 @mcp.tool()
+async def pack_project(project_name: str, out_path: str | None = None) -> Any:
+    """Pack a project's entire on-disk footprint into a zip archive at a
+    server-side filesystem path (requires the MCP client and axon-api to
+    share a filesystem — same colocation assumption as ingest_path).
+    Args:
+        project_name: Name of the project to pack.
+        out_path: Optional server-side output path. Defaults to
+            ~/.axon/packs/<name>-<timestamp>.axonpack.zip.
+    """
+    return await _post("/project/pack", {"project_name": project_name, "out_path": out_path})
+
+
+@mcp.tool()
+async def unpack_project(zip_path: str, as_name: str | None = None, force: bool = False) -> Any:
+    """Unpack a .axonpack.zip (server-side filesystem path) into AxonStore
+    as a project. Refuses if the target project already exists unless
+    force=True.
+    Args:
+        zip_path: Server-side filesystem path to a pack produced by pack_project.
+        as_name: Target project name. Defaults to the pack's original project name.
+        force: Overwrite an existing project directory at the target name.
+    """
+    return await _post(
+        "/project/unpack", {"zip_path": zip_path, "as_name": as_name, "force": force}
+    )
+
+
+@mcp.tool()
 async def graph_status() -> Any:
     """Return current GraphRAG knowledge-graph status.
     Reports entity count, edge count, community summary count, whether a

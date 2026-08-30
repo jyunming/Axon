@@ -454,6 +454,103 @@ class TestReplProject:
         assert "Active" in output or isinstance(output, str)
 
 
+class TestReplProjectPackUnpack:
+    def test_pack_no_arg_prints_usage(self):
+        brain = _make_mock_brain()
+        output = _run_repl_with_commands(["/project pack"], brain=brain)
+        assert "Usage" in output
+
+    def test_pack_calls_pack_project(self):
+        brain = _make_mock_brain()
+        brain._active_project = "default"
+        with patch(
+            "axon.project_pack.pack_project",
+            return_value={
+                "status": "packed",
+                "project": "myproj",
+                "out_path": "/tmp/myproj.zip",
+                "sealed": False,
+                "file_count": 3,
+                "bytes": 42,
+            },
+        ) as mock_pack:
+            output = _run_repl_with_commands(["/project pack myproj"], brain=brain)
+        assert "myproj" in output
+        mock_pack.assert_called_once()
+
+    def test_pack_with_out_flag_parses_path(self):
+        brain = _make_mock_brain()
+        brain._active_project = "default"
+        with patch(
+            "axon.project_pack.pack_project",
+            return_value={
+                "status": "packed",
+                "project": "myproj",
+                "out_path": "/tmp/custom.zip",
+                "sealed": False,
+                "file_count": 1,
+                "bytes": 1,
+            },
+        ) as mock_pack:
+            _run_repl_with_commands(["/project pack myproj --out /tmp/custom.zip"], brain=brain)
+        _, kwargs = mock_pack.call_args
+        assert kwargs.get("out_path") == "/tmp/custom.zip"
+
+    def test_unpack_no_arg_prints_usage(self):
+        brain = _make_mock_brain()
+        output = _run_repl_with_commands(["/project unpack"], brain=brain)
+        assert "Usage" in output
+
+    def test_unpack_calls_unpack_project(self):
+        brain = _make_mock_brain()
+        brain._active_project = "default"
+        with patch(
+            "axon.project_pack.unpack_project",
+            return_value={
+                "status": "unpacked",
+                "project": "myproj",
+                "sealed": False,
+                "file_count": 3,
+                "manifest": {},
+            },
+        ) as mock_unpack:
+            output = _run_repl_with_commands(["/project unpack /tmp/myproj.zip"], brain=brain)
+        assert "myproj" in output
+        mock_unpack.assert_called_once()
+        _, kwargs = mock_unpack.call_args
+        assert kwargs.get("as_name") is None
+        assert kwargs.get("force") is False
+
+    def test_unpack_with_as_and_force_flags(self):
+        brain = _make_mock_brain()
+        brain._active_project = "default"
+        with patch(
+            "axon.project_pack.unpack_project",
+            return_value={
+                "status": "unpacked",
+                "project": "renamed",
+                "sealed": False,
+                "file_count": 1,
+                "manifest": {},
+            },
+        ) as mock_unpack:
+            _run_repl_with_commands(
+                ["/project unpack /tmp/myproj.zip --as renamed --force"], brain=brain
+            )
+        _, kwargs = mock_unpack.call_args
+        assert kwargs.get("as_name") == "renamed"
+        assert kwargs.get("force") is True
+
+    def test_pack_failure_prints_error(self):
+        brain = _make_mock_brain()
+        brain._active_project = "default"
+        from axon.project_pack import ProjectPackError
+
+        with patch("axon.project_pack.pack_project", side_effect=ProjectPackError("boom")):
+            output = _run_repl_with_commands(["/project pack myproj"], brain=brain)
+        assert "Pack failed" in output and "boom" in output
+
+
 class TestReplSessions:
     def test_sessions_command(self):
         brain = _make_mock_brain()

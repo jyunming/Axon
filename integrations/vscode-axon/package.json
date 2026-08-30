@@ -867,6 +867,53 @@
           "type": "object",
           "properties": {}
         }
+      },
+      {
+        "name": "pack_project",
+        "displayName": "Axon: Pack Project",
+        "modelDescription": "Zip a project's entire on-disk footprint (index files, sessions, sub-projects, and .security/ if sealed) for backup, restore, or relocation. Returns the path to the created zip.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "project_name": {
+              "type": "string",
+              "description": "Name of the project to pack."
+            },
+            "out_path": {
+              "type": "string",
+              "description": "Optional server-side output path. Defaults to ~/.axon/packs/<name>-<timestamp>.axonpack.zip."
+            }
+          },
+          "required": [
+            "project_name"
+          ]
+        }
+      },
+      {
+        "name": "unpack_project",
+        "displayName": "Axon: Unpack Project",
+        "modelDescription": "Restore a project from a zip archive produced by pack_project into AxonStore. Refuses if the target project already exists unless force is set.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "zip_path": {
+              "type": "string",
+              "description": "Server-side filesystem path to a .axonpack.zip produced by pack_project."
+            },
+            "as_name": {
+              "type": "string",
+              "description": "Target project name. Defaults to the pack manifest's original project name."
+            },
+            "force": {
+              "type": "boolean",
+              "description": "Overwrite an existing project directory at the target name.",
+              "default": false
+            }
+          },
+          "required": [
+            "zip_path"
+          ]
+        }
       }
     ],
     "commands": [
