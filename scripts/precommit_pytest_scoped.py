@@ -45,7 +45,15 @@ Mappings (first match wins):
   src/axon/repl.py              → tests/test_repl*.py
                                   tests/test_lint.py
 
-  tests/<file>                  → that exact test file
+  tests/<file>                  → that exact test file, if it matches
+                                  pytest's collection pattern
+                                  (test_*.py / *_test.py); otherwise
+                                  it's a non-test helper module (e.g.
+                                  tests/e2e/vscode_helpers.py) and we
+                                  run every test_*.py sibling in its
+                                  directory instead — collecting the
+                                  helper directly finds 0 items and
+                                  fails the hook for no reason
 
   pyproject.toml                → tests/test_lint.py
                                   tests/test_packaging*.py
@@ -190,7 +198,16 @@ def _select_tests(staged_files: list[str]) -> set[str]:
     for f in staged_files:
         # Tests changing → run that test directly
         if f.startswith("tests/") and f.endswith(".py"):
-            targets.add(f)
+            basename = pathlib.PurePosixPath(f).name
+            if basename.startswith("test_") or basename.endswith("_test.py"):
+                targets.add(f)
+            else:
+                # Non-test helper module (e.g. a conftest-style import
+                # target like tests/e2e/vscode_helpers.py) — pytest
+                # would collect 0 items from it directly. Run every
+                # test file in the same directory instead.
+                helper_dir = pathlib.PurePosixPath(f).parent
+                targets |= _resolve_globs([f"{helper_dir}/test_*.py"])
             continue
         # Match against rules; first rule wins
         matched = False
