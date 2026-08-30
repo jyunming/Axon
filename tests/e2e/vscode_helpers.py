@@ -149,22 +149,31 @@ const vscode = {
   },
 
   workspace: {
-    getConfiguration: (_section) => ({
-      get: (key, fallback) => {
-        const vals = {
-          apiBase,
-          apiKey:          '',
-          autoStart:       false,
-          useCopilotLlm:   false,
-          topK:            5,
-          storeBase:       '',
-          ingestBase:      '',
-          pythonPath:      '',
-        };
-        Object.assign(vals, extra);
-        return Object.prototype.hasOwnProperty.call(vals, key) ? vals[key] : fallback;
-      },
-    }),
+    getConfiguration: (_section) => {
+      const vals = {
+        apiBase,
+        apiKey:          '',
+        autoStart:       false,
+        useCopilotLlm:   false,
+        topK:            5,
+        storeBase:       '',
+        ingestBase:      '',
+        pythonPath:      '',
+      };
+      Object.assign(vals, extra);
+      return {
+        get: (key, fallback) =>
+          Object.prototype.hasOwnProperty.call(vals, key) ? vals[key] : fallback,
+        // Real VS Code's WorkspaceConfiguration.inspect() distinguishes an
+        // explicit user-set value from the schema default. This mock never
+        // simulates an explicit override -- tests that need the extension
+        // to find/adopt a known address do so via context.workspaceState's
+        // mocked axon.lastPort below, matching ensureServerRunning's real
+        // resolution order (explicit override, then last-known-port, then
+        // a fresh free port).
+        inspect: (_key) => ({}),
+      };
+    },
     workspaceFolders: (extra._workspaceFolders || []).map(p => ({ uri: { fsPath: p } })),
     openTextDocument:  async (uri) => ({ uri, getText: () => '' }),
     findFiles:         async ()    => [],
@@ -225,8 +234,27 @@ Module._load = function(request, parent, isMain) {
 
 // -- Main runner ---------------------------------------------------------------
 async function main() {
-  const ext     = require(extensionJs);
-  const context = { extensionUri: { fsPath: extensionRoot }, subscriptions: [] };
+  const ext = require(extensionJs);
+  // ensureServerRunning() checks context.workspaceState for a last-known
+  // port from a previous session before deciding to spawn a fresh server.
+  // Seed it from the apiBase CLI arg's port so existing tests that pass a
+  // live recorder address still get "adopt it, don't spawn" behavior, and
+  // tests that pass a dead port still get "unreachable, spawn fresh"
+  // behavior -- both go through the real resolution order now instead of
+  // a flat config.get('apiBase') read.
+  const _lastPortMatch = /:(\d+)/.exec(apiBase || '');
+  const _workspaceStateStore = {
+    'axon.lastPort': _lastPortMatch ? parseInt(_lastPortMatch[1], 10) : undefined,
+  };
+  const context = {
+    extensionUri: { fsPath: extensionRoot },
+    subscriptions: [],
+    workspaceState: {
+      get: (key, fallback) =>
+        _workspaceStateStore[key] !== undefined ? _workspaceStateStore[key] : fallback,
+      update: async (key, value) => { _workspaceStateStore[key] = value; },
+    },
+  };
   await ext.activate(context);
 
   const postActivateWaitMs = extra._postActivateWaitMs || 0;
