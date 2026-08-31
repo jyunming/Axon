@@ -1090,3 +1090,36 @@ class TestToolRefreshIngest:
         assert brain.ingest.call_count == 1
         assert "0 file(s) re-ingested" in result, result
         assert "1 unchanged" in result, result
+
+    def test_chunk_level_dedup_after_deleting_old_chunks_is_reported_as_data_loss(self, tmp_path):
+        """When old chunks WERE actually deleted (unlike the no-prior-content
+        case above) and the re-ingest then writes 0 new chunks, the source's
+        content is genuinely gone with nothing to replace it -- must be
+        reported as a loss, not lumped in with the harmless "unchanged"
+        bucket where no deletion happened at all."""
+        import hashlib
+
+        src = tmp_path / "doc.md"
+        src.write_text("new content", encoding="utf-8")
+        stale_hash = hashlib.md5(b"old content").hexdigest()
+
+        brain = _make_brain()
+        brain._doc_versions = {
+            str(src): {"content_hash": stale_hash, "chunk_count": 1},
+        }
+        brain.list_documents.return_value = [
+            {"source": str(src), "chunks": 1, "doc_ids": [f"{src}::h1"]}
+        ]
+        brain.ingest.return_value = 0
+
+        loader = MagicMock()
+        loader.load.return_value = [{"text": "new content"}]
+        with patch("axon.loaders.DirectoryLoader") as DL:
+            DL.return_value.loaders = {".md": loader}
+            result = _tool_refresh_ingest(brain, {})
+
+        brain._own_vector_store.delete_by_ids.assert_called_once_with([f"{src}::h1"])
+        assert brain.ingest.call_count == 1
+        assert "0 file(s) re-ingested" in result, result
+        assert "1 unchanged" not in result, result
+        assert "1 file(s) had their old content removed" in result, result
