@@ -290,19 +290,58 @@ def find_live_server_for_store(config: Any, *, timeout: float = _PROBE_TIMEOUT_S
         return None
 
 
-def write_store_lock(config: Any, host: str, port: int) -> None:
-    """Register this process as the server for the store (best-effort)."""
+def write_store_lock(config: Any, host: str, port: int, *, force: bool = False) -> bool:
+    """Atomically claim this store's lock for this process.
+
+    Returns ``True`` if this process now owns the lock (safe to proceed as
+    the server); ``False`` if another live server already holds it — the
+    caller must not construct a brain in that case.
+
+    Without ``force``, this narrows (but does not fully close — see below)
+    the gap between a caller's own :func:`find_live_server_for_store` read
+    and this write: two processes racing to become the server can both pass
+    that earlier read, but the exclusive create below is resolved atomically
+    by the OS, so at most one of them actually wins it and proceeds to open
+    the store. A process that loses the race retries once against a lock
+    that might just be stale (a dead server's leftover file); if that retry
+    also loses, it gives up and reports failure rather than looping forever
+    against a live contender.
+
+    ``force=True`` (``AXON_ALLOW_MULTIPLE_SERVERS``) skips all of this and
+    unconditionally overwrites, matching the pre-existing best-effort
+    behavior for that explicit opt-in — that mode has no exclusivity
+    contract to uphold in the first place.
+    """
     p = _store_lock_path(config)
     if p is None:
-        return
-    try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(
-            json.dumps({"host": host, "port": int(port), "pid": os.getpid()}),
-            encoding="utf-8",
-        )
-    except OSError:
-        pass
+        return True
+    payload = json.dumps({"host": host, "port": int(port), "pid": os.getpid()}).encode("utf-8")
+    if force:
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(payload)
+        except OSError:
+            pass
+        return True
+    for _attempt in range(2):
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(str(p), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            try:
+                os.write(fd, payload)
+            finally:
+                os.close(fd)
+            return True
+        except FileExistsError:
+            if find_live_server_for_store(config) is not None:
+                return False  # a live server genuinely holds it — defer
+            try:
+                p.unlink()  # stale (dead server's) lock — clear it and retry once
+            except OSError:
+                pass
+        except OSError:
+            return True  # best-effort — don't block startup on a lock-file I/O error
+    return False
 
 
 def release_store_lock(config: Any) -> None:

@@ -2519,6 +2519,49 @@ class TestLifespanPortSync:
         assert host == "127.0.0.1"
         assert port == 9500
 
+    async def test_lifespan_aborts_when_lock_claim_is_lost(self):
+        """find_live_server_for_store() and write_store_lock() are not one
+        atomic step -- a second process can pass the first check and still
+        lose the exclusive-create race. lifespan() must abort rather than
+        construct a brain in that case, the same as if the first check had
+        caught it."""
+        from axon.api import app, lifespan
+
+        with patch.dict(os.environ, {"AXON_HOST": "127.0.0.1", "AXON_PORT": "9500"}), patch(
+            "axon.api.AxonConfig.load", return_value=MagicMock()
+        ), patch("axon.api._auto_init_store"), patch("axon.api.AxonBrain") as mock_brain_cls, patch(
+            "axon.server_client.find_live_server_for_store", return_value=None
+        ), patch(
+            "axon.server_client.write_store_lock", return_value=False
+        ), patch(
+            "axon.server_client.release_store_lock"
+        ):
+            with pytest.raises(RuntimeError, match="already serving this store"):
+                async with lifespan(app):
+                    pass
+        mock_brain_cls.assert_not_called()
+
+    async def test_lifespan_force_overwrites_when_allow_multiple_servers(self):
+        with patch.dict(
+            os.environ,
+            {"AXON_HOST": "127.0.0.1", "AXON_PORT": "9500", "AXON_ALLOW_MULTIPLE_SERVERS": "1"},
+        ), patch("axon.api.AxonConfig.load", return_value=MagicMock()), patch(
+            "axon.api._auto_init_store"
+        ), patch(
+            "axon.api.AxonBrain"
+        ), patch(
+            "axon.server_client.find_live_server_for_store", return_value=None
+        ), patch(
+            "axon.server_client.write_store_lock", return_value=True
+        ) as mock_write_lock, patch(
+            "axon.server_client.release_store_lock"
+        ):
+            from axon.api import app, lifespan
+
+            async with lifespan(app):
+                pass
+        assert mock_write_lock.call_args.kwargs.get("force") is True
+
 
 """
 tests/test_api_coverage.py

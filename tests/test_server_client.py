@@ -171,6 +171,61 @@ def test_find_live_server_treats_503_as_alive(tmp_path, monkeypatch):
     assert found is not None and found["port"] == 8420
 
 
+def test_write_store_lock_returns_true_on_fresh_claim(tmp_path):
+    cfg = _cfg(projects_root=str(tmp_path))
+    assert sc.write_store_lock(cfg, "127.0.0.1", 8420) is True
+
+
+def test_write_store_lock_refuses_when_another_server_is_alive(tmp_path, monkeypatch):
+    """Two processes racing to become the server: the second one's claim
+    must fail once the first has genuinely started responding -- exercises
+    the FileExistsError -> liveness-check branch, not just a fresh create."""
+    cfg = _cfg(projects_root=str(tmp_path))
+    assert sc.write_store_lock(cfg, "127.0.0.1", 8420) is True
+    monkeypatch.setattr(
+        sc.urllib.request,
+        "urlopen",
+        _fake_urlopen({"/health/ready": _Resp(200, b'{"status":"ok"}')}),
+    )
+    assert sc.write_store_lock(cfg, "127.0.0.1", 9999) is False
+    # The original (first) server's lock must survive untouched.
+    found = sc.find_live_server_for_store(cfg)
+    assert found is not None and found["port"] == 8420
+
+
+def test_write_store_lock_steals_a_stale_lock(tmp_path, monkeypatch):
+    """A dead server's leftover lock file must not permanently block a new
+    server from claiming the store."""
+    cfg = _cfg(projects_root=str(tmp_path))
+    assert sc.write_store_lock(cfg, "127.0.0.1", 8420) is True
+
+    def _dead(*a, **k):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(sc.urllib.request, "urlopen", _dead)
+    assert sc.write_store_lock(cfg, "127.0.0.1", 9999) is True
+    # find_live_server_for_store also probes /health/ready, which this test's
+    # mock always fails -- read the lock file directly to confirm the new
+    # claim actually landed, rather than reusing the "always dead" probe.
+    lock_path = tmp_path / sc._LOCK_NAME
+    assert json.loads(lock_path.read_text(encoding="utf-8"))["port"] == 9999
+
+
+def test_write_store_lock_force_overwrites_unconditionally(tmp_path, monkeypatch):
+    """AXON_ALLOW_MULTIPLE_SERVERS has no exclusivity contract -- force=True
+    must overwrite even a lock belonging to a genuinely live server."""
+    cfg = _cfg(projects_root=str(tmp_path))
+    assert sc.write_store_lock(cfg, "127.0.0.1", 8420) is True
+    monkeypatch.setattr(
+        sc.urllib.request,
+        "urlopen",
+        _fake_urlopen({"/health/ready": _Resp(200, b'{"status":"ok"}')}),
+    )
+    assert sc.write_store_lock(cfg, "127.0.0.1", 9999, force=True) is True
+    found = sc.find_live_server_for_store(cfg)
+    assert found is not None and found["port"] == 9999
+
+
 def test_detect_server_sends_api_key_on_config_probe(monkeypatch):
     # /config is not on the auth-bypass list; the store-match probe must send
     # X-API-Key or a secured server 401s and routing never engages.
