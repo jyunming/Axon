@@ -102,11 +102,12 @@ def _run_via_server(server: dict, args, config) -> None:
     """Execute store-mutating CLI commands against a detected axon-api server.
 
     Mirrors the local ``--project-new``/``--project``/``--project-delete``/
-    ``--ingest`` handling but over HTTP, so the running server (the single owner
-    of the store) does the write. Called from ``main()`` when
-    :func:`axon.server_client.detect_server` finds a live server and the user
-    did not pass ``--local``. Any HTTP failure is surfaced and re-raised so the
-    caller can decide to fall back to local.
+    ``--ingest``/``--project-pack``/``--project-unpack`` handling but over
+    HTTP, so the running server (the single owner of the store) does the
+    write. Called from ``main()`` when :func:`axon.server_client.detect_server`
+    finds a live server and the user did not pass ``--local``. Any HTTP
+    failure is surfaced and re-raised so the caller can decide to fall back
+    to local.
     """
     from axon import server_client as sc
 
@@ -151,6 +152,29 @@ def _run_via_server(server: dict, args, config) -> None:
             + (f": {docs} document(s)" if docs is not None else "")
             + (f", {chunks} chunk(s)" if chunks is not None else "")
             + "."
+        )
+
+    if getattr(args, "project_pack", None):
+        result = sc.remote_project_pack(
+            base, args.project_pack.lower(), headers, out_path=getattr(args, "pack_out", None)
+        )
+        print(
+            f"  Packed '{result['project']}' -> {result['out_path']} "
+            f"({result['file_count']} files)."
+        )
+
+    if getattr(args, "project_unpack", None):
+        as_name = getattr(args, "project_unpack_as", None)
+        result = sc.remote_project_unpack(
+            base,
+            args.project_unpack,
+            headers,
+            as_name=as_name.lower() if as_name else None,
+            force=getattr(args, "force", False),
+        )
+        print(
+            f"  Unpacked '{result['project']}' "
+            f"({result['file_count']} files, sealed={result['sealed']})."
         )
 
 
@@ -1550,15 +1574,21 @@ def main():
     )
     # --- Single-instance detection ------------------------------------------
     # If an axon-api server is already running, route store-mutating commands
-    # (--ingest, --project-new, --project-delete, and any --project switch that
-    # accompanies them) through it instead of opening a second local AxonBrain
-    # on the same store. Two processes racing on the TurboQuantDB files crash,
-    # and each extra CLI re-loads the embedding model and attaches the shared
-    # rotating log. --local opts out and forces a local brain.
+    # (--ingest, --project-new, --project-delete, --project-pack,
+    # --project-unpack, and any --project switch that accompanies them)
+    # through it instead of opening a second local AxonBrain on the same
+    # store. Two processes racing on the TurboQuantDB files crash, and each
+    # extra CLI re-loads the embedding model and attaches the shared rotating
+    # log. --project-pack/--project-unpack write/read the project's on-disk
+    # footprint directly (project_pack.py never constructs an AxonBrain), so
+    # they'd otherwise race a live server's open file handles the same way.
+    # --local opts out and forces a local, in-process (server-bypassing) run.
     if not getattr(args, "local", False) and (
         getattr(args, "ingest", None)
         or getattr(args, "project_new", None)
         or getattr(args, "project_delete", None)
+        or getattr(args, "project_pack", None)
+        or getattr(args, "project_unpack", None)
     ):
         from axon.server_client import ServerRequestError, detect_server
 

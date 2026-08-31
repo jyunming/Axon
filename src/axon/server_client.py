@@ -165,6 +165,30 @@ def remote_project_delete(base: str, name: str, headers: dict[str, str]) -> Any:
     return _request("POST", f"{base}/project/delete/{name}", headers, {})
 
 
+def remote_project_pack(
+    base: str, name: str, headers: dict[str, str], *, out_path: str | None = None
+) -> Any:
+    body: dict = {"project_name": name}
+    if out_path is not None:
+        body["out_path"] = out_path
+    return _request("POST", f"{base}/project/pack", headers, body)
+
+
+def remote_project_unpack(
+    base: str,
+    zip_path: str,
+    headers: dict[str, str],
+    *,
+    as_name: str | None = None,
+    force: bool = False,
+) -> Any:
+    abs_path = os.path.abspath(zip_path)
+    body: dict = {"zip_path": abs_path, "force": force}
+    if as_name is not None:
+        body["as_name"] = as_name
+    return _request("POST", f"{base}/project/unpack", headers, body)
+
+
 def remote_ingest(
     base: str,
     path: str,
