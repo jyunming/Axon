@@ -1,6 +1,12 @@
 # Changelog
 
-## [Unreleased]
+## [0.4.4] - 2026-08-31
+
+A feature release — project backup/restore, self-update, and single-instance
+coordination — alongside a second capabilities-audit cycle: a path-traversal
+fix, a missing system-path guard on the web UI's ingest picker, five
+concurrency/locking bugs, and the graph-engine ownership-inversion refactor
+that several of the audit's own findings had to route around.
 
 ### ⚡ Single-instance behaviour — one brain per store
 
@@ -55,6 +61,30 @@ genuinely configurable, not just env-var-only:
 - If you scripted around the old `:8000` default (curl examples, MCP
   `RAG_API_BASE`, VS Code `axon.apiBase`, etc.), update to `:8420` or set
   `--port 8000` explicitly to keep the old value.
+- **The VS Code extension now launches `axon-api` on a dynamically chosen
+  free port** instead of always trying the same static one and giving up if
+  it's occupied. Resolution order: an explicit `axon.apiBase` override (used
+  as-is, never auto-spawned); the last-known port from a previous session
+  (adopted if still alive); otherwise a fresh OS-assigned free port. Two real
+  bugs were fixed alongside this: the resolved port wasn't written into the
+  spawned process's environment, so the server-side lock file always recorded
+  `8420` regardless of what port `uvicorn` actually bound to; and ~25 call
+  sites across 10 files each independently re-read the raw `apiBase` setting
+  instead of sharing one resolved address.
+
+### 📦 `pack_project` / `unpack_project` — back up and restore a project
+
+No export/import/backup mechanism existed anywhere in this codebase before
+this. `pack_project` zips a project's entire on-disk footprint (including a
+sealed project's ciphertext and DEK wraps, restored still sealed); `unpack_project`
+restores a zip back into AxonStore. Zip-slip-safe from scratch — every archive
+member is validated (absolute paths, `..` traversal, symlinks) before
+anything is written, extraction lands in a staging directory first, and the
+final swap is atomic on full success only. Wired across all 7 surfaces: CLI
+(`--project-pack`/`--project-unpack`), REPL (`/project pack|unpack`), REST
+(`POST /project/pack`, `/project/unpack`), MCP (`pack_project`,
+`unpack_project` — 55 → 57 tools), and the VS Code extension (39 → 41 LM
+tools).
 
 ### ✨ `axon update` — self-update, one command
 
@@ -79,12 +109,99 @@ their stdout).
   Does not attempt config-schema migration; read this file (or the release
   notes) for breaking config changes, same as before.
 
+### 🔐 Security fixes
+
+- **Path traversal in REPL `/resume`.** The raw argument went straight to the
+  session loader with no validation (`/resume ../../../../etc/passwd` reached
+  it unmodified) — the equivalent REST route already validated session ids
+  against a filesystem-safe pattern; the REPL bypassed it by calling the
+  loader directly instead of going through the API layer. Both now share one
+  validation pattern.
+- **The web GUI's ingest-directory picker had no system-path guard.** The
+  REST `/ingest` route already blocks a curated list of system directories;
+  the picker only checked containment inside `RAG_INGEST_BASE`, so a broad or
+  unset `RAG_INGEST_BASE` left this surface with no system-directory
+  protection at all.
+
 ### 🐛 Fixes
 
 - **Web GUI chat dropped spaces between words** in streamed answers
   ("HowcanIhelp"). The client trimmed every SSE frame, stripping the leading
   space each tokenizer token carries. It now preserves token whitespace and only
-  JSON-parses structured control frames (sources / errors).
+  JSON-parses structured control frames (sources / errors). The Graph Explorer's
+  node colors (by entity type), entity search, hop-distance highlighting, and
+  legend swatches were restored in the same pass.
+- **REPL `/share list` was missing sealed shares entirely** — `axon
+  --share-list` already showed every sealed share you've issued; the REPL
+  equivalent silently showed "(none)" for the same project. Both surfaces now
+  render from one shared listing function.
+- **`axon --refresh` compared the wrong hash.** It recomputed a SHA-256 to
+  decide whether a file had changed, but `ingest()`'s own dedup uses MD5 — the
+  two never agreed, so an unchanged file could still be silently re-ingested.
+- **REPL `/governance` and CLI `--governance` never sent the API key.** Both
+  hand-rolled their own HTTP call instead of using the shared client helper
+  that attaches `X-API-Key`, so either command failed against a
+  key-protected `axon-api`.
+- **Deleting a multi-chunk document could leave a stale dedup entry**, silently
+  blocking re-ingestion of that source afterward — purge now matches by the
+  resolved source id, not just the raw chunk ids passed to `/delete`.
+- **`AxonBrain.ingest()` returned `None` instead of the chunk count**, which
+  crashed the MCP `ingest_path` tool with a `TypeError` on every real,
+  non-forced ingest (masked by the tool dispatcher stringifying the
+  exception). It now returns the count, and `add_text`/`add_texts`/
+  `ingest_url` report "already ingested" instead of a false success when
+  dedup drops everything.
+- **Fresh installs and config resets got `llm.max_tokens: 2048`, not `8192`**,
+  re-triggering the exact truncation-on-reasoning-models bug 0.4.3 said it
+  fixed. That fix only ever updated the dataclass default; the literal
+  first-run config template, the setup wizard's fallback, and the tracked
+  `config.yaml.template` reference file all still said `2048`. All three are
+  now `8192`.
+- **`compute_doc_hash()`'s Python fallback hashed with SHA-256 instead of
+  MD5**, disagreeing with the native Rust implementation (and every other
+  ingest-dedup call site) — a document could get a different dedup hash
+  depending on whether the Rust extension loaded.
+- **RAPTOR's summary cache had no size cap and no lock**, despite being
+  written from multiple worker threads during summary generation — unbounded
+  growth plus a real (if latent) race. Now capped at `raptor_summary_cache_size`
+  (default 500, configurable) and lock-protected.
+- **LLMLingua's model cache had no cross-instance sharing or lock**, unlike
+  its two siblings (GLiNER, REBEL) — concurrent `AxonBrain` instances could
+  each load their own compressor instead of sharing one.
+- **`OpenLLM`'s five client-factory caches (Gemini, OpenAI, Grok, Copilot,
+  plus Copilot's token refresh) had no lock**, despite being shared by
+  concurrent request handlers — two requests hitting a cold cache at once
+  (e.g. right after an API-key rotation) could each build a duplicate client
+  or fire a duplicate token exchange.
+- **`config.yaml` writes were not atomic** — save, the first-run scaffold, and
+  all three "reset to defaults" paths (CLI, REST, REPL) wrote straight to the
+  live file, so a crash mid-write could leave a truncated, unparsable config
+  that the next launch couldn't load.
+- **REPL confirmation prompts were six inconsistent copies** (`/clear`,
+  `/project new`/`delete`, `/update`, `/config reset`, agent-mode tool
+  confirmation) — some accepted `"yes"`, most crashed on Ctrl+C/EOF instead of
+  treating it as "no". Consolidated to one shared prompt helper.
+
+### 🏗 Internal
+
+- **Graph-engine ownership inversion (M2 backend-boundary refactor).**
+  `AxonBrain` no longer inherits `GraphRagMixin` directly — its ~90 methods
+  and graph-state now live on a new `GraphRagEngine`, composed into
+  `GraphRagBackend` behind the `GraphBackend` protocol. No behavior change;
+  affects only code that reached into `GraphRagMixin` internals directly
+  rather than through `AxonBrain`/`AxonConfig`. See `CLAUDE.md`'s
+  Architecture section.
+- The query router's query cache and the graph backend's traversal cache —
+  previously two independent hand-rolled LRU+TTL implementations — now share
+  one extracted algorithm.
+- The local-LLM reachability probe (duplicated between `llm.py` and
+  `doctor.py`) and the CLI's two duplicated knowledge-base table renderers
+  were each consolidated to a single implementation.
+
+### 🧪 Tests
+
+- VS Code e2e mocks updated for the port-fix's new `config.inspect()` /
+  `workspaceState` calls.
 
 ## [0.4.3] - 2026-08-09
 
