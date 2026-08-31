@@ -1,11 +1,12 @@
 # Changelog
 
-## [Unreleased]
+## [0.4.5] - 2026-09-01
 
 A third capabilities-audit cycle, this time targeting v0.4.4 itself via an
 independent `/code-review` pass over its full diff rather than waiting for
 the next scheduled audit — one security fix and several outright
-regressions introduced by that same release.
+regressions introduced by that same release, found and closed across five
+rounds of fixing and then re-reviewing those fixes themselves.
 
 ### 🔐 Security fixes
 
