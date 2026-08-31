@@ -8,6 +8,10 @@ GraphRagMixin._gr_write_bytes_if_changed so non-JSON writers — config.yaml,
 from __future__ import annotations
 
 import json
+import stat
+import sys
+
+import pytest
 
 from axon._atomic_persist import (
     write_bytes_if_changed,
@@ -170,6 +174,25 @@ def test_text_skips_write_when_unchanged(tmp_path):
     wrote = write_text_if_changed(path, "key: value\n", cache)
     assert wrote is False
     assert path.stat().st_mtime_ns == mtime_before
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="POSIX permission bits are not meaningful on Windows"
+)
+def test_bytes_preserves_existing_file_permissions(tmp_path):
+    """A rewrite through this helper must not silently widen a restrictive
+    mode (e.g. 0600 sealed-share key material) to the process umask default —
+    the replacement tmp file is freshly created and would otherwise carry
+    the umask's mode instead of the target's.
+    """
+    path = tmp_path / "secret.bin"
+    cache: dict[str, str] = {}
+    write_bytes_if_changed(path, b"v1", cache)
+    path.chmod(0o600)
+    wrote = write_bytes_if_changed(path, b"v2", cache)
+    assert wrote is True
+    assert path.read_bytes() == b"v2"
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
 def test_text_writes_when_no_cache_entry_but_disk_content_matches(tmp_path):
