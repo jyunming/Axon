@@ -8,7 +8,7 @@ import * as os from 'os';
 import * as net from 'net';
 import { spawn } from 'child_process';
 
-import { state, SERVER_START_TIMEOUT_MS } from '../shared';
+import { state, SERVER_START_TIMEOUT_MS, resolveApiBase } from '../shared';
 import { httpGet, httpPost, sleep } from './http';
 
 const LAST_PORT_KEY = 'axon.lastPort';
@@ -336,9 +336,15 @@ export async function waitForHealth(apiBase: string, timeoutMs: number): Promise
   return false;
 }
 
-export async function startCopilotLlmWorker(apiBase: string, apiKey: string): Promise<void> {
+export async function startCopilotLlmWorker(apiKey: string): Promise<void> {
   state.outputChannel.appendLine('Starting Copilot LLM Worker (Polling for tasks)...');
   while (true) {
+    // Resolved fresh every iteration (not a closure-captured snapshot from
+    // activation time) -- this loop runs for the extension's whole
+    // lifetime, and the server address can change after activation (e.g.
+    // autoStart off with the server started later, or the dynamically
+    // chosen free port resolving to something different on a later run).
+    const apiBase = resolveApiBase();
     try {
       const result = await httpGet(`${apiBase}/llm/copilot/tasks`, apiKey);
       if (result.status === 200) {

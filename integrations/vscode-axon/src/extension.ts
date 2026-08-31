@@ -90,7 +90,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     state.outputChannel.appendLine('Axon: Using Copilot LLM for backend tasks.');
     // Import lazily to avoid circular-import issues with server.ts
     const { startCopilotLlmWorker } = await import('./client/server');
-    startCopilotLlmWorker(apiBase, apiKey);
+    startCopilotLlmWorker(apiKey);
     // Tell the backend to use the 'copilot' provider and PERSIST it
     waitForHealth(apiBase, 120_000).then((running) => {
       if (running) {
