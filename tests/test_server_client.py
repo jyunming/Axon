@@ -177,6 +177,25 @@ def test_write_store_lock_returns_true_on_fresh_claim(tmp_path):
     assert sc.write_store_lock(cfg, "127.0.0.1", 8420) is True
 
 
+def test_write_store_lock_does_not_steal_an_unreadable_or_malformed_lock(tmp_path, monkeypatch):
+    """An unreadable/malformed lock file -- e.g. read mid-write by another
+    process's own os.open()-then-os.write() window, or simply corrupted --
+    must be treated as "can't confirm dead", never as proof of death.
+    Getting this backwards would let a second process steal a lock the
+    instant after a legitimate first process wins the exclusive create but
+    before it finishes writing its own pid into the file."""
+    cfg = _cfg(projects_root=str(tmp_path))
+    lock_path = tmp_path / sc._LOCK_NAME
+    lock_path.write_bytes(b"")  # empty -- simulates the os.open/os.write gap
+
+    def _dead(*a, **k):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(sc.urllib.request, "urlopen", _dead)
+    assert sc.write_store_lock(cfg, "127.0.0.1", 9999) is False
+    assert lock_path.read_bytes() == b""  # untouched, not stolen
+
+
 def test_write_store_lock_refuses_when_another_server_is_alive(tmp_path, monkeypatch):
     """Two processes racing to become the server: the second one's claim
     must fail once the first has genuinely started responding -- exercises

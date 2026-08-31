@@ -379,13 +379,17 @@ def _lock_owner_process_is_alive(lock_path: pathlib.Path) -> bool:
     try:
         recorded_pid = json.loads(lock_path.read_text(encoding="utf-8")).get("pid")
     except Exception:
-        return False
+        # Can't confirm dead -- including the lock file being read mid-write
+        # by another process's own os.open()-then-os.write() (a real, if
+        # narrow, TOCTOU: the file exists and is exclusively-created before
+        # it's populated), which must never look like proof of death.
+        return True
     if recorded_pid is None:
-        return False
+        return True
     try:
         return pid_alive(int(recorded_pid))
     except (TypeError, ValueError):
-        return False
+        return True
 
 
 def release_store_lock(config: Any) -> None:
