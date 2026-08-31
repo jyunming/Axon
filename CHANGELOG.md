@@ -94,6 +94,28 @@ regressions in two of them before they shipped:
   of which (`ingest_texts`) overstated its count by including blank
   snippets that were filtered before ever reaching `ingest()`.
 
+A fifth pass, over the fourth's own fixes, caught one more real bug and two
+consolidation gaps:
+
+- **The store-lock pid check had its safe default backwards.** Its own
+  docstring said an unreadable/malformed lock file should be treated as
+  "can't confirm dead" — but the code actually returned the value the
+  caller reads as "confirmed dead, steal it" for every one of those cases.
+  Combined with a genuine TOCTOU (the exclusive file create happens before
+  the file is populated), a second process racing into that exact window
+  could steal a lock a legitimate owner had just won. Fixed to return the
+  non-stealing default, matching what the docstring already claimed.
+- `_tool_clear_project` (the MCP/agent-tool surface) hadn't been migrated
+  to `brain.clear()` in the previous round, so a clear triggered through it
+  didn't invalidate the source-hash dedup cache the way the REPL's now
+  does. Migrated. REST's `POST /clear` was considered for the same
+  migration but reverted — its test suite relies on the route calling the
+  free function directly against a `MagicMock` brain, which a `brain.clear()`
+  call would silently no-op.
+- `AxonBrain.clear()` now returns the same shape `RemoteBrain.clear()`
+  already does, so a caller doesn't need an `isinstance` check for that
+  either.
+
 ### Notes on findings assessed but not changed
 
 - A Windows CRLF→LF change in `config.yaml` writes (from the atomic-write
@@ -112,6 +134,21 @@ regressions in two of them before they shipped:
   duplicated GraphRAG context-assembly block between `query()`/
   `query_stream()` are simplification opportunities, not bugs — deferred to
   avoid destabilizing the graph subsystem under a patch-release fix cycle.
+- `refresh_ingest`'s data-loss detection only fires when a source's
+  re-ingest writes exactly 0 chunks; it can't catch partial loss (some but
+  not all of a source's deleted chunks get replaced, e.g. one chunk happens
+  to be byte-identical to previously-deleted content). A count-based
+  heuristic (`n < len(ids_to_delete)`) was considered and rejected — chunk
+  counts can legitimately differ across a re-chunk for reasons unrelated to
+  loss, and a heuristic that cries wolf on legitimate refreshes is worse
+  than not detecting the narrower case at all.
+- `docs/CAPABILITIES.md`, which `CLAUDE.md` names as the canonical registry
+  to check before writing new functionality and to update alongside any
+  change adding a reusable capability (this batch adds two: `AxonBrain.clear()`
+  and `axon._pid_check.pid_alive`), does not actually exist anywhere in this
+  repo's history on `main` — it was created on an unrelated branch that was
+  never merged. Flagged rather than fixed: creating it properly is a
+  separate, substantial undertaking, not a patch-release fix.
 
 ## [0.4.4] - 2026-08-31
 
