@@ -479,6 +479,12 @@ if (graphData.nodes && graphData.nodes.length > 0) {{
             try:
                 payload = backend.graph_data()
             except Exception:
+                logger.warning(
+                    "graph_data() failed on backend %r — returning an empty graph payload "
+                    "instead of failing the export/render surface",
+                    type(backend).__name__,
+                    exc_info=True,
+                )
                 return {"nodes": [], "links": []}
             if hasattr(payload, "to_dict"):
                 result = payload.to_dict()
