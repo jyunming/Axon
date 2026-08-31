@@ -64,6 +64,36 @@ regressions introduced by that same release.
   per call) — a server address that changes after activation left the
   worker polling a stale address indefinitely.
 
+### Fixes found by re-reviewing this batch itself
+
+A fourth `/code-review` pass, this time over the fixes above, caught real
+regressions in two of them before they shipped:
+
+- **The store-lock atomic claim could still let two servers start.** Its
+  stale-lock detection relied solely on the `/health/ready` probe — but
+  `AxonBrain` construction runs inside the ASGI lifespan, before the server
+  answers any request, and can take many seconds loading embedding/reranker
+  models. A legitimately-starting owner looked identical to a dead one, so a
+  second process starting anywhere during that window (not just near-
+  simultaneously) could steal its lock. Now also cross-checks the recorded
+  pid (new `axon._pid_check.pid_alive`, extracted from the sealed-cache
+  orphan check that already did this) before treating a lock as stale.
+  Separately, a non-contention `OSError` while claiming the lock returned
+  success without ever writing it — fixed to fall back to a plain write
+  instead of claiming ownership over nothing.
+- **`refresh_ingest`'s fix from above mislabeled real data loss as
+  "unchanged".** It deletes a source's old chunks before re-ingesting once
+  the file-level hash shows content changed; if the chunk-level dedup layer
+  then wrote 0 new chunks, the content was gone with nothing to replace it —
+  worse than a no-op, not equivalent to one. Now reported separately, and
+  only when something was actually deleted.
+- Gave `AxonBrain` its own `.clear()` (mirroring `RemoteBrain.clear()`) so
+  the REPL calls one verb instead of an `isinstance(brain, RemoteBrain)`
+  branch, and consolidated the `add_text`/`ingest_url`/`ingest_texts`
+  dedup-skip messages, which had drifted from each other in wording and one
+  of which (`ingest_texts`) overstated its count by including blank
+  snippets that were filtered before ever reaching `ingest()`.
+
 ### Notes on findings assessed but not changed
 
 - A Windows CRLF→LF change in `config.yaml` writes (from the atomic-write
