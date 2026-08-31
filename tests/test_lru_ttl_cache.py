@@ -62,6 +62,20 @@ def test_put_evicts_lru_when_at_capacity():
     assert set(store.keys()) == {"k2", "k3"}
 
 
+def test_put_updating_existing_key_at_capacity_does_not_evict_anything():
+    """Overwriting an already-present key doesn't grow the store, so the
+    at-capacity check must not fire for it -- otherwise refreshing an
+    existing entry while full spuriously evicts an unrelated LRU entry,
+    shrinking effective capacity by one every time."""
+    store, lock = _store()
+    lru_ttl_put(store, lock, "k1", "v1", maxsize=2)
+    lru_ttl_put(store, lock, "k2", "v2", maxsize=2)
+    lru_ttl_put(store, lock, "k1", "v1-updated", maxsize=2)  # update, not a new key
+    assert set(store.keys()) == {"k1", "k2"}
+    cached = lru_ttl_get(store, lock, "k1", ttl=60)
+    assert cached[1] == "v1-updated"
+
+
 def test_put_preserves_multi_value_tuple_shape():
     store, lock = _store()
     lru_ttl_put(store, lock, "k1", "response", {"a": 1}, {"b": 2}, maxsize=10)
