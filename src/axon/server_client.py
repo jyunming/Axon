@@ -307,6 +307,14 @@ def write_store_lock(config: Any, host: str, port: int, *, force: bool = False) 
     also loses, it gives up and reports failure rather than looping forever
     against a live contender.
 
+    A contended lock is treated as stale only when BOTH its recorded server
+    fails the ``/health/ready`` probe AND its recorded pid is confirmed not
+    running — the probe alone isn't enough: ``AxonBrain`` construction runs
+    inside the ASGI lifespan, before the server accepts any HTTP request, and
+    can take many seconds loading embedding/reranker models, so a slow-but-
+    legitimate owner would otherwise look identical to a dead one and get its
+    lock stolen out from under it.
+
     ``force=True`` (``AXON_ALLOW_MULTIPLE_SERVERS``) skips all of this and
     unconditionally overwrites, matching the pre-existing best-effort
     behavior for that explicit opt-in — that mode has no exclusivity
@@ -335,13 +343,49 @@ def write_store_lock(config: Any, host: str, port: int, *, force: bool = False) 
         except FileExistsError:
             if find_live_server_for_store(config) is not None:
                 return False  # a live server genuinely holds it — defer
+            if _lock_owner_process_is_alive(p):
+                return False  # still starting up (or hung) — not actually stale
             try:
-                p.unlink()  # stale (dead server's) lock — clear it and retry once
+                p.unlink()  # genuinely stale (dead server's) lock — retry once
             except OSError:
                 pass
         except OSError:
-            return True  # best-effort — don't block startup on a lock-file I/O error
+            # An I/O error unrelated to contention (permission hiccup, disk
+            # full, a filesystem transiently unavailable under cloud-sync).
+            # The pre-exclusivity contract for this function was best-effort,
+            # never-block-startup — preserve that here specifically, rather
+            # than claiming ownership without ever having written anything,
+            # which would leave a later caller free to also "win" an empty
+            # lock with no exclusivity between the two of them at all.
+            try:
+                p.write_bytes(payload)
+            except OSError:
+                pass
+            return True
     return False
+
+
+def _lock_owner_process_is_alive(lock_path: pathlib.Path) -> bool:
+    """Best-effort: is the pid recorded in *lock_path* still running?
+
+    Used only to avoid stealing a lock from a process that's merely slow to
+    start (see :func:`write_store_lock`) — an unreadable/malformed lock file
+    or a missing pid field is treated as "can't confirm alive", not as
+    "confirmed dead", since the caller already treats that as the safer
+    (non-stealing) outcome regardless of which path returns it.
+    """
+    from axon._pid_check import pid_alive
+
+    try:
+        recorded_pid = json.loads(lock_path.read_text(encoding="utf-8")).get("pid")
+    except Exception:
+        return False
+    if recorded_pid is None:
+        return False
+    try:
+        return pid_alive(int(recorded_pid))
+    except (TypeError, ValueError):
+        return False
 
 
 def release_store_lock(config: Any) -> None:
