@@ -1062,11 +1062,8 @@ def _tool_delete_documents(brain, args: dict) -> str:
 
 
 def _tool_clear_project(brain) -> str:
-    from axon.collection_ops import clear_active_project
-
-    brain._assert_write_allowed("clear")
     project = brain._active_project
-    clear_active_project(brain)
+    brain.clear()
     return f"Cleared all documents from project '{project}'."
 
 
@@ -1348,9 +1345,19 @@ def _tool_refresh_ingest(brain, args: dict) -> str:
             target = [d for d in all_docs if d.get("source") == source]
             ids_to_delete = [cid for d in target for cid in d.get("doc_ids", [])]
             if ids_to_delete:
-                brain._own_vector_store.delete_by_ids(ids_to_delete)
-                if brain._own_bm25 is not None:
-                    brain._own_bm25.delete_documents(ids_to_delete)
+                try:
+                    brain._own_vector_store.delete_by_ids(ids_to_delete)
+                    if brain._own_bm25 is not None:
+                        brain._own_bm25.delete_documents(ids_to_delete)
+                except Exception as exc:
+                    # The vector-store delete may have already succeeded even
+                    # though this raised (e.g. bm25 deletion failing right
+                    # after it) -- old content may already be gone from at
+                    # least one index with nothing re-ingested yet, so this
+                    # is data loss, not a generic error.
+                    logger.debug("refresh_ingest delete error for %s: %s", source, exc)
+                    lost += 1
+                    continue
             n = brain.ingest(docs)
             if n == 0 and ids_to_delete:
                 # Old chunks were deleted above and the re-ingest then wrote

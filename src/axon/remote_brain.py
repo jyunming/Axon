@@ -320,9 +320,9 @@ class RemoteBrain:
         """Clear the active project's vector store, BM25 index, hash store, and
         entity graph via the server's ``/clear``.
 
-        Unlike the local path (``brain._assert_write_allowed()`` then
-        ``collection_ops.clear_active_project(brain)``), write-access is
-        enforced server-side by the route itself — there is no local
+        Unlike ``AxonBrain.clear()`` (which calls ``_assert_write_allowed()``
+        then ``collection_ops.clear_active_project()`` itself), write-access
+        is enforced server-side by the route — there is no local
         ``vector_store``/``bm25``/graph state in this process to touch.
         """
         return self._request("POST", "/clear", {}) or {}

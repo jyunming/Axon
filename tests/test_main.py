@@ -2062,6 +2062,17 @@ class TestBrainClear:
             brain.clear()
         mock_clear.assert_called_once_with(brain)
 
+    def test_clear_return_shape_matches_remote_brain_clear(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
+    ):
+        """Same return shape as RemoteBrain.clear() (and REST's POST /clear)
+        so a caller doesn't need an isinstance check to know what it gets
+        back, matching the "one verb" rationale for adding this method."""
+        brain = self._make_brain(tmp_path)
+        with patch("axon.collection_ops.clear_active_project"):
+            result = brain.clear()
+        assert result == {"status": "success", "message": "Collection cleared"}
+
     def test_clear_pops_source_hash_dedup_cache(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
     ):

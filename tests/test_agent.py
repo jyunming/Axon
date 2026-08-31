@@ -752,6 +752,33 @@ class TestToolAddText:
 
 
 # ---------------------------------------------------------------------------
+# _tool_clear_project (via dispatch_tool)
+# ---------------------------------------------------------------------------
+
+
+class TestToolClearProject:
+    """clear_project now delegates to the single brain.clear() verb (see
+    AxonBrain.clear() in main.py / RemoteBrain.clear()) instead of calling
+    collection_ops.clear_active_project() + _assert_write_allowed()
+    directly, so a clear triggered via MCP/agent-tool invalidates the same
+    dedup cache a REPL-triggered clear does."""
+
+    def test_clear_project_calls_brain_clear(self):
+        brain = _make_brain()
+        confirm_cb = MagicMock(return_value=True)
+        result = dispatch_tool(brain, "clear_project", {}, confirm_cb=confirm_cb)
+        brain.clear.assert_called_once()
+        assert "default" in result
+
+    def test_clear_project_readonly_reports_error(self):
+        brain = _make_brain()
+        brain.clear.side_effect = PermissionError("Cannot clear on mounted share.")
+        confirm_cb = MagicMock(return_value=True)
+        result = dispatch_tool(brain, "clear_project", {}, confirm_cb=confirm_cb)
+        assert "cannot clear on mounted share" in result.lower()
+
+
+# ---------------------------------------------------------------------------
 # _tool_ingest_texts (via dispatch_tool)
 # ---------------------------------------------------------------------------
 
@@ -1122,4 +1149,36 @@ class TestToolRefreshIngest:
         assert brain.ingest.call_count == 1
         assert "0 file(s) re-ingested" in result, result
         assert "1 unchanged" not in result, result
+        assert "1 file(s) had their old content removed" in result, result
+
+    def test_bm25_delete_failure_after_vector_store_delete_is_reported_as_loss(self, tmp_path):
+        """The vector-store delete can succeed and the bm25 delete can then
+        raise (e.g. index corruption) -- old content may already be gone
+        from at least one index at that point, so this must count as a
+        loss, not a generic error the user has no reason to connect to
+        missing content."""
+        import hashlib
+
+        src = tmp_path / "doc.md"
+        src.write_text("new content", encoding="utf-8")
+        stale_hash = hashlib.md5(b"old content").hexdigest()
+
+        brain = _make_brain()
+        brain._doc_versions = {
+            str(src): {"content_hash": stale_hash, "chunk_count": 1},
+        }
+        brain.list_documents.return_value = [
+            {"source": str(src), "chunks": 1, "doc_ids": [f"{src}::h1"]}
+        ]
+        brain._own_bm25.delete_documents.side_effect = RuntimeError("index corrupted")
+
+        loader = MagicMock()
+        loader.load.return_value = [{"text": "new content"}]
+        with patch("axon.loaders.DirectoryLoader") as DL:
+            DL.return_value.loaders = {".md": loader}
+            result = _tool_refresh_ingest(brain, {})
+
+        brain._own_vector_store.delete_by_ids.assert_called_once_with([f"{src}::h1"])
+        brain.ingest.assert_not_called()  # never reached -- delete failed first
+        assert "0 error(s)" in result, result
         assert "1 file(s) had their old content removed" in result, result
