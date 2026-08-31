@@ -1469,7 +1469,8 @@ Your primary goal is to help the user by answering questions based on the provid
         self._doc_versions_path = os.path.join(self.config.bm25_path, ".doc_versions.json")
         self._load_doc_versions()
         self._code_graph = self._load_code_graph()
-        self._raptor_summary_cache = {}
+        with self._raptor_cache_lock:
+            self._raptor_summary_cache = {}
         self._active_project = name
         self._read_only_scope = False
         # Resolve kind from switch operation — descriptor-based, not string-pattern

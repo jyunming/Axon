@@ -2092,6 +2092,37 @@ class TestSwitchProjectState:
         assert brain._ingested_hashes == {"newhash1", "newhash2", "newhash3"}
         assert "oldhash1" not in brain._ingested_hashes
 
+    def test_switch_project_resets_raptor_cache_under_lock(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
+    ):
+        """The RAPTOR summary cache reset on project switch must hold the same
+        lock _summarise_window uses for every other read/write/eviction of that
+        cache -- a lock-free reset here can race a background summarization
+        thread and silently drop the entry it just wrote."""
+        from axon.main import AxonBrain, AxonConfig
+
+        config = AxonConfig(
+            vector_store_path=str(tmp_path / "chroma"),
+            bm25_path=str(tmp_path / "bm25"),
+        )
+        brain = AxonBrain(config)
+        brain._raptor_summary_cache["stale"] = "value"
+        fake_lock = MagicMock()
+        brain._raptor_cache_lock = fake_lock
+        proj_path = tmp_path / ".axon" / "projects" / "proj3"
+        proj_path.mkdir(parents=True, exist_ok=True)
+        (proj_path / "meta.json").write_text("{}", encoding="utf-8")
+        with (
+            patch("axon.projects.project_dir", return_value=proj_path),
+            patch("axon.projects.project_vector_path", return_value=str(tmp_path / "proj_chroma")),
+            patch("axon.projects.project_bm25_path", return_value=str(tmp_path / "proj_bm25")),
+            patch("axon.projects.set_active_project"),
+        ):
+            brain.switch_project("proj3")
+        assert brain._raptor_summary_cache == {}
+        fake_lock.__enter__.assert_called()
+        fake_lock.__exit__.assert_called()
+
 
 # ---------------------------------------------------------------------------
 # LanceDB vector store
