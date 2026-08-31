@@ -169,71 +169,30 @@ class TestReplList:
 
 
 class TestReplClear:
+    """/clear now calls the single brain.clear() verb (defined on both
+    AxonBrain and RemoteBrain — see TestBrainClear in test_main.py and
+    TestReplClearViaRemoteBrain below) instead of reaching into
+    collection_ops.clear_active_project()/_assert_write_allowed() itself."""
+
     def test_clear_clears_knowledge_base(self):
         brain = _make_mock_brain()
-        with patch("axon.repl.clear_active_project") as mock_clear:
-            output = _run_repl_with_commands(["/clear", "y"], brain=brain)
-        mock_clear.assert_called_once_with(brain)
+        output = _run_repl_with_commands(["/clear", "y"], brain=brain)
+        brain.clear.assert_called_once()
         assert "knowledge base cleared" in output.lower()
 
     def test_clear_cancelled(self):
         brain = _make_mock_brain()
-        with patch("axon.repl.clear_active_project") as mock_clear:
-            output = _run_repl_with_commands(["/clear", "n"], brain=brain)
-        mock_clear.assert_not_called()
+        output = _run_repl_with_commands(["/clear", "n"], brain=brain)
+        brain.clear.assert_not_called()
         assert "clear cancelled" in output.lower()
 
     def test_clear_readonly_project_reports_error(self):
         brain = _make_mock_brain()
-        brain._assert_write_allowed.side_effect = PermissionError(
+        brain.clear.side_effect = PermissionError(
             "Cannot clear on mounted share 'mounts/alice_proj'."
         )
-        with patch("axon.repl.clear_active_project") as mock_clear:
-            output = _run_repl_with_commands(["/clear", "y"], brain=brain)
-        mock_clear.assert_not_called()
+        output = _run_repl_with_commands(["/clear", "y"], brain=brain)
         assert "cannot clear on mounted share" in output.lower()
-
-    def test_clear_updates_api_dedup_cache(self):
-        import axon.api as api_module
-
-        brain = _make_mock_brain()
-        api_module._source_hashes["default"] = {"abc": {}}
-        api_module._source_hashes["_global"] = {"legacy": {}}
-
-        with patch("axon.repl.clear_active_project") as mock_clear:
-            _run_repl_with_commands(["/clear", "y"], brain=brain)
-        mock_clear.assert_called_once_with(brain)
-        assert "default" not in api_module._source_hashes
-        assert "_global" not in api_module._source_hashes
-        api_module._source_hashes.clear()
-
-
-class TestReplClearViaRemoteBrain:
-    """/clear against a RemoteBrain (single-instance server-reuse path) must
-    route through brain.clear() rather than the local _assert_write_allowed +
-    clear_active_project(brain) path -- the latter reaches for RemoteBrain's
-    unsupported .vector_store and always failed."""
-
-    def test_clear_routes_through_remote_brain_clear(self):
-        from axon.remote_brain import RemoteBrain
-
-        brain = _make_mock_brain()
-        brain.__class__ = RemoteBrain
-        with patch("axon.repl.clear_active_project") as mock_local_clear:
-            output = _run_repl_with_commands(["/clear", "y"], brain=brain)
-        brain.clear.assert_called_once()
-        mock_local_clear.assert_not_called()
-        brain._assert_write_allowed.assert_not_called()
-        assert "knowledge base cleared" in output.lower()
-
-    def test_clear_cancelled_does_not_call_remote_clear(self):
-        from axon.remote_brain import RemoteBrain
-
-        brain = _make_mock_brain()
-        brain.__class__ = RemoteBrain
-        output = _run_repl_with_commands(["/clear", "n"], brain=brain)
-        brain.clear.assert_not_called()
-        assert "clear cancelled" in output.lower()
 
 
 class TestReplDiscuss:

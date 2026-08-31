@@ -961,6 +961,23 @@ Your primary goal is to help the user by answering questions based on the provid
             self._is_mounted_share(),
         )
 
+    def clear(self) -> None:
+        """Clear the active project's vector store, BM25 index, hash store,
+        and entity graph. Mirrors :meth:`RemoteBrain.clear` (a single
+        ``clear()`` verb on both, so callers like the REPL don't need an
+        ``isinstance`` branch to know which flavor of brain they hold), but
+        enforces write access itself here rather than server-side.
+        """
+        from axon import api as _api
+        from axon.collection_ops import clear_active_project
+
+        self._assert_write_allowed("clear")
+        clear_active_project(self)
+        project_key = getattr(self, "_active_project", "default")
+        _api._source_hashes.pop(project_key, None)
+        if project_key == "default":
+            _api._source_hashes.pop("_global", None)
+
     # ------------------------------------------------------------------
     # Sealed-project routing (lazy — only fires when [sealed] installed)
     # ------------------------------------------------------------------

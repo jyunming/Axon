@@ -2026,6 +2026,60 @@ class TestCompressContextGuard:
 
 
 # ---------------------------------------------------------------------------
+# AxonBrain.clear() -- mirrors RemoteBrain.clear() so callers like the REPL
+# use one verb regardless of brain flavor, instead of an isinstance branch.
+# ---------------------------------------------------------------------------
+@patch("axon.retrievers.BM25Retriever")
+@patch("axon.main.OpenVectorStore")
+@patch("axon.main.OpenLLM")
+@patch("axon.main.OpenEmbedding")
+@patch("axon.main.OpenReranker")
+class TestBrainClear:
+    def _make_brain(self, tmp_path):
+        from axon.main import AxonBrain, AxonConfig
+
+        config = AxonConfig(
+            vector_store_path=str(tmp_path / "chroma"),
+            bm25_path=str(tmp_path / "bm25"),
+        )
+        return AxonBrain(config)
+
+    def test_clear_enforces_write_access(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
+    ):
+        import pytest
+
+        brain = self._make_brain(tmp_path)
+        with patch.object(brain, "_assert_write_allowed", side_effect=PermissionError("nope")):
+            with pytest.raises(PermissionError):
+                brain.clear()
+
+    def test_clear_calls_clear_active_project(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
+    ):
+        brain = self._make_brain(tmp_path)
+        with patch("axon.collection_ops.clear_active_project") as mock_clear:
+            brain.clear()
+        mock_clear.assert_called_once_with(brain)
+
+    def test_clear_pops_source_hash_dedup_cache(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
+    ):
+        import axon.api as api_module
+
+        brain = self._make_brain(tmp_path)
+        api_module._source_hashes["default"] = {"abc": {}}
+        api_module._source_hashes["_global"] = {"legacy": {}}
+        try:
+            with patch("axon.collection_ops.clear_active_project"):
+                brain.clear()
+            assert "default" not in api_module._source_hashes
+            assert "_global" not in api_module._source_hashes
+        finally:
+            api_module._source_hashes.clear()
+
+
+# ---------------------------------------------------------------------------
 # switch_project reloads project-scoped state
 # ---------------------------------------------------------------------------
 @patch("axon.retrievers.BM25Retriever")
@@ -15747,9 +15801,8 @@ class TestReplCompactCommand:
 class TestReplClearCommand:
     def test_clear(self):
         brain = _make_mock_brain()
-        with patch("axon.repl.clear_active_project") as mock_clear:
-            output = _run_repl_with_commands(["/clear", "y"], brain=brain)
-        mock_clear.assert_called_once_with(brain)
+        output = _run_repl_with_commands(["/clear", "y"], brain=brain)
+        brain.clear.assert_called_once()
         assert "knowledge base cleared" in output.lower()
         assert isinstance(output, str)
 
