@@ -1,5 +1,88 @@
 # Changelog
 
+## [Unreleased]
+
+A third capabilities-audit cycle, this time targeting v0.4.4 itself via an
+independent `/code-review` pass over its full diff rather than waiting for
+the next scheduled audit — one security fix and several outright
+regressions introduced by that same release.
+
+### 🔐 Security fixes
+
+- **Atomic file replacement silently widened restrictive file permissions.**
+  `_atomic_replace()`'s temp file always carried the process umask's default
+  mode, not the target's — a `0600` file (the sealed-share key material this
+  helper's own docstring names as an intended use case) rewritten through it
+  would silently widen to world-readable. The target's existing mode, if
+  any, is now copied onto the replacement before the swap.
+
+### 🐛 Fixes
+
+- **`--project-pack`/`--project-unpack` bypassed the single-instance
+  server-detection gate** that `--ingest`/`--project-new`/`--project-delete`
+  already use, despite writing/reading a project's on-disk footprint
+  directly — unpacking into a project a live `axon-api` is serving could
+  race the server's open file handles. Both now route through the server
+  (new `remote_project_pack`/`remote_project_unpack`) when one is running.
+- **REPL `/clear` always failed when reusing a running server** (the new
+  single-instance default) — it called local-brain-only internals
+  (`_assert_write_allowed`, `vector_store`) that a `RemoteBrain` proxy
+  doesn't implement. Added `RemoteBrain.clear()`, routed through the
+  server's `/clear`.
+- **`RemoteBrain` silently dropped `chat_history`** at `logger.debug` —
+  invisible by default, so a multi-turn follow-up against a reused server
+  lost conversational context with no indication why. Promoted to a
+  once-per-instance `logger.warning()`.
+- **The RAPTOR summary cache could be reset without its own lock** on
+  project switch/clear — a race with the lock this same release added for
+  every other access to that cache, that could silently drop or reintroduce
+  an entry right after a user-initiated wipe.
+- **`add_text`/`ingest_url`/`ingest_texts`/`refresh_ingest` MCP tools
+  reported false success on a fully-deduped ingest** — the sibling
+  `ingest_path` tool was already fixed for this in v0.4.4; these four
+  discarded `brain.ingest()`'s actual chunk count and reported
+  `len(docs)` (or, for `refresh_ingest`, an unconditional increment)
+  instead.
+- **A narrow two-process race could let two `axon-api` servers both start**
+  against the same store — the read-then-decide-then-write gap between
+  `find_live_server_for_store()` and `write_store_lock()` had no atomicity.
+  The lock is now claimed via an exclusive file create, so at most one
+  near-simultaneous starter wins it; the loser aborts the same way it would
+  have if it had detected the other server on the earlier check.
+- **A `graph_data()` failure rendered as a silent empty graph** across every
+  export surface (CLI, REPL, REST) with zero diagnostic trail. Now logged.
+- **The web GUI's chat crashed with a raw traceback on a `query_stream`
+  error** (a server error, or a dropped connection to a reused server) —
+  the REPL's equivalent loop already degraded gracefully; the web GUI now
+  does too.
+- **The shared LRU+TTL cache evicted an unrelated entry when updating an
+  already-present key at capacity** — overwriting a key doesn't grow the
+  store, so the at-capacity check shouldn't fire for it.
+- **The VS Code extension's Copilot LLM background worker used a
+  once-per-activation `apiBase` snapshot** for its whole lifetime, unlike
+  every command elsewhere in the extension (already fixed to resolve fresh
+  per call) — a server address that changes after activation left the
+  worker polling a stale address indefinitely.
+
+### Notes on findings assessed but not changed
+
+- A Windows CRLF→LF change in `config.yaml` writes (from the atomic-write
+  helper introduced in v0.4.4) is cosmetic only — YAML parses identically
+  either way, `config.yaml` isn't a tracked file, and the existing test
+  suite already relies on the raw-bytes, no-translation behavior for
+  deterministic cross-platform digest matching. Left as-is.
+- `lifespan()`'s host/port bookkeeping is only fully correct when launched
+  via `main()` (or the VS Code extension, which already sets the env vars
+  itself) — a raw manual `uvicorn axon.api:app` invocation bypassing both
+  can still desync the lock file's recorded port. Both supported launch
+  paths are unaffected; hardening the unsupported path would need deeper
+  ASGI/uvicorn socket introspection than fits a patch release.
+- `GraphRagEngine` retaining a live back-reference to `brain` (the M2
+  ownership-inversion refactor not being a full decoupling) and a ~65-line
+  duplicated GraphRAG context-assembly block between `query()`/
+  `query_stream()` are simplification opportunities, not bugs — deferred to
+  avoid destabilizing the graph subsystem under a patch-release fix cycle.
+
 ## [0.4.4] - 2026-08-31
 
 A feature release — project backup/restore, self-update, and single-instance
