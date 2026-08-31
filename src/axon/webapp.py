@@ -1209,17 +1209,23 @@ if prompt := st.chat_input("Ask me anything about your documents…"):
         first_token = True
         ttft = None
         with st.spinner("Thinking…"):
-            for chunk in st.session_state.brain.query_stream(
-                prompt, chat_history=chat_history_snapshot
-            ):
-                if isinstance(chunk, dict) and chunk.get("type") == "sources":
-                    sources = chunk.get("sources", [])
-                    continue
-                if first_token and not isinstance(chunk, dict):
-                    ttft = time.time() - t_start
-                    first_token = False
-                full_response += chunk
-                response_placeholder.markdown(full_response + "▌")
+            try:
+                for chunk in st.session_state.brain.query_stream(
+                    prompt, chat_history=chat_history_snapshot
+                ):
+                    if isinstance(chunk, dict) and chunk.get("type") == "sources":
+                        sources = chunk.get("sources", [])
+                        continue
+                    if first_token and not isinstance(chunk, dict):
+                        ttft = time.time() - t_start
+                        first_token = False
+                    full_response += chunk
+                    response_placeholder.markdown(full_response + "▌")
+            except Exception as exc:
+                # A server error (or a dropped connection to a reused axon-api
+                # server) must not surface as a raw traceback in the chat —
+                # degrade the same way the REPL's streaming loop does.
+                full_response = (full_response or "") + f"\n\n⚠️ Query failed: {exc}"
         elapsed = time.time() - t_start
         response_placeholder.markdown(full_response)
         # Timing caption
