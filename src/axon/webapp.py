@@ -1223,8 +1223,11 @@ if prompt := st.chat_input("Ask me anything about your documents…"):
                     response_placeholder.markdown(full_response + "▌")
             except Exception as exc:
                 # A server error (or a dropped connection to a reused axon-api
-                # server) must not surface as a raw traceback in the chat —
-                # degrade the same way the REPL's streaming loop does.
+                # server) must not surface as a raw traceback in the chat.
+                # Not identical to the REPL's degrade policy (which discards
+                # any partial output and shows only the error) -- this
+                # keeps whatever streamed so far and appends the error,
+                # since a partial answer is still useful context here.
                 full_response = (full_response or "") + f"\n\n⚠️ Query failed: {exc}"
         elapsed = time.time() - t_start
         response_placeholder.markdown(full_response)
