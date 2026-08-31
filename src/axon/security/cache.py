@@ -46,6 +46,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from axon._pid_check import pid_alive
+
 try:
     from .crypto import MAGIC, SealedFile, make_aad
 except ImportError as exc:  # pragma: no cover — import-time guard
@@ -236,43 +238,10 @@ def _wipe_dir_contents(cache_dir: Path) -> None:
         pass
 
 
-def _pid_alive(pid: int) -> bool:
-    """Return True if a process with *pid* is still running.
-    Cross-platform best-effort check:
-    - POSIX: ``os.kill(pid, 0)`` succeeds for live PIDs, raises
-      ``ProcessLookupError`` (errno ``ESRCH``) for dead ones, and
-      ``PermissionError`` for live PIDs we don't own.
-    - Windows: ``os.kill(pid, 0)`` raises ``OSError`` with ``errno``
-      ``EINVAL`` for invalid handle (PID never existed / out of range)
-      and ``ESRCH`` for "no such process". ``PermissionError`` again
-      means a live PID we can't signal.
-    On unrecognised errors we treat the PID as **alive** (return True)
-    so we don't accidentally wipe a cache that another process might
-    still be reading. The next boot will re-evaluate; preserving a
-    live cache once is much better than wiping it under another
-    process's nose.
-    """
-    if pid <= 0:
-        return False
-    import errno
-
-    try:
-        os.kill(pid, 0)
-    except PermissionError:
-        # Live PID owned by another user — leave its cache alone.
-        return True
-    except ProcessLookupError:
-        return False
-    except OSError as exc:
-        # ESRCH = "no such process". EINVAL on Windows = handle out of
-        # range / invalid PID. Either way: not a live process.
-        if exc.errno in (errno.ESRCH, errno.EINVAL):
-            return False
-        # Unknown failure mode — be conservative and treat as alive
-        # so we don't accidentally wipe a cache that might still be
-        # in use. The next boot will re-check.
-        return True
-    return True
+# Re-exported for this module's one caller below; the actual check now
+# lives in axon._pid_check so server_client.py's store lock can share it
+# instead of hand-rolling a second copy.
+_pid_alive = pid_alive
 
 
 # ---------------------------------------------------------------------------

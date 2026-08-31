@@ -22,7 +22,6 @@ if TYPE_CHECKING:
 
 
 from axon.cli import _print_project_tree, _print_shares_listing  # noqa: E402
-from axon.collection_ops import clear_active_project  # noqa: E402
 from axon.embeddings import OpenEmbedding  # noqa: E402
 from axon.llm import OpenLLM, _copilot_device_flow, _fetch_copilot_models  # noqa: E402
 from axon.rerank import OpenReranker  # noqa: E402
@@ -3035,14 +3034,13 @@ def _interactive_repl(
                     print("    Clear cancelled.")
                     return False
                 try:
-                    brain._assert_write_allowed("clear")
-                    clear_active_project(brain)
-                    from axon import api as _api
-
-                    project_key = getattr(brain, "_active_project", "default")
-                    _api._source_hashes.pop(project_key, None)
-                    if project_key == "default":
-                        _api._source_hashes.pop("_global", None)
+                    # brain.clear() is defined on both AxonBrain and
+                    # RemoteBrain (which routes it through the server's
+                    # /clear and enforces write-access server-side, since
+                    # there's no local vector_store/bm25/graph state to
+                    # touch in this process) -- one verb, no isinstance
+                    # branch needed here.
+                    brain.clear()
                     print(f"    Knowledge base cleared for project '{brain._active_project}'.")
                 except PermissionError as _e:
                     print(f"    {_e}")

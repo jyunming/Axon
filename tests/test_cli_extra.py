@@ -590,6 +590,66 @@ class TestMainProjectPackUnpack:
         assert code == 1
 
 
+class TestMainProjectPackUnpackSingleInstance:
+    """--project-pack/--project-unpack write/read a project's on-disk footprint
+    directly (project_pack.py never constructs an AxonBrain) — like --ingest/
+    --project-new/--project-delete, they must route through a live axon-api
+    server instead of racing its open file handles when one is already
+    serving the same store."""
+
+    def _fake_server(self, tmp_path):
+        return {"project": "default", "_api_base": "http://127.0.0.1:8420"}
+
+    def test_pack_routes_through_server_when_running(self, cfg, tmp_path, capsys):
+        cfg.projects_root = str(tmp_path)
+        with patch("axon.server_client.detect_server", return_value=self._fake_server(tmp_path)):
+            with patch(
+                "axon.server_client.remote_project_pack",
+                return_value={
+                    "project": "myproj",
+                    "out_path": str(tmp_path / "myproj.zip"),
+                    "file_count": 3,
+                },
+            ) as mock_remote:
+                with patch("axon.project_pack.pack_project") as mock_local:
+                    run_cli("--project-pack", "myproj")
+        mock_remote.assert_called_once()
+        mock_local.assert_not_called()
+        assert "myproj" in capsys.readouterr().out
+
+    def test_unpack_routes_through_server_when_running(self, cfg, tmp_path, capsys):
+        cfg.projects_root = str(tmp_path)
+        zip_path = str(tmp_path / "myproj.zip")
+        with patch("axon.server_client.detect_server", return_value=self._fake_server(tmp_path)):
+            with patch(
+                "axon.server_client.remote_project_unpack",
+                return_value={"project": "myproj", "file_count": 3, "sealed": False},
+            ) as mock_remote:
+                with patch("axon.project_pack.unpack_project") as mock_local:
+                    run_cli("--project-unpack", zip_path, "--as", "renamed", "--force")
+        mock_remote.assert_called_once()
+        mock_local.assert_not_called()
+        _, kwargs = mock_remote.call_args
+        assert kwargs.get("as_name") == "renamed"
+        assert kwargs.get("force") is True
+        assert "myproj" in capsys.readouterr().out
+
+    def test_pack_stays_local_when_no_server_running(self, cfg, tmp_path):
+        cfg.projects_root = str(tmp_path)
+        with patch("axon.server_client.detect_server", return_value=None):
+            with patch(
+                "axon.project_pack.pack_project",
+                return_value={
+                    "project": "myproj",
+                    "out_path": str(tmp_path / "myproj.zip"),
+                    "sealed": False,
+                    "file_count": 1,
+                },
+            ) as mock_local:
+                run_cli("--project-pack", "myproj")
+        mock_local.assert_called_once()
+
+
 # ---------------------------------------------------------------------------
 # 7.  main() --ingest
 # ---------------------------------------------------------------------------

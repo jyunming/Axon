@@ -198,8 +198,26 @@ def _atomic_replace(src: Path, dst: Path) -> None:
     On the unlikely path that even the fallback fails, we re-raise the
     original ``os.replace`` error and clean up the orphan ``.tmp`` so
     we don't leave junk behind.
+
+    ``src`` is always a freshly-created temp file, so it carries the
+    process umask's default mode rather than ``dst``'s. Callers that
+    persist permission-restricted content (e.g. sealed-share key
+    material at ``0600``) would otherwise have that file silently
+    widened to the umask default on every rewrite through this helper
+    — so ``dst``'s existing mode, if any, is copied onto ``src`` before
+    the swap.
     """
     import shutil
+
+    try:
+        dst_mode = dst.stat().st_mode
+    except OSError:
+        dst_mode = None
+    if dst_mode is not None:
+        try:
+            os.chmod(src, dst_mode)
+        except OSError:
+            pass
 
     try:
         os.replace(src, dst)

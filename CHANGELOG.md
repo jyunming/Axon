@@ -1,5 +1,155 @@
 # Changelog
 
+## [Unreleased]
+
+A third capabilities-audit cycle, this time targeting v0.4.4 itself via an
+independent `/code-review` pass over its full diff rather than waiting for
+the next scheduled audit — one security fix and several outright
+regressions introduced by that same release.
+
+### 🔐 Security fixes
+
+- **Atomic file replacement silently widened restrictive file permissions.**
+  `_atomic_replace()`'s temp file always carried the process umask's default
+  mode, not the target's — a `0600` file (the sealed-share key material this
+  helper's own docstring names as an intended use case) rewritten through it
+  would silently widen to world-readable. The target's existing mode, if
+  any, is now copied onto the replacement before the swap.
+
+### 🐛 Fixes
+
+- **`--project-pack`/`--project-unpack` bypassed the single-instance
+  server-detection gate** that `--ingest`/`--project-new`/`--project-delete`
+  already use, despite writing/reading a project's on-disk footprint
+  directly — unpacking into a project a live `axon-api` is serving could
+  race the server's open file handles. Both now route through the server
+  (new `remote_project_pack`/`remote_project_unpack`) when one is running.
+- **REPL `/clear` always failed when reusing a running server** (the new
+  single-instance default) — it called local-brain-only internals
+  (`_assert_write_allowed`, `vector_store`) that a `RemoteBrain` proxy
+  doesn't implement. Added `RemoteBrain.clear()`, routed through the
+  server's `/clear`.
+- **`RemoteBrain` silently dropped `chat_history`** at `logger.debug` —
+  invisible by default, so a multi-turn follow-up against a reused server
+  lost conversational context with no indication why. Promoted to a
+  once-per-instance `logger.warning()`.
+- **The RAPTOR summary cache could be reset without its own lock** on
+  project switch/clear — a race with the lock this same release added for
+  every other access to that cache, that could silently drop or reintroduce
+  an entry right after a user-initiated wipe.
+- **`add_text`/`ingest_url`/`ingest_texts`/`refresh_ingest` MCP tools
+  reported false success on a fully-deduped ingest** — the sibling
+  `ingest_path` tool was already fixed for this in v0.4.4; these four
+  discarded `brain.ingest()`'s actual chunk count and reported
+  `len(docs)` (or, for `refresh_ingest`, an unconditional increment)
+  instead.
+- **A narrow two-process race could let two `axon-api` servers both start**
+  against the same store — the read-then-decide-then-write gap between
+  `find_live_server_for_store()` and `write_store_lock()` had no atomicity.
+  The lock is now claimed via an exclusive file create, so at most one
+  near-simultaneous starter wins it; the loser aborts the same way it would
+  have if it had detected the other server on the earlier check.
+- **A `graph_data()` failure rendered as a silent empty graph** across every
+  export surface (CLI, REPL, REST) with zero diagnostic trail. Now logged.
+- **The web GUI's chat crashed with a raw traceback on a `query_stream`
+  error** (a server error, or a dropped connection to a reused server) —
+  the REPL's equivalent loop already degraded gracefully; the web GUI now
+  does too.
+- **The shared LRU+TTL cache evicted an unrelated entry when updating an
+  already-present key at capacity** — overwriting a key doesn't grow the
+  store, so the at-capacity check shouldn't fire for it.
+- **The VS Code extension's Copilot LLM background worker used a
+  once-per-activation `apiBase` snapshot** for its whole lifetime, unlike
+  every command elsewhere in the extension (already fixed to resolve fresh
+  per call) — a server address that changes after activation left the
+  worker polling a stale address indefinitely.
+
+### Fixes found by re-reviewing this batch itself
+
+A fourth `/code-review` pass, this time over the fixes above, caught real
+regressions in two of them before they shipped:
+
+- **The store-lock atomic claim could still let two servers start.** Its
+  stale-lock detection relied solely on the `/health/ready` probe — but
+  `AxonBrain` construction runs inside the ASGI lifespan, before the server
+  answers any request, and can take many seconds loading embedding/reranker
+  models. A legitimately-starting owner looked identical to a dead one, so a
+  second process starting anywhere during that window (not just near-
+  simultaneously) could steal its lock. Now also cross-checks the recorded
+  pid (new `axon._pid_check.pid_alive`, extracted from the sealed-cache
+  orphan check that already did this) before treating a lock as stale.
+  Separately, a non-contention `OSError` while claiming the lock returned
+  success without ever writing it — fixed to fall back to a plain write
+  instead of claiming ownership over nothing.
+- **`refresh_ingest`'s fix from above mislabeled real data loss as
+  "unchanged".** It deletes a source's old chunks before re-ingesting once
+  the file-level hash shows content changed; if the chunk-level dedup layer
+  then wrote 0 new chunks, the content was gone with nothing to replace it —
+  worse than a no-op, not equivalent to one. Now reported separately, and
+  only when something was actually deleted.
+- Gave `AxonBrain` its own `.clear()` (mirroring `RemoteBrain.clear()`) so
+  the REPL calls one verb instead of an `isinstance(brain, RemoteBrain)`
+  branch, and consolidated the `add_text`/`ingest_url`/`ingest_texts`
+  dedup-skip messages, which had drifted from each other in wording and one
+  of which (`ingest_texts`) overstated its count by including blank
+  snippets that were filtered before ever reaching `ingest()`.
+
+A fifth pass, over the fourth's own fixes, caught one more real bug and two
+consolidation gaps:
+
+- **The store-lock pid check had its safe default backwards.** Its own
+  docstring said an unreadable/malformed lock file should be treated as
+  "can't confirm dead" — but the code actually returned the value the
+  caller reads as "confirmed dead, steal it" for every one of those cases.
+  Combined with a genuine TOCTOU (the exclusive file create happens before
+  the file is populated), a second process racing into that exact window
+  could steal a lock a legitimate owner had just won. Fixed to return the
+  non-stealing default, matching what the docstring already claimed.
+- `_tool_clear_project` (the MCP/agent-tool surface) hadn't been migrated
+  to `brain.clear()` in the previous round, so a clear triggered through it
+  didn't invalidate the source-hash dedup cache the way the REPL's now
+  does. Migrated. REST's `POST /clear` was considered for the same
+  migration but reverted — its test suite relies on the route calling the
+  free function directly against a `MagicMock` brain, which a `brain.clear()`
+  call would silently no-op.
+- `AxonBrain.clear()` now returns the same shape `RemoteBrain.clear()`
+  already does, so a caller doesn't need an `isinstance` check for that
+  either.
+
+### Notes on findings assessed but not changed
+
+- A Windows CRLF→LF change in `config.yaml` writes (from the atomic-write
+  helper introduced in v0.4.4) is cosmetic only — YAML parses identically
+  either way, `config.yaml` isn't a tracked file, and the existing test
+  suite already relies on the raw-bytes, no-translation behavior for
+  deterministic cross-platform digest matching. Left as-is.
+- `lifespan()`'s host/port bookkeeping is only fully correct when launched
+  via `main()` (or the VS Code extension, which already sets the env vars
+  itself) — a raw manual `uvicorn axon.api:app` invocation bypassing both
+  can still desync the lock file's recorded port. Both supported launch
+  paths are unaffected; hardening the unsupported path would need deeper
+  ASGI/uvicorn socket introspection than fits a patch release.
+- `GraphRagEngine` retaining a live back-reference to `brain` (the M2
+  ownership-inversion refactor not being a full decoupling) and a ~65-line
+  duplicated GraphRAG context-assembly block between `query()`/
+  `query_stream()` are simplification opportunities, not bugs — deferred to
+  avoid destabilizing the graph subsystem under a patch-release fix cycle.
+- `refresh_ingest`'s data-loss detection only fires when a source's
+  re-ingest writes exactly 0 chunks; it can't catch partial loss (some but
+  not all of a source's deleted chunks get replaced, e.g. one chunk happens
+  to be byte-identical to previously-deleted content). A count-based
+  heuristic (`n < len(ids_to_delete)`) was considered and rejected — chunk
+  counts can legitimately differ across a re-chunk for reasons unrelated to
+  loss, and a heuristic that cries wolf on legitimate refreshes is worse
+  than not detecting the narrower case at all.
+- `docs/CAPABILITIES.md`, which `CLAUDE.md` names as the canonical registry
+  to check before writing new functionality and to update alongside any
+  change adding a reusable capability (this batch adds two: `AxonBrain.clear()`
+  and `axon._pid_check.pid_alive`), does not actually exist anywhere in this
+  repo's history on `main` — it was created on an unrelated branch that was
+  never merged. Flagged rather than fixed: creating it properly is a
+  separate, substantial undertaking, not a patch-release fix.
+
 ## [0.4.4] - 2026-08-31
 
 A feature release — project backup/restore, self-update, and single-instance

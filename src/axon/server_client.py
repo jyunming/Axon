@@ -165,6 +165,30 @@ def remote_project_delete(base: str, name: str, headers: dict[str, str]) -> Any:
     return _request("POST", f"{base}/project/delete/{name}", headers, {})
 
 
+def remote_project_pack(
+    base: str, name: str, headers: dict[str, str], *, out_path: str | None = None
+) -> Any:
+    body: dict = {"project_name": name}
+    if out_path is not None:
+        body["out_path"] = out_path
+    return _request("POST", f"{base}/project/pack", headers, body)
+
+
+def remote_project_unpack(
+    base: str,
+    zip_path: str,
+    headers: dict[str, str],
+    *,
+    as_name: str | None = None,
+    force: bool = False,
+) -> Any:
+    abs_path = os.path.abspath(zip_path)
+    body: dict = {"zip_path": abs_path, "force": force}
+    if as_name is not None:
+        body["as_name"] = as_name
+    return _request("POST", f"{base}/project/unpack", headers, body)
+
+
 def remote_ingest(
     base: str,
     path: str,
@@ -266,19 +290,106 @@ def find_live_server_for_store(config: Any, *, timeout: float = _PROBE_TIMEOUT_S
         return None
 
 
-def write_store_lock(config: Any, host: str, port: int) -> None:
-    """Register this process as the server for the store (best-effort)."""
+def write_store_lock(config: Any, host: str, port: int, *, force: bool = False) -> bool:
+    """Atomically claim this store's lock for this process.
+
+    Returns ``True`` if this process now owns the lock (safe to proceed as
+    the server); ``False`` if another live server already holds it — the
+    caller must not construct a brain in that case.
+
+    Without ``force``, this narrows (but does not fully close — see below)
+    the gap between a caller's own :func:`find_live_server_for_store` read
+    and this write: two processes racing to become the server can both pass
+    that earlier read, but the exclusive create below is resolved atomically
+    by the OS, so at most one of them actually wins it and proceeds to open
+    the store. A process that loses the race retries once against a lock
+    that might just be stale (a dead server's leftover file); if that retry
+    also loses, it gives up and reports failure rather than looping forever
+    against a live contender.
+
+    A contended lock is treated as stale only when BOTH its recorded server
+    fails the ``/health/ready`` probe AND its recorded pid is confirmed not
+    running — the probe alone isn't enough: ``AxonBrain`` construction runs
+    inside the ASGI lifespan, before the server accepts any HTTP request, and
+    can take many seconds loading embedding/reranker models, so a slow-but-
+    legitimate owner would otherwise look identical to a dead one and get its
+    lock stolen out from under it.
+
+    ``force=True`` (``AXON_ALLOW_MULTIPLE_SERVERS``) skips all of this and
+    unconditionally overwrites, matching the pre-existing best-effort
+    behavior for that explicit opt-in — that mode has no exclusivity
+    contract to uphold in the first place.
+    """
     p = _store_lock_path(config)
     if p is None:
-        return
+        return True
+    payload = json.dumps({"host": host, "port": int(port), "pid": os.getpid()}).encode("utf-8")
+    if force:
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(payload)
+        except OSError:
+            pass
+        return True
+    for _attempt in range(2):
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(str(p), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            try:
+                os.write(fd, payload)
+            finally:
+                os.close(fd)
+            return True
+        except FileExistsError:
+            if find_live_server_for_store(config) is not None:
+                return False  # a live server genuinely holds it — defer
+            if _lock_owner_process_is_alive(p):
+                return False  # still starting up (or hung) — not actually stale
+            try:
+                p.unlink()  # genuinely stale (dead server's) lock — retry once
+            except OSError:
+                pass
+        except OSError:
+            # An I/O error unrelated to contention (permission hiccup, disk
+            # full, a filesystem transiently unavailable under cloud-sync).
+            # The pre-exclusivity contract for this function was best-effort,
+            # never-block-startup — preserve that here specifically, rather
+            # than claiming ownership without ever having written anything,
+            # which would leave a later caller free to also "win" an empty
+            # lock with no exclusivity between the two of them at all.
+            try:
+                p.write_bytes(payload)
+            except OSError:
+                pass
+            return True
+    return False
+
+
+def _lock_owner_process_is_alive(lock_path: pathlib.Path) -> bool:
+    """Best-effort: is the pid recorded in *lock_path* still running?
+
+    Used only to avoid stealing a lock from a process that's merely slow to
+    start (see :func:`write_store_lock`) — an unreadable/malformed lock file
+    or a missing pid field is treated as "can't confirm alive", not as
+    "confirmed dead", since the caller already treats that as the safer
+    (non-stealing) outcome regardless of which path returns it.
+    """
+    from axon._pid_check import pid_alive
+
     try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(
-            json.dumps({"host": host, "port": int(port), "pid": os.getpid()}),
-            encoding="utf-8",
-        )
-    except OSError:
-        pass
+        recorded_pid = json.loads(lock_path.read_text(encoding="utf-8")).get("pid")
+    except Exception:
+        # Can't confirm dead -- including the lock file being read mid-write
+        # by another process's own os.open()-then-os.write() (a real, if
+        # narrow, TOCTOU: the file exists and is exclusively-created before
+        # it's populated), which must never look like proof of death.
+        return True
+    if recorded_pid is None:
+        return True
+    try:
+        return pid_alive(int(recorded_pid))
+    except (TypeError, ValueError):
+        return True
 
 
 def release_store_lock(config: Any) -> None:

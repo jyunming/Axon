@@ -7,6 +7,7 @@ real network or server is required.
 from __future__ import annotations
 
 import json
+import os
 import types
 import urllib.error
 from unittest import mock
@@ -169,6 +170,117 @@ def test_find_live_server_treats_503_as_alive(tmp_path, monkeypatch):
     monkeypatch.setattr(sc.urllib.request, "urlopen", _busy)
     found = sc.find_live_server_for_store(cfg)
     assert found is not None and found["port"] == 8420
+
+
+def test_write_store_lock_returns_true_on_fresh_claim(tmp_path):
+    cfg = _cfg(projects_root=str(tmp_path))
+    assert sc.write_store_lock(cfg, "127.0.0.1", 8420) is True
+
+
+def test_write_store_lock_does_not_steal_an_unreadable_or_malformed_lock(tmp_path, monkeypatch):
+    """An unreadable/malformed lock file -- e.g. read mid-write by another
+    process's own os.open()-then-os.write() window, or simply corrupted --
+    must be treated as "can't confirm dead", never as proof of death.
+    Getting this backwards would let a second process steal a lock the
+    instant after a legitimate first process wins the exclusive create but
+    before it finishes writing its own pid into the file."""
+    cfg = _cfg(projects_root=str(tmp_path))
+    lock_path = tmp_path / sc._LOCK_NAME
+    lock_path.write_bytes(b"")  # empty -- simulates the os.open/os.write gap
+
+    def _dead(*a, **k):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(sc.urllib.request, "urlopen", _dead)
+    assert sc.write_store_lock(cfg, "127.0.0.1", 9999) is False
+    assert lock_path.read_bytes() == b""  # untouched, not stolen
+
+
+def test_write_store_lock_refuses_when_another_server_is_alive(tmp_path, monkeypatch):
+    """Two processes racing to become the server: the second one's claim
+    must fail once the first has genuinely started responding -- exercises
+    the FileExistsError -> liveness-check branch, not just a fresh create."""
+    cfg = _cfg(projects_root=str(tmp_path))
+    assert sc.write_store_lock(cfg, "127.0.0.1", 8420) is True
+    monkeypatch.setattr(
+        sc.urllib.request,
+        "urlopen",
+        _fake_urlopen({"/health/ready": _Resp(200, b'{"status":"ok"}')}),
+    )
+    assert sc.write_store_lock(cfg, "127.0.0.1", 9999) is False
+    # The original (first) server's lock must survive untouched.
+    found = sc.find_live_server_for_store(cfg)
+    assert found is not None and found["port"] == 8420
+
+
+def test_write_store_lock_steals_a_stale_lock(tmp_path, monkeypatch):
+    """A dead server's leftover lock file (both its HTTP probe and its
+    process are gone) must not permanently block a new server from
+    claiming the store."""
+    cfg = _cfg(projects_root=str(tmp_path))
+    lock_path = tmp_path / sc._LOCK_NAME
+    # A pid far above any realistic live process -- simulates a crashed
+    # server whose lock file was never cleaned up (not the test's own pid,
+    # which write_store_lock would otherwise record and which IS alive).
+    lock_path.write_text(json.dumps({"host": "127.0.0.1", "port": 8420, "pid": 2**30}))
+
+    def _dead(*a, **k):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(sc.urllib.request, "urlopen", _dead)
+    assert sc.write_store_lock(cfg, "127.0.0.1", 9999) is True
+    assert json.loads(lock_path.read_text(encoding="utf-8"))["port"] == 9999
+
+
+def test_write_store_lock_refuses_when_owner_process_is_alive_but_unresponsive(
+    tmp_path, monkeypatch
+):
+    """AxonBrain construction runs inside the ASGI lifespan, before the
+    server accepts any HTTP request, and can take many seconds loading
+    embedding/reranker models -- a slow-but-legitimate owner must not have
+    its lock stolen just because its health probe isn't answering yet."""
+    cfg = _cfg(projects_root=str(tmp_path))
+    lock_path = tmp_path / sc._LOCK_NAME
+    lock_path.write_text(json.dumps({"host": "127.0.0.1", "port": 8420, "pid": os.getpid()}))
+
+    def _dead(*a, **k):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(sc.urllib.request, "urlopen", _dead)
+    assert sc.write_store_lock(cfg, "127.0.0.1", 9999) is False
+    # The original (still-starting) owner's lock must survive untouched.
+    assert json.loads(lock_path.read_text(encoding="utf-8"))["port"] == 8420
+
+
+def test_write_store_lock_falls_back_to_plain_write_on_unexpected_os_error(tmp_path, monkeypatch):
+    """A non-contention I/O error (permission hiccup, a transiently
+    unavailable filesystem) must not report success without ever having
+    written the lock -- that would leave a later caller free to also "win"
+    an empty lock with no exclusivity between the two of them at all."""
+    cfg = _cfg(projects_root=str(tmp_path))
+
+    def _boom(*a, **k):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(sc.os, "open", _boom)
+    assert sc.write_store_lock(cfg, "127.0.0.1", 8420) is True
+    lock_path = tmp_path / sc._LOCK_NAME
+    assert json.loads(lock_path.read_text(encoding="utf-8"))["port"] == 8420
+
+
+def test_write_store_lock_force_overwrites_unconditionally(tmp_path, monkeypatch):
+    """AXON_ALLOW_MULTIPLE_SERVERS has no exclusivity contract -- force=True
+    must overwrite even a lock belonging to a genuinely live server."""
+    cfg = _cfg(projects_root=str(tmp_path))
+    assert sc.write_store_lock(cfg, "127.0.0.1", 8420) is True
+    monkeypatch.setattr(
+        sc.urllib.request,
+        "urlopen",
+        _fake_urlopen({"/health/ready": _Resp(200, b'{"status":"ok"}')}),
+    )
+    assert sc.write_store_lock(cfg, "127.0.0.1", 9999, force=True) is True
+    found = sc.find_live_server_for_store(cfg)
+    assert found is not None and found["port"] == 9999
 
 
 def test_detect_server_sends_api_key_on_config_probe(monkeypatch):

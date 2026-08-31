@@ -54,9 +54,15 @@ def lru_ttl_put(
 ) -> None:
     """Store ``(time.monotonic(), *value_parts)`` under *key*, evicting the
     least-recently-used entry first if *store* is already at *maxsize*.
+
+    The at-capacity check only fires for a genuinely new key: overwriting an
+    already-present key doesn't grow the store, so evicting first would
+    shrink it by one for no reason (a same-key update racing with the
+    at-capacity check, or simply refreshing an existing entry while full,
+    would otherwise evict an unrelated LRU entry every time).
     """
     with lock:
-        if len(store) >= maxsize and store:
+        if key not in store and len(store) >= maxsize and store:
             store.popitem(last=False)  # evict LRU (front of OrderedDict)
         store[key] = (time.monotonic(), *value_parts)
         store.move_to_end(key)  # mark as most-recently-used

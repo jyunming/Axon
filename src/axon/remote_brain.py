@@ -19,7 +19,7 @@ Design notes
   model). A surface that only queries never touches ``.embedding`` and so never
   loads a model.
 * Store-touching operations (``query``, ``switch_project``, ``ingest``,
-  ``list_documents`` …) are routed through the one running server.
+  ``clear``, ``list_documents`` …) are routed through the one running server.
 * Unsupported members are **loud**: a public member we don't proxy raises
   :class:`NotImplementedError`. Private (``_``-prefixed) and dunder members are
   left to raise ``AttributeError`` instead, because the REPL probes many private
@@ -85,6 +85,7 @@ class RemoteBrain:
         self._llm: Any = None
         self._embedding: Any = None
         self._reranker: Any = None
+        self._warned_chat_history_dropped = False
 
     # ------------------------------------------------------------------ #
     # Local lightweight clients — lazily constructed, settable (the UI and
@@ -225,21 +226,31 @@ class RemoteBrain:
     # ------------------------------------------------------------------ #
     # Query / retrieval
     # ------------------------------------------------------------------ #
-    def query(self, query, filters=None, chat_history=None, overrides=None) -> str:
+    def _warn_chat_history_dropped(self) -> None:
         # NOTE: the server's QueryRequest has no chat_history field — remote
-        # queries are single-turn. chat_history is accepted for signature parity
-        # but not forwarded (see module docstring / report).
+        # queries are single-turn. chat_history is accepted for signature
+        # parity but not forwarded (see module docstring / report). Warned
+        # once per instance, not per query, so an ongoing multi-turn REPL/
+        # webapp session (chat_history is non-empty on every turn after the
+        # first) doesn't get a warning on every single message.
+        if not self._warned_chat_history_dropped:
+            self._warned_chat_history_dropped = True
+            logger.warning(
+                "RemoteBrain: chat_history is not forwarded — queries against a "
+                "reused running server are single-turn (no conversational "
+                "context). Pass --local to run in-process with full history support."
+            )
+
+    def query(self, query, filters=None, chat_history=None, overrides=None) -> str:
         if chat_history:
-            logger.debug("RemoteBrain.query: dropping chat_history (server query is single-turn)")
+            self._warn_chat_history_dropped()
         body = self._build_query_body(query, filters, overrides)
         resp = self._request("POST", "/query", body)
         return str((resp or {}).get("response", ""))
 
     def query_stream(self, query, filters=None, chat_history=None, overrides=None):
         if chat_history:
-            logger.debug(
-                "RemoteBrain.query_stream: dropping chat_history (server query is single-turn)"
-            )
+            self._warn_chat_history_dropped()
         body = self._build_query_body(query, filters, overrides)
         for payload in self._post_stream("/query/stream", body):
             obj: Any = None
@@ -303,6 +314,20 @@ class RemoteBrain:
         await asyncio.to_thread(_sc.remote_ingest, self._api_base, directory, self._headers())
 
     # ------------------------------------------------------------------ #
+    # Mutation: clear
+    # ------------------------------------------------------------------ #
+    def clear(self) -> dict:
+        """Clear the active project's vector store, BM25 index, hash store, and
+        entity graph via the server's ``/clear``.
+
+        Unlike ``AxonBrain.clear()`` (which calls ``_assert_write_allowed()``
+        then ``collection_ops.clear_active_project()`` itself), write-access
+        is enforced server-side by the route — there is no local
+        ``vector_store``/``bm25``/graph state in this process to touch.
+        """
+        return self._request("POST", "/clear", {}) or {}
+
+    # ------------------------------------------------------------------ #
     # Read-only introspection
     # ------------------------------------------------------------------ #
     def list_documents(self) -> list[dict[str, Any]]:
@@ -350,9 +375,11 @@ class RemoteBrain:
         raise self._unsupported("_resolve_model_path")
 
     def _assert_write_allowed(self, *a, **k):
-        # Directly called by the REPL's local /clear (which then reaches for the
-        # non-existent local vector_store). Raise loudly so the surface reports
-        # the gap rather than a bare AttributeError.
+        # The REPL's local /clear path calls this directly before touching
+        # the (non-existent, here) local vector_store; the REPL's remote
+        # branch calls .clear() instead, which the server enforces write
+        # access for itself. Raise loudly for any other direct caller so the
+        # surface reports the gap rather than a bare AttributeError.
         raise self._unsupported("_assert_write_allowed")
 
     def _is_mounted_share(self, *a, **k):

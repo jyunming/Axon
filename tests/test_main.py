@@ -2026,6 +2026,71 @@ class TestCompressContextGuard:
 
 
 # ---------------------------------------------------------------------------
+# AxonBrain.clear() -- mirrors RemoteBrain.clear() so callers like the REPL
+# use one verb regardless of brain flavor, instead of an isinstance branch.
+# ---------------------------------------------------------------------------
+@patch("axon.retrievers.BM25Retriever")
+@patch("axon.main.OpenVectorStore")
+@patch("axon.main.OpenLLM")
+@patch("axon.main.OpenEmbedding")
+@patch("axon.main.OpenReranker")
+class TestBrainClear:
+    def _make_brain(self, tmp_path):
+        from axon.main import AxonBrain, AxonConfig
+
+        config = AxonConfig(
+            vector_store_path=str(tmp_path / "chroma"),
+            bm25_path=str(tmp_path / "bm25"),
+        )
+        return AxonBrain(config)
+
+    def test_clear_enforces_write_access(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
+    ):
+        import pytest
+
+        brain = self._make_brain(tmp_path)
+        with patch.object(brain, "_assert_write_allowed", side_effect=PermissionError("nope")):
+            with pytest.raises(PermissionError):
+                brain.clear()
+
+    def test_clear_calls_clear_active_project(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
+    ):
+        brain = self._make_brain(tmp_path)
+        with patch("axon.collection_ops.clear_active_project") as mock_clear:
+            brain.clear()
+        mock_clear.assert_called_once_with(brain)
+
+    def test_clear_return_shape_matches_remote_brain_clear(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
+    ):
+        """Same return shape as RemoteBrain.clear() (and REST's POST /clear)
+        so a caller doesn't need an isinstance check to know what it gets
+        back, matching the "one verb" rationale for adding this method."""
+        brain = self._make_brain(tmp_path)
+        with patch("axon.collection_ops.clear_active_project"):
+            result = brain.clear()
+        assert result == {"status": "success", "message": "Collection cleared"}
+
+    def test_clear_pops_source_hash_dedup_cache(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
+    ):
+        import axon.api as api_module
+
+        brain = self._make_brain(tmp_path)
+        api_module._source_hashes["default"] = {"abc": {}}
+        api_module._source_hashes["_global"] = {"legacy": {}}
+        try:
+            with patch("axon.collection_ops.clear_active_project"):
+                brain.clear()
+            assert "default" not in api_module._source_hashes
+            assert "_global" not in api_module._source_hashes
+        finally:
+            api_module._source_hashes.clear()
+
+
+# ---------------------------------------------------------------------------
 # switch_project reloads project-scoped state
 # ---------------------------------------------------------------------------
 @patch("axon.retrievers.BM25Retriever")
@@ -2091,6 +2156,37 @@ class TestSwitchProjectState:
             brain.switch_project("proj2")
         assert brain._ingested_hashes == {"newhash1", "newhash2", "newhash3"}
         assert "oldhash1" not in brain._ingested_hashes
+
+    def test_switch_project_resets_raptor_cache_under_lock(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
+    ):
+        """The RAPTOR summary cache reset on project switch must hold the same
+        lock _summarise_window uses for every other read/write/eviction of that
+        cache -- a lock-free reset here can race a background summarization
+        thread and silently drop the entry it just wrote."""
+        from axon.main import AxonBrain, AxonConfig
+
+        config = AxonConfig(
+            vector_store_path=str(tmp_path / "chroma"),
+            bm25_path=str(tmp_path / "bm25"),
+        )
+        brain = AxonBrain(config)
+        brain._raptor_summary_cache["stale"] = "value"
+        fake_lock = MagicMock()
+        brain._raptor_cache_lock = fake_lock
+        proj_path = tmp_path / ".axon" / "projects" / "proj3"
+        proj_path.mkdir(parents=True, exist_ok=True)
+        (proj_path / "meta.json").write_text("{}", encoding="utf-8")
+        with (
+            patch("axon.projects.project_dir", return_value=proj_path),
+            patch("axon.projects.project_vector_path", return_value=str(tmp_path / "proj_chroma")),
+            patch("axon.projects.project_bm25_path", return_value=str(tmp_path / "proj_bm25")),
+            patch("axon.projects.set_active_project"),
+        ):
+            brain.switch_project("proj3")
+        assert brain._raptor_summary_cache == {}
+        fake_lock.__enter__.assert_called()
+        fake_lock.__exit__.assert_called()
 
 
 # ---------------------------------------------------------------------------
@@ -15716,9 +15812,8 @@ class TestReplCompactCommand:
 class TestReplClearCommand:
     def test_clear(self):
         brain = _make_mock_brain()
-        with patch("axon.repl.clear_active_project") as mock_clear:
-            output = _run_repl_with_commands(["/clear", "y"], brain=brain)
-        mock_clear.assert_called_once_with(brain)
+        output = _run_repl_with_commands(["/clear", "y"], brain=brain)
+        brain.clear.assert_called_once()
         assert "knowledge base cleared" in output.lower()
         assert isinstance(output, str)
 

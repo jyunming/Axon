@@ -58,8 +58,17 @@ def clear_active_project(brain: Any) -> None:
     # In-memory only, brain-owned (not GraphRAG state — see
     # GraphRagEngine._reset_graph_state()'s docstring for why it no longer
     # resets this). Clearing here keeps "wipe this project's data" complete.
+    # Guarded by the same lock RAPTOR's own reads/writes/evictions use
+    # (main.py's _summarise_window) — a lock-free reset here could race a
+    # background summarization thread and silently drop or reintroduce an
+    # entry right after a user-initiated wipe.
     if hasattr(brain, "_raptor_summary_cache"):
-        brain._raptor_summary_cache = {}
+        raptor_lock = getattr(brain, "_raptor_cache_lock", None)
+        if raptor_lock is not None:
+            with raptor_lock:
+                brain._raptor_summary_cache = {}
+        else:
+            brain._raptor_summary_cache = {}
     meta_path = getattr(brain, "_embedding_meta_path", None)
     if isinstance(meta_path, str | os.PathLike):
         path = pathlib.Path(meta_path)

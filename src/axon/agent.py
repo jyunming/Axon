@@ -912,6 +912,21 @@ def _tool_search_knowledge(brain, args: dict) -> str:
     return "\n".join(lines)
 
 
+def _dedup_skip_message(subject: str, project: str) -> str:
+    """Dedup-skip message shared by add_text/ingest_url/ingest_texts.
+
+    Unlike ingest_path, none of these three accept a force parameter to
+    bypass dedup, so the guidance only points at list_knowledge — pointing
+    at a re-run-with-force option that doesn't exist for them would be
+    wrong. *subject* should read naturally before "already in the
+    knowledge base", e.g. "Source 'x' is" or "All 3 snippet(s) are".
+    """
+    return (
+        f"⚠️ {subject} already in the knowledge base (deduplication skipped) — "
+        f"project '{project}'. Use list_knowledge to see what's already there."
+    )
+
+
 def _tool_add_text(brain, args: dict) -> str:
     import uuid
 
@@ -927,9 +942,11 @@ def _tool_add_text(brain, args: dict) -> str:
     source = args.get("source") or f"agent_note_{uuid.uuid4().hex[:8]}"
     loader = SmartTextLoader()
     docs = loader.load_text(text, source=source)
-    brain.ingest(docs)
+    n = brain.ingest(docs)
     active_project = brain._active_project
-    return f"Saved {len(docs)} chunk(s) with source '{source}' into project '{active_project}'."
+    if n == 0:
+        return _dedup_skip_message(f"Source '{source}' is", active_project)
+    return f"Saved {n} chunk(s) with source '{source}' into project '{active_project}'."
 
 
 def _tool_purge_source(brain, args: dict) -> str:
@@ -1045,11 +1062,8 @@ def _tool_delete_documents(brain, args: dict) -> str:
 
 
 def _tool_clear_project(brain) -> str:
-    from axon.collection_ops import clear_active_project
-
-    brain._assert_write_allowed("clear")
     project = brain._active_project
-    clear_active_project(brain)
+    brain.clear()
     return f"Cleared all documents from project '{project}'."
 
 
@@ -1148,9 +1162,11 @@ def _tool_ingest_url(brain, args: dict) -> str:
         return f"Failed to fetch '{url}': {exc}"
     if not docs:
         return f"No content extracted from '{url}'."
-    brain.ingest(docs)
+    n = brain.ingest(docs)
     active_project = brain._active_project
-    return f"Ingested {len(docs)} chunk(s) from '{url}' into project '{active_project}'."
+    if n == 0:
+        return _dedup_skip_message(f"'{url}' is", active_project)
+    return f"Ingested {n} chunk(s) from '{url}' into project '{active_project}'."
 
 
 _UPDATABLE_SETTINGS = {
@@ -1201,10 +1217,12 @@ def _tool_ingest_texts(brain, args: dict) -> str:
     brain._assert_write_allowed("ingest")
     loader = SmartTextLoader()
     all_docs: list[dict] = []
+    sent_count = 0  # snippets actually attempted, excluding blank ones filtered below
     for item in items:
         text = item.get("text", "").strip()
         if not text:
             continue
+        sent_count += 1
         source = item.get("source") or f"agent_note_{uuid.uuid4().hex[:8]}"
         extra_meta = item.get("metadata", {}) or {}
         for d in loader.load_text(text, source=source):
@@ -1212,12 +1230,11 @@ def _tool_ingest_texts(brain, args: dict) -> str:
             all_docs.append(d)
     if not all_docs:
         return "All provided snippets were empty."
-    brain.ingest(all_docs)
+    n = brain.ingest(all_docs)
     active_project = brain._active_project
-    return (
-        f"Ingested {len(all_docs)} chunk(s) from {len(items)} snippet(s) "
-        f"into project '{active_project}'."
-    )
+    if n == 0:
+        return _dedup_skip_message(f"All {sent_count} snippet(s) are", active_project)
+    return f"Ingested {n} chunk(s) from {sent_count} snippet(s) into project '{active_project}'."
 
 
 def _tool_get_stale_docs(brain, args: dict) -> str:
@@ -1300,7 +1317,7 @@ def _tool_refresh_ingest(brain, args: dict) -> str:
     if not doc_versions:
         return "No ingestion history tracked — nothing to refresh."
     loader_mgr = DirectoryLoader(vision_fn=_make_vision_fn(brain))
-    refreshed, skipped, errors = 0, 0, 0
+    refreshed, skipped, errors, lost = 0, 0, 0, 0
     for source, info in list(doc_versions.items()):
         if not isinstance(info, dict):
             continue
@@ -1326,21 +1343,54 @@ def _tool_refresh_ingest(brain, args: dict) -> str:
             # Delete existing chunks for this source before re-ingesting to prevent duplicates.
             all_docs = brain.list_documents()
             target = [d for d in all_docs if d.get("source") == source]
-            if target:
-                ids_to_delete = [cid for d in target for cid in d.get("doc_ids", [])]
-                if ids_to_delete:
+            ids_to_delete = [cid for d in target for cid in d.get("doc_ids", [])]
+            if ids_to_delete:
+                try:
                     brain._own_vector_store.delete_by_ids(ids_to_delete)
                     if brain._own_bm25 is not None:
                         brain._own_bm25.delete_documents(ids_to_delete)
-            brain.ingest(docs)
-            refreshed += 1
+                except Exception as exc:
+                    # The vector-store delete may have already succeeded even
+                    # though this raised (e.g. bm25 deletion failing right
+                    # after it) -- old content may already be gone from at
+                    # least one index with nothing re-ingested yet, so this
+                    # is data loss, not a generic error.
+                    logger.debug("refresh_ingest delete error for %s: %s", source, exc)
+                    lost += 1
+                    continue
+            n = brain.ingest(docs)
+            if n == 0 and ids_to_delete:
+                # Old chunks were deleted above and the re-ingest then wrote
+                # nothing (AxonBrain.ingest's own chunk-level dedup, a
+                # separate layer, decided every new chunk already existed
+                # under some hash) -- this source's content is now
+                # genuinely gone from the store with nothing to replace it.
+                # That's real data loss, not a no-op -- counted and reported
+                # separately from "skipped" so it isn't mistaken for
+                # "nothing happened".
+                lost += 1
+            elif n == 0:
+                # Nothing existed for this source to delete in the first
+                # place, so a 0-chunk write here is a genuine no-op like any
+                # other dedup skip.
+                skipped += 1
+            else:
+                refreshed += 1
         except Exception as exc:
             logger.debug("refresh_ingest error for %s: %s", source, exc)
             errors += 1
-    return (
+    result = (
         f"Refresh complete: {refreshed} file(s) re-ingested, "
         f"{skipped} unchanged, {errors} error(s)."
     )
+    if lost:
+        result += (
+            f" ⚠️ {lost} file(s) had their old content removed but the re-ingest "
+            f"wrote 0 new chunks (a separate chunk-level dedup layer decided the "
+            f"new content already existed) — these source(s) may now be missing "
+            f"from search results entirely."
+        )
+    return result
 
 
 def _tool_write_file(args: dict) -> str:

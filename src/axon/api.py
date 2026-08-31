@@ -190,17 +190,32 @@ async def lifespan(app: FastAPI):
         # AXON_ALLOW_MULTIPLE_SERVERS=1. A stale lock (dead server) is ignored.
         from axon import server_client as _sc
 
+        _allow_multiple = bool(os.getenv("AXON_ALLOW_MULTIPLE_SERVERS"))
         _existing = _sc.find_live_server_for_store(config)
-        if _existing and not os.getenv("AXON_ALLOW_MULTIPLE_SERVERS"):
+        if _existing and not _allow_multiple:
             raise RuntimeError(
                 "An Axon API server is already serving this store "
                 f"({_existing.get('host')}:{_existing.get('port')}, pid "
                 f"{_existing.get('pid')}). Use it, stop it first, or set "
                 "AXON_ALLOW_MULTIPLE_SERVERS=1 to run a second one anyway."
             )
-        _sc.write_store_lock(
-            config, os.getenv("AXON_HOST", "0.0.0.0"), int(os.getenv("AXON_PORT", "8420"))
+        # Second, atomic line of defense: the check above and this write are
+        # not one atomic step, so two processes can both pass it when
+        # starting near-simultaneously. write_store_lock's exclusive create
+        # is resolved by the OS, so at most one of them wins it.
+        _claimed = _sc.write_store_lock(
+            config,
+            os.getenv("AXON_HOST", "0.0.0.0"),
+            int(os.getenv("AXON_PORT", "8420")),
+            force=_allow_multiple,
         )
+        if not _claimed:
+            raise RuntimeError(
+                "An Axon API server is already serving this store (lost the "
+                "startup race to claim the store lock to another process "
+                "starting at the same time). Use it, stop it first, or set "
+                "AXON_ALLOW_MULTIPLE_SERVERS=1 to run a second one anyway."
+            )
         # Option A: auto-init store on first run so the user never hits a
         # "store not found" failure on a fresh install.
         _auto_init_store(config)

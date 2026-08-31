@@ -961,6 +961,25 @@ Your primary goal is to help the user by answering questions based on the provid
             self._is_mounted_share(),
         )
 
+    def clear(self) -> dict:
+        """Clear the active project's vector store, BM25 index, hash store,
+        and entity graph. Mirrors :meth:`RemoteBrain.clear` (a single
+        ``clear()`` verb on both, matching return shape, so callers like the
+        REPL don't need an ``isinstance`` branch to know which flavor of
+        brain they hold or which shape its return value takes), but
+        enforces write access itself here rather than server-side.
+        """
+        from axon import api as _api
+        from axon.collection_ops import clear_active_project
+
+        self._assert_write_allowed("clear")
+        clear_active_project(self)
+        project_key = getattr(self, "_active_project", "default")
+        _api._source_hashes.pop(project_key, None)
+        if project_key == "default":
+            _api._source_hashes.pop("_global", None)
+        return {"status": "success", "message": "Collection cleared"}
+
     # ------------------------------------------------------------------
     # Sealed-project routing (lazy — only fires when [sealed] installed)
     # ------------------------------------------------------------------
@@ -1469,7 +1488,8 @@ Your primary goal is to help the user by answering questions based on the provid
         self._doc_versions_path = os.path.join(self.config.bm25_path, ".doc_versions.json")
         self._load_doc_versions()
         self._code_graph = self._load_code_graph()
-        self._raptor_summary_cache = {}
+        with self._raptor_cache_lock:
+            self._raptor_summary_cache = {}
         self._active_project = name
         self._read_only_scope = False
         # Resolve kind from switch operation — descriptor-based, not string-pattern
