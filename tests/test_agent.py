@@ -688,6 +688,30 @@ class TestToolIngestUrl:
             result = dispatch_tool(brain, "ingest_url", {"url": "https://example.com"})
         assert "Failed to fetch" in result or "failed" in result.lower()
 
+    def test_reports_actual_ingested_chunk_count(self):
+        """Must report brain.ingest()'s actual return value, not len(docs) --
+        a fully-deduped ingest writes 0 chunks even when docs is non-empty."""
+        brain = _make_brain()
+        brain.ingest.return_value = 3
+        with patch("axon.loaders.URLLoader") as mock_loader_cls:
+            mock_loader_cls.return_value.load.return_value = [
+                {"text": "a"},
+                {"text": "b"},
+                {"text": "c"},
+                {"text": "d"},
+            ]
+            result = dispatch_tool(brain, "ingest_url", {"url": "https://example.com"})
+        assert "Ingested 3 chunk(s)" in result
+
+    def test_fully_deduped_ingest_does_not_report_false_success(self):
+        brain = _make_brain()
+        brain.ingest.return_value = 0
+        with patch("axon.loaders.URLLoader") as mock_loader_cls:
+            mock_loader_cls.return_value.load.return_value = [{"text": "already have this"}]
+            result = dispatch_tool(brain, "ingest_url", {"url": "https://example.com"})
+        assert "already in the knowledge base" in result.lower()
+        assert "Ingested" not in result
+
 
 # ---------------------------------------------------------------------------
 # _tool_add_text (via dispatch_tool)
@@ -703,13 +727,63 @@ class TestToolAddText:
 
     def test_add_text_success(self):
         brain = _make_brain()
+        brain.ingest.return_value = 1
         mock_loader = MagicMock()
         mock_loader.load_text.return_value = [{"text": "hello", "metadata": {}}]
         # agent.py imports SmartTextLoader locally from axon.loaders — patch there.
         with patch("axon.loaders.SmartTextLoader", return_value=mock_loader):
-            dispatch_tool(brain, "add_text", {"text": "hello world"})
+            result = dispatch_tool(brain, "add_text", {"text": "hello world"})
         # brain.ingest should have been called
         brain.ingest.assert_called()
+        assert "Saved 1 chunk(s)" in result
+
+    def test_add_text_fully_deduped_does_not_report_false_success(self):
+        """brain.ingest() writing 0 chunks (fully deduped) must not be
+        reported as "Saved 1 chunk(s)" via len(docs) instead of the real
+        count."""
+        brain = _make_brain()
+        brain.ingest.return_value = 0
+        mock_loader = MagicMock()
+        mock_loader.load_text.return_value = [{"text": "hello", "metadata": {}}]
+        with patch("axon.loaders.SmartTextLoader", return_value=mock_loader):
+            result = dispatch_tool(brain, "add_text", {"text": "hello world"})
+        assert "already in the knowledge base" in result.lower()
+        assert "Saved" not in result
+
+
+# ---------------------------------------------------------------------------
+# _tool_ingest_texts (via dispatch_tool)
+# ---------------------------------------------------------------------------
+
+
+class TestToolIngestTexts:
+    def test_no_docs_returns_error(self):
+        brain = _make_brain()
+        result = dispatch_tool(brain, "ingest_texts", {"docs": []})
+        assert "No text snippets provided" in result
+
+    def test_reports_actual_ingested_chunk_count(self):
+        brain = _make_brain()
+        brain.ingest.return_value = 2
+        mock_loader = MagicMock()
+        mock_loader.load_text.side_effect = lambda text, source: [{"text": text, "metadata": {}}]
+        with patch("axon.loaders.SmartTextLoader", return_value=mock_loader):
+            result = dispatch_tool(
+                brain,
+                "ingest_texts",
+                {"docs": [{"text": "one"}, {"text": "two"}]},
+            )
+        assert "Ingested 2 chunk(s) from 2 snippet(s)" in result
+
+    def test_fully_deduped_does_not_report_false_success(self):
+        brain = _make_brain()
+        brain.ingest.return_value = 0
+        mock_loader = MagicMock()
+        mock_loader.load_text.side_effect = lambda text, source: [{"text": text, "metadata": {}}]
+        with patch("axon.loaders.SmartTextLoader", return_value=mock_loader):
+            result = dispatch_tool(brain, "ingest_texts", {"docs": [{"text": "dup"}]})
+        assert "already in the knowledge base" in result.lower()
+        assert "Ingested" not in result
 
 
 # ---------------------------------------------------------------------------
@@ -988,3 +1062,31 @@ class TestToolRefreshIngest:
         # Hash mismatch → must call brain.ingest exactly once.
         assert brain.ingest.call_count == 1
         assert "1 file(s) re-ingested" in result, result
+
+    def test_chunk_level_dedup_after_hash_mismatch_is_not_reported_as_refreshed(self, tmp_path):
+        """The file-level hash (this function's own check) can say "changed"
+        while AxonBrain.ingest's separate chunk-level dedup still writes 0
+        chunks (e.g. identical chunk text under a different source path) --
+        must not count that as a successful refresh."""
+        import hashlib
+
+        src = tmp_path / "doc.md"
+        src.write_text("new content", encoding="utf-8")
+        stale_hash = hashlib.md5(b"old content").hexdigest()
+
+        brain = _make_brain()
+        brain._doc_versions = {
+            str(src): {"content_hash": stale_hash, "chunk_count": 1},
+        }
+        brain.list_documents.return_value = []
+        brain.ingest.return_value = 0
+
+        loader = MagicMock()
+        loader.load.return_value = [{"text": "new content"}]
+        with patch("axon.loaders.DirectoryLoader") as DL:
+            DL.return_value.loaders = {".md": loader}
+            result = _tool_refresh_ingest(brain, {})
+
+        assert brain.ingest.call_count == 1
+        assert "0 file(s) re-ingested" in result, result
+        assert "1 unchanged" in result, result

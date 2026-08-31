@@ -927,9 +927,14 @@ def _tool_add_text(brain, args: dict) -> str:
     source = args.get("source") or f"agent_note_{uuid.uuid4().hex[:8]}"
     loader = SmartTextLoader()
     docs = loader.load_text(text, source=source)
-    brain.ingest(docs)
+    n = brain.ingest(docs)
     active_project = brain._active_project
-    return f"Saved {len(docs)} chunk(s) with source '{source}' into project '{active_project}'."
+    if n == 0:
+        return (
+            f"⚠️ Already in the knowledge base (deduplication skipped it) — "
+            f"source '{source}' in project '{active_project}'."
+        )
+    return f"Saved {n} chunk(s) with source '{source}' into project '{active_project}'."
 
 
 def _tool_purge_source(brain, args: dict) -> str:
@@ -1148,9 +1153,14 @@ def _tool_ingest_url(brain, args: dict) -> str:
         return f"Failed to fetch '{url}': {exc}"
     if not docs:
         return f"No content extracted from '{url}'."
-    brain.ingest(docs)
+    n = brain.ingest(docs)
     active_project = brain._active_project
-    return f"Ingested {len(docs)} chunk(s) from '{url}' into project '{active_project}'."
+    if n == 0:
+        return (
+            f"⚠️ '{url}' was already in the knowledge base "
+            f"(deduplication skipped it) — project '{active_project}'."
+        )
+    return f"Ingested {n} chunk(s) from '{url}' into project '{active_project}'."
 
 
 _UPDATABLE_SETTINGS = {
@@ -1212,12 +1222,14 @@ def _tool_ingest_texts(brain, args: dict) -> str:
             all_docs.append(d)
     if not all_docs:
         return "All provided snippets were empty."
-    brain.ingest(all_docs)
+    n = brain.ingest(all_docs)
     active_project = brain._active_project
-    return (
-        f"Ingested {len(all_docs)} chunk(s) from {len(items)} snippet(s) "
-        f"into project '{active_project}'."
-    )
+    if n == 0:
+        return (
+            f"⚠️ All {len(items)} snippet(s) were already in the knowledge base "
+            f"(deduplication skipped them) — project '{active_project}'."
+        )
+    return f"Ingested {n} chunk(s) from {len(items)} snippet(s) into project '{active_project}'."
 
 
 def _tool_get_stale_docs(brain, args: dict) -> str:
@@ -1332,8 +1344,15 @@ def _tool_refresh_ingest(brain, args: dict) -> str:
                     brain._own_vector_store.delete_by_ids(ids_to_delete)
                     if brain._own_bm25 is not None:
                         brain._own_bm25.delete_documents(ids_to_delete)
-            brain.ingest(docs)
-            refreshed += 1
+            n = brain.ingest(docs)
+            if n == 0:
+                # The file-level hash said content changed, but AxonBrain.ingest's
+                # own chunk-level dedup (a separate layer) decided every chunk
+                # already existed -- count it with the other no-op outcomes
+                # rather than claiming a refresh that wrote nothing.
+                skipped += 1
+            else:
+                refreshed += 1
         except Exception as exc:
             logger.debug("refresh_ingest error for %s: %s", source, exc)
             errors += 1
