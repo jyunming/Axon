@@ -3035,14 +3035,22 @@ def _interactive_repl(
                     print("    Clear cancelled.")
                     return False
                 try:
-                    brain._assert_write_allowed("clear")
-                    clear_active_project(brain)
-                    from axon import api as _api
+                    from axon.remote_brain import RemoteBrain
 
-                    project_key = getattr(brain, "_active_project", "default")
-                    _api._source_hashes.pop(project_key, None)
-                    if project_key == "default":
-                        _api._source_hashes.pop("_global", None)
+                    if isinstance(brain, RemoteBrain):
+                        # No local vector_store/bm25/graph state to touch in
+                        # this process — the server's /clear does the write
+                        # and enforces write-access itself.
+                        brain.clear()
+                    else:
+                        brain._assert_write_allowed("clear")
+                        clear_active_project(brain)
+                        from axon import api as _api
+
+                        project_key = getattr(brain, "_active_project", "default")
+                        _api._source_hashes.pop(project_key, None)
+                        if project_key == "default":
+                            _api._source_hashes.pop("_global", None)
                     print(f"    Knowledge base cleared for project '{brain._active_project}'.")
                 except PermissionError as _e:
                     print(f"    {_e}")

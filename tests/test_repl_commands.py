@@ -208,6 +208,34 @@ class TestReplClear:
         api_module._source_hashes.clear()
 
 
+class TestReplClearViaRemoteBrain:
+    """/clear against a RemoteBrain (single-instance server-reuse path) must
+    route through brain.clear() rather than the local _assert_write_allowed +
+    clear_active_project(brain) path -- the latter reaches for RemoteBrain's
+    unsupported .vector_store and always failed."""
+
+    def test_clear_routes_through_remote_brain_clear(self):
+        from axon.remote_brain import RemoteBrain
+
+        brain = _make_mock_brain()
+        brain.__class__ = RemoteBrain
+        with patch("axon.repl.clear_active_project") as mock_local_clear:
+            output = _run_repl_with_commands(["/clear", "y"], brain=brain)
+        brain.clear.assert_called_once()
+        mock_local_clear.assert_not_called()
+        brain._assert_write_allowed.assert_not_called()
+        assert "knowledge base cleared" in output.lower()
+
+    def test_clear_cancelled_does_not_call_remote_clear(self):
+        from axon.remote_brain import RemoteBrain
+
+        brain = _make_mock_brain()
+        brain.__class__ = RemoteBrain
+        output = _run_repl_with_commands(["/clear", "n"], brain=brain)
+        brain.clear.assert_not_called()
+        assert "clear cancelled" in output.lower()
+
+
 class TestReplDiscuss:
     def test_discuss_toggles_on(self):
         brain = _make_mock_brain(discussion_fallback=False)

@@ -218,6 +218,37 @@ def test_finalize_graph_routes():
     assert record[0][:2] == ("POST", "/graph/finalize")
 
 
+def test_clear_routes_to_clear_endpoint():
+    record = []
+    brain = _make_brain(record)
+    result = brain.clear()
+    assert record[0][:2] == ("POST", "/clear")
+    assert result == {"status": "success"}
+
+
+def test_query_chat_history_drop_warns_once(caplog):
+    import logging
+
+    record = []
+    brain = _make_brain(record)
+    with caplog.at_level(logging.WARNING, logger="Axon"):
+        brain.query("q1", chat_history=[{"role": "user", "content": "prev"}])
+        brain.query("q2", chat_history=[{"role": "user", "content": "prev"}])
+        brain.query("q3", chat_history=[{"role": "user", "content": "prev"}])
+    warnings = [r for r in caplog.records if "chat_history is not forwarded" in r.message]
+    assert len(warnings) == 1
+
+
+def test_query_without_chat_history_does_not_warn(caplog):
+    import logging
+
+    record = []
+    brain = _make_brain(record)
+    with caplog.at_level(logging.WARNING, logger="Axon"):
+        brain.query("q1")
+    assert not any("chat_history is not forwarded" in r.message for r in caplog.records)
+
+
 # ---------------------------------------------------------------------------
 # Streaming
 # ---------------------------------------------------------------------------
