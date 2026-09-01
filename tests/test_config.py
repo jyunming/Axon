@@ -16,9 +16,9 @@ class TestAxonConfig:
 
         config = AxonConfig()
 
-        assert config.embedding_provider == "sentence_transformers"
+        assert config.embedding_provider == "fastembed"
 
-        assert config.embedding_model == "all-MiniLM-L6-v2"
+        assert config.embedding_model == "sentence-transformers/all-MiniLM-L6-v2"
 
         assert config.llm_provider == "ollama"
 
@@ -72,7 +72,7 @@ class TestAxonConfig:
 
         assert isinstance(config, AxonConfig)
 
-        assert config.embedding_provider == "sentence_transformers"
+        assert config.embedding_provider == "fastembed"
 
     def test_yaml_query_transformations_step_back(self, tmp_path):
         """step_back is loaded from query_transformations section in YAML."""
@@ -256,7 +256,7 @@ class TestSave:
 
         assert "embedding" in data
 
-        assert data["embedding"]["provider"] == "sentence_transformers"
+        assert data["embedding"]["provider"] == "fastembed"
 
     def test_save_creates_parent_directory(self, tmp_path):
         """save() calls os.makedirs to create missing parent dirs."""
@@ -767,7 +767,7 @@ class TestLoad:
 
         assert isinstance(cfg, AxonConfig)
 
-        assert cfg.embedding_provider == "sentence_transformers"
+        assert cfg.embedding_provider == "fastembed"
 
     def test_load_empty_yaml_returns_defaults(self, tmp_path):
         """An empty YAML file (None result from safe_load) returns default config."""
@@ -1530,6 +1530,30 @@ class TestFirstRunConfigCreation:
         cfg = AxonConfig.load()
 
         assert cfg.llm_max_tokens == AxonConfig().llm_max_tokens == 8192
+
+    def test_first_run_embedding_provider_matches_dataclass_default(self, tmp_path, monkeypatch):
+        """First-run config's embedding provider/model must match the dataclass
+        default (fastembed / sentence-transformers/all-MiniLM-L6-v2 since 0.4.6).
+        Same values-must-MATCH shape as the max_tokens regression above — a stale
+        literal in the starter YAML would silently ship the old ~20s-cold-start
+        provider to every fresh install.
+        """
+
+        from axon.config import AxonConfig
+
+        self._patch_config_path(monkeypatch, tmp_path)
+
+        cfg = AxonConfig.load()
+
+        default = AxonConfig()
+
+        assert cfg.embedding_provider == default.embedding_provider == "fastembed"
+
+        assert (
+            cfg.embedding_model
+            == default.embedding_model
+            == "sentence-transformers/all-MiniLM-L6-v2"
+        )
 
     def test_first_run_creates_the_file(self, tmp_path, monkeypatch):
         """load() creates the config file on first run."""

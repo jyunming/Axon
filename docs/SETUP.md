@@ -69,12 +69,10 @@ Install the package. Choose the option that matches your needs:
 # Recommended for first-time users — sealed sharing + extra loaders
 # (the web GUI needs no extra; `axon-api` serves it at /gui/)
 pip install "axon-rag[starter]"
-# Minimal install (sentence-transformers + TurboQuantDB + Ollama LLM)
+# Minimal install (fastembed + sentence-transformers + TurboQuantDB + Ollama LLM)
 pip install -e .
 # With development tools (tests, linting, type checking)
 pip install -e ".[dev]"
-# With FastEmbed embedding support
-pip install -e ".[fastembed]"
 # With Qdrant vector store
 pip install -e ".[qdrant]"
 # Everything (all optional features + dev tools)
@@ -96,7 +94,7 @@ pip install -e ".[all]"
 | `sealed` | AES-256-GCM encrypted-at-rest projects for cloud-drive sharing (already bundled in `[starter]`; install standalone if you skip the bundle). | `pip install -e ".[sealed]"` |
 | `qdrant` | Qdrant vector store backend (remote or local server). Default vector store is TurboQuantDB. | `pip install -e ".[qdrant]"` |
 | `chroma` | ChromaDB vector store backend. Useful if you have an existing Chroma collection to migrate. | `pip install -e ".[chroma]"` |
-| `fastembed` | FastEmbed local embedding provider — alternative to Sentence-Transformers. | `pip install -e ".[fastembed]"` |
+| `fastembed` | Bundled in every install since 0.4.6 (it's the default embedding provider) — this extra is now a no-op, kept only so `pip install "axon-rag[fastembed]"` in existing scripts still resolves. | Already installed |
 | `all` | Everything above plus development tools — for contributors. | `pip install -e ".[all]"` |
 
 > **`graphrag` extra and Python 3.13+:** The `[graphrag]` extra uses `leidenalg` + `igraph`, which ship pre-built wheels for Python 3.13 on all platforms.
@@ -291,9 +289,14 @@ Embeddings convert text into vectors for semantic search. Choose one provider.
 
 ---
 
-### Option A — sentence-transformers (Default, No Ollama Required)
+### Option A — sentence-transformers (No Ollama Required)
 
-This is the default option. The model downloads automatically on first use.
+Default through 0.4.5; since 0.4.6 the default is Option C (FastEmbed) below,
+which produces bit-identical vectors for the same model but skips the torch
+import that made this option's cold start ~20s. sentence-transformers is still
+fully supported — pick it if you want the broader HuggingFace model catalog
+sentence-transformers supports beyond FastEmbed's curated list. The model
+downloads automatically on first use.
 
 **Install (if not already installed with the package):**
 ```bash
@@ -370,18 +373,24 @@ Expected response: `{"embedding": [0.123, -0.456, ...]}`
 
 ---
 
-### Option C — FastEmbed (Optimized Batch Processing)
+### Option C — FastEmbed (Default since 0.4.6, Optimized Batch Processing)
 
-FastEmbed uses ONNX-optimized models for fast CPU inference. Models auto-download on first use.
+FastEmbed uses ONNX-optimized models for fast CPU inference — no torch/transformers
+import, so `axon-api` cold-starts in ~2s instead of the ~20s sentence-transformers
+needs to import torch. Models auto-download on first use, cached under
+`~/.axon/model_cache/fastembed` (override with `embedding.model_path`).
 
-**Install:**
-```bash
-pip install fastembed
-# Or if using the package extras:
-pip install -e ".[fastembed]"
+**Install:** Already bundled — no extra install needed since 0.4.6.
+
+**Axon's default config** (same underlying weights as Option A's `all-MiniLM-L6-v2`,
+verified bit-identical output):
+```yaml
+embedding:
+  provider: fastembed
+  model: sentence-transformers/all-MiniLM-L6-v2
 ```
 
-**Config:**
+**Other FastEmbed models**, e.g. for better quality/multilingual support:
 ```yaml
 embedding:
   provider: fastembed
@@ -392,11 +401,15 @@ embedding:
 
 | Model | Dims | Context | Quality | Notes |
 |-------|------|---------|---------|-------|
-| `BAAI/bge-small-en-v1.5` | 384 | 512 tokens | Good | Default; fastest |
+| `BAAI/bge-small-en-v1.5` | 384 | 512 tokens | Good | Fastest of the BGE family |
 | `BAAI/bge-base-en-v1.5` | 768 | 512 tokens | Better | Balanced |
 | `BAAI/bge-large-en-v1.5` | 1024 | 512 tokens | Best (English) | Slower |
 | `BAAI/bge-m3` | 1024 | 8192 tokens | Best (multilingual) | Long-context; recommended for prose-heavy corpora |
-| `sentence-transformers/all-MiniLM-L6-v2` | 384 | 256 tokens | Good | Lightweight |
+| `sentence-transformers/all-MiniLM-L6-v2` | 384 | 256 tokens | Good | **Axon's default** |
+
+> Unlike Option A, FastEmbed does not auto-resolve a bare short name — always use
+> the full catalog id shown above (e.g. `sentence-transformers/all-MiniLM-L6-v2`,
+> not `all-MiniLM-L6-v2`).
 
 **Using BGE-M3 (recommended for long documents and multilingual content):**
 ```yaml
@@ -519,8 +532,8 @@ Here are complete configurations for each tier:
 ### Minimal Setup (CPU, low memory)
 ```yaml
 embedding:
-  provider: sentence_transformers
-  model: all-MiniLM-L6-v2
+  provider: fastembed
+  model: sentence-transformers/all-MiniLM-L6-v2
 llm:
   provider: ollama
   model: phi3:mini
@@ -544,8 +557,8 @@ rerank:
 ### Balanced Setup (Recommended)
 ```yaml
 embedding:
-  provider: sentence_transformers
-  model: all-MiniLM-L6-v2
+  provider: fastembed
+  model: sentence-transformers/all-MiniLM-L6-v2
 llm:
   provider: ollama
   model: llama3.1:8b

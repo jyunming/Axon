@@ -33,6 +33,11 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "sentence-transformers>=3.0.0",
     "tf-keras>=2.0.0",
+    # Default embedding provider since 0.4.6 (ONNX runtime, no torch import —
+    # cuts axon-api cold start from ~20s to ~2s). sentence-transformers stays a
+    # base dep too since it remains a supported provider and backs the
+    # cross-encoder reranker.
+    "fastembed>=0.1.0,<1.0.0",
     "ollama>=0.1.0",
     "openai>=1.0.0",
     "google-genai>=1.4.0",
@@ -79,6 +84,8 @@ qdrant = [
     "qdrant-client>=1.7.0,<2.0.0",
 ]
 fastembed = [
+    # Redundant since 0.4.6 (fastembed moved to base deps) — kept so
+    # `pip install axon-rag[fastembed]` in existing docs/scripts still resolves.
     "fastembed>=0.1.0,<1.0.0",
 ]
 graphrag = [

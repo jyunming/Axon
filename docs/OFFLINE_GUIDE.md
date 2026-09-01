@@ -53,6 +53,28 @@ vector_store:
 | **Vector store** | `turboquantdb` (default), `lancedb`, `chroma` | `qdrant` (remote) |
 | **Web search** | — | Brave (disabled automatically) |
 
+### sentence_transformers vs fastembed offline
+
+Both are compatible with offline mode, but they cache and resolve models
+differently — this guide's directory-staging examples below (`local_models_dir`
+/ `embedding_models_dir`) are written for `sentence_transformers`:
+
+- **`sentence_transformers`** (and the reranker, GLiNER, REBEL, LLMLingua)
+  resolve a bare model name to a local folder under `local_models_dir` /
+  `embedding_models_dir` / `hf_models_dir`, as shown throughout this guide.
+- **`fastembed`** (the default since 0.4.6) does **not** use that directory
+  resolution — its `model_name` must always be the full catalog id (e.g.
+  `sentence-transformers/all-MiniLM-L6-v2`; unlike sentence_transformers it
+  does not auto-resolve a bare short name like `all-MiniLM-L6-v2`). Instead it
+  caches to its own `cache_dir`, which defaults to
+  `~/.axon/model_cache/fastembed` (not the shared `~/.cache/huggingface` hub
+  cache) and can be overridden with `embedding.model_path`. To pre-stage a
+  fastembed model for air-gapped use: run Axon normally once with network
+  access so `~/.axon/model_cache/fastembed` is populated, then copy that
+  folder to the air-gapped machine (or point `embedding.model_path` at a
+  folder you copied it into) before enabling `offline_mode` /
+  `local_assets_only`.
+
 ### Dynamic Graph backend and offline mode
 
 A project created with `graph_backend: dynamic_graph` is offline-safe by
@@ -93,7 +115,8 @@ embedding:
   model: BAAI/bge-m3                        # resolved via embedding_models_dir below
 offline:
   local_assets_only: true
-  embedding_models_dir: /mnt/aimodels/embedding   # sentence-transformers / fastembed models
+  embedding_models_dir: /mnt/aimodels/embedding   # sentence_transformers models only — see
+                                                   # "sentence_transformers vs fastembed offline" above
   hf_models_dir: /mnt/aimodels/hf                 # reranker, GLiNER, REBEL, LLMLingua
   tokenizer_cache_dir: /mnt/aimodels/tiktoken      # tiktoken BPE cache
 ```

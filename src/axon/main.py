@@ -76,7 +76,14 @@ logger = logging.getLogger("Axon")
 from axon.code_graph import CodeGraphMixin  # noqa: E402,F401
 from axon.code_retrieval import CodeRetrievalMixin  # noqa: E402,F401
 from axon.config import _USER_CONFIG_PATH, AxonConfig  # noqa: E402,F401
-from axon.embeddings import _KNOWN_DIMS, OpenEmbedding  # noqa: E402,F401
+from axon.embeddings import (  # noqa: E402,F401
+    _KNOWN_DIMS,
+    OpenEmbedding,
+    embedding_identity,
+    fastembed_default_cache_dir,
+    is_fastembed_model_cached,
+    is_hf_model_cached,
+)
 from axon.graph_rag import GraphRagMixin  # noqa: E402,F401
 from axon.graph_render import GraphRenderMixin  # noqa: E402,F401
 from axon.llm import (  # noqa: E402,F401
@@ -273,42 +280,64 @@ Your primary goal is to help the user by answering questions based on the provid
         Source kinds:
           local_path         — absolute path that exists on disk
           local_path_missing — absolute path that does NOT exist (misconfigured)
-          hf_cache           — bare HF model ID present in the local HF hub cache
-          remote_id          — bare HF model ID with no local copy found
+          hf_cache           — bare model ID already cached locally: in the HF
+                               hub cache for sentence_transformers/reranker/
+                               gliner/rebel/llmlingua, or in fastembed's own
+                               cache_dir for the embedding row when
+                               embedding.provider is fastembed
+          remote_id          — bare model ID with no local copy found
           n/a                — feature disabled, model will never be loaded
         """
         cfg = self.config
 
-        def _hf_cache_dir() -> str:
-            return os.path.join(
-                os.getenv("HF_HOME", os.path.expanduser("~/.cache/huggingface")),
-                "hub",
-            )
-
         def _classify(path: str) -> str:
+            """Generic classifier for reranker/gliner/rebel/llmlingua/tokenizer
+            rows. Deliberately does NOT guess the "sentence-transformers/" org
+            prefix for a bare id — that guess is only valid for models
+            sentence_transformers itself auto-resolves that way (the embedding
+            row below), not for arbitrary bare ids configured for these other
+            model kinds, where a coincidental cache-dir collision would wrongly
+            defeat local_assets_only's "no network" guarantee.
+            """
             if not path:
                 return "n/a"
             if os.path.isabs(path) or path.startswith("."):
                 return "local_path" if os.path.isdir(path) else "local_path_missing"
-            # Check HF disk cache: models--org--name directory
-            hf_slug = "models--" + path.replace("/", "--")
-            if os.path.isdir(os.path.join(_hf_cache_dir(), hf_slug)):
-                return "hf_cache"
-            return "remote_id"
+            return "hf_cache" if is_hf_model_cached(path, guess_st_prefix=False) else "remote_id"
+
+        def _classify_embedding(path: str) -> str:
+            if not path:
+                return "n/a"
+            if os.path.isabs(path) or path.startswith("."):
+                return "local_path" if os.path.isdir(path) else "local_path_missing"
+            # fastembed doesn't cache under the HF hub layout _classify() checks
+            # (own cache_dir, and its backing hub repo often isn't the model's
+            # public name — e.g. "sentence-transformers/all-MiniLM-L6-v2" is
+            # actually fetched from "qdrant/all-MiniLM-L6-v2-onnx").
+            if cfg.embedding_provider == "fastembed":
+                cache_dir = cfg.embedding_model_path or fastembed_default_cache_dir(
+                    cfg.axon_store_base
+                )
+                return "hf_cache" if is_fastembed_model_cached(path, cache_dir) else "remote_id"
+            # sentence_transformers (or another HF-hub-backed provider): the
+            # "sentence-transformers/" prefix guess is valid here — it's what
+            # sentence_transformers itself does when resolving a bare short name.
+            return "hf_cache" if is_hf_model_cached(path, guess_st_prefix=True) else "remote_id"
 
         # Build the audit table — only include helper models when their feature is active
         _gliner_active = cfg.graph_rag and cfg.graph_rag_ner_backend == "gliner"
         _rebel_active = cfg.graph_rag and cfg.graph_rag_relation_backend == "rebel"
         _llmlingua_active = cfg.compress_context
-        rows: list[tuple[str, str]] = [
-            ("embedding", cfg.embedding_model),
-            ("reranker", cfg.reranker_model if cfg.rerank else ""),
-            ("gliner", cfg.graph_rag_gliner_model if _gliner_active else ""),
-            ("rebel", cfg.graph_rag_rebel_model if _rebel_active else ""),
-            ("llmlingua", cfg.graph_rag_llmlingua_model if _llmlingua_active else ""),
+        rows: list[tuple[str, str, Any]] = [
+            ("embedding", cfg.embedding_model, _classify_embedding),
+            ("reranker", cfg.reranker_model if cfg.rerank else "", _classify),
+            ("gliner", cfg.graph_rag_gliner_model if _gliner_active else "", _classify),
+            ("rebel", cfg.graph_rag_rebel_model if _rebel_active else "", _classify),
+            ("llmlingua", cfg.graph_rag_llmlingua_model if _llmlingua_active else "", _classify),
             (
                 "tokenizer",
                 cfg.tokenizer_cache_dir or os.getenv("TIKTOKEN_CACHE_DIR", ""),
+                _classify,
             ),
         ]
         _KIND_LABEL = {
@@ -320,8 +349,8 @@ Your primary goal is to help the user by answering questions based on the provid
         }
         lines: list[str] = []
         problems: list[str] = []
-        for name, path in rows:
-            kind = _classify(path)
+        for name, path, classify_fn in rows:
+            kind = classify_fn(path)
             label = _KIND_LABEL[kind]
             display = path if path else "(disabled)"
             lines.append(f"  {label} {name:<12} {display}")
@@ -359,10 +388,16 @@ Your primary goal is to help the user by answering questions based on the provid
             if self.config.truth_grounding:
                 logger.info("Local-assets-only: disabling web search (truth_grounding → OFF)")
                 self.config.truth_grounding = False
-            # Resolve all model IDs to local paths — RAPTOR + GraphRAG remain enabled
-            self.config.embedding_model = self._resolve_model_path(
-                self.config.embedding_model, "embedding"
-            )
+            # Resolve all model IDs to local paths — RAPTOR + GraphRAG remain enabled.
+            # Skipped for fastembed: unlike sentence_transformers, its model_name
+            # must be one of fastembed's enumerated hub ids, not an arbitrary local
+            # directory — cache locality for fastembed is handled via cache_dir in
+            # OpenEmbedding._load_model() instead, and HF_HUB_OFFLINE (set above)
+            # already keeps it from hitting the network.
+            if self.config.embedding_provider != "fastembed":
+                self.config.embedding_model = self._resolve_model_path(
+                    self.config.embedding_model, "embedding"
+                )
             self.config.reranker_model = self._resolve_model_path(self.config.reranker_model, "hf")
             self.config.graph_rag_gliner_model = self._resolve_model_path(
                 self.config.graph_rag_gliner_model, "hf"
@@ -398,10 +433,12 @@ Your primary goal is to help the user by answering questions based on the provid
                     "Disabling graph_rag for this session."
                 )
                 self.config.graph_rag = False
-            # Resolve bare HF model IDs to local paths
-            self.config.embedding_model = self._resolve_model_path(
-                self.config.embedding_model, "embedding"
-            )
+            # Resolve bare HF model IDs to local paths (fastembed exempted — see
+            # the matching comment in the local_assets_only block above)
+            if self.config.embedding_provider != "fastembed":
+                self.config.embedding_model = self._resolve_model_path(
+                    self.config.embedding_model, "embedding"
+                )
             self.config.reranker_model = self._resolve_model_path(self.config.reranker_model, "hf")
             logger.info(
                 "Offline mode ON  |  models dir: %s",
@@ -1696,6 +1733,14 @@ Your primary goal is to help the user by answering questions based on the provid
         current_provider = self.config.embedding_provider
         current_model = self.config.embedding_model
         if stored_provider == current_provider and stored_model == current_model:
+            return  # All good
+        # sentence_transformers and fastembed's "sentence-transformers/<name>"
+        # models are ONNX exports of the same weights (verified bit-identical
+        # output) — normalize before comparing so switching providers on an
+        # unchanged model doesn't look like a mismatch.
+        if embedding_identity(stored_provider, stored_model) == embedding_identity(
+            current_provider, current_model
+        ):
             return  # All good
         msg = (
             f"Embedding model mismatch: this project's collection was built with "

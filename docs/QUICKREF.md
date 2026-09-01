@@ -243,8 +243,8 @@ LOG_LEVEL=INFO
 Edit `config.yaml`:
 ```yaml
 embedding:
-  provider: sentence_transformers  # or ollama, fastembed
-  model: all-MiniLM-L6-v2
+  provider: fastembed  # or sentence_transformers, ollama
+  model: sentence-transformers/all-MiniLM-L6-v2
 llm:
   provider: ollama
   model: llama3.1:8b

@@ -266,6 +266,24 @@ llm:
 
 ---
 
+## VS Code Extension / `axon-api`: Slow to Start (Cold Start)
+
+**Symptom:** The extension's "Axon API server started successfully" notification (or a manually-started `axon-api`) takes ~15-20+ seconds to appear.
+
+**Cause (fixed in 0.4.6):** Through 0.4.5, the default embedding provider (`sentence_transformers`) imports `torch`/`transformers` on every server start — that import alone typically costs 10-17s, plus a few more seconds of HuggingFace Hub "check for updates" network calls even when the model is already cached locally.
+
+**Fix:** 0.4.6 changed the default `embedding.provider` to `fastembed` (ONNX runtime, no torch import) — verified to produce bit-identical vectors to `sentence_transformers`' `all-MiniLM-L6-v2` for the same model, so no re-ingest is needed. Cold start drops to ~2s. If you're still on `sentence_transformers` and want the speed-up, edit `~/.config/axon/config.yaml`:
+```yaml
+embedding:
+  provider: fastembed
+  model: sentence-transformers/all-MiniLM-L6-v2
+```
+`sentence_transformers` remains fully supported — set `embedding.provider: sentence_transformers` if you specifically need a model outside FastEmbed's catalog (see [SETUP.md](SETUP.md#5-embedding-model-setup)).
+
+If startup is still slow after switching to `fastembed`, the remaining cost is almost always Windows Defender (or another AV) scanning the Python interpreter/venv on first touch — excluding the venv's `site-packages` folder from real-time scanning is the next thing to try.
+
+---
+
 ## `top_k` and Raw Retrieval Count
 
 **Symptom:** The API or internal retrieval returns more chunks than the configured `top_k` value.

@@ -202,9 +202,10 @@ _DEFAULT_CONFIG_YAML = """\
 
 embedding:
   # Model used to convert text into vectors.
-  # sentence_transformers runs locally; openai/ollama/fastembed also supported.
-  provider: sentence_transformers
-  model: all-MiniLM-L6-v2            # Replace with a larger model for better recall
+  # fastembed runs locally via ONNX (fast startup, no torch import).
+  # sentence_transformers/openai/ollama also supported.
+  provider: fastembed
+  model: sentence-transformers/all-MiniLM-L6-v2   # Replace with a larger model for better recall
 
 
 llm:
@@ -464,10 +465,14 @@ class AxonConfig:
     # Internal tracking
     _loaded_path: str | None = None
     # Embedding
+    # fastembed is the default since 0.4.6: an ONNX export of the same
+    # sentence-transformers/all-MiniLM-L6-v2 weights (verified bit-identical
+    # output), but skips the torch/transformers import that made axon-api's
+    # cold start ~20s. sentence_transformers remains fully supported.
     embedding_provider: Literal[
         "sentence_transformers", "ollama", "fastembed", "openai"
-    ] = "sentence_transformers"
-    embedding_model: str = "all-MiniLM-L6-v2"
+    ] = "fastembed"
+    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     # Local path override for the embedding model (sentence_transformers / fastembed).
     # When set, this path is passed directly to the model loader instead of downloading.
     # sentence_transformers: absolute path to a local model folder.

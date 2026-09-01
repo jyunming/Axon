@@ -477,12 +477,13 @@ def run_wizard(brain: Any = None, config_path: str = "") -> dict[str, Any]:
             "embedding.provider",
             "embedding_provider",
             ["sentence_transformers", "ollama", "fastembed", "openai"],
-            "sentence_transformers",
+            "fastembed",
         )
         _label(
-            "Model name (e.g. all-MiniLM-L6-v2, BAAI/bge-large-en-v1.5, text-embedding-3-small)."
+            "Model name (e.g. sentence-transformers/all-MiniLM-L6-v2, "
+            "BAAI/bge-large-en-v1.5, text-embedding-3-small)."
         )
-        _ask_str("embedding.model", "embedding_model", "all-MiniLM-L6-v2")
+        _ask_str("embedding.model", "embedding_model", "sentence-transformers/all-MiniLM-L6-v2")
         # model_path: standard+
         _label(
             "embedding.model_path: absolute path to a local model folder (skips download). Leave blank to auto-download."

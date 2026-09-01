@@ -625,7 +625,11 @@ class TestOpenRerankerCrossEncoder:
 
         with patch.dict("sys.modules", {"sentence_transformers": mock_st}):
             r = OpenReranker(cfg)
-            mock_ce.assert_called_once_with(cfg.reranker_model)
+            # local_files_only is inferred from the real HF cache on the test
+            # machine, so assert the model id rather than its exact value.
+            mock_ce.assert_called_once()
+            assert mock_ce.call_args.args == (cfg.reranker_model,)
+            assert "local_files_only" in mock_ce.call_args.kwargs
             assert r.model is mock_model
 
     def test_rerank_sorts_by_score(self):
