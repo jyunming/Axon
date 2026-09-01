@@ -232,7 +232,10 @@ class OpenEmbedding:
                 from fastembed import TextEmbedding
             except ImportError as exc:
                 raise ImportError(
-                    "FastEmbed is not installed. " "Install it with: pip install 'axon[fastembed]'"
+                    "FastEmbed is not installed. It ships as a base dependency of "
+                    "axon-rag since 0.4.6, so this usually means the install is "
+                    "incomplete or was made without dependencies — try: "
+                    "pip install --upgrade axon-rag"
                 ) from exc
             _cache_dir = _model_path or fastembed_default_cache_dir(self.config.axon_store_base)
             try:

@@ -312,8 +312,8 @@ python -c "from sentence_transformers import SentenceTransformer; SentenceTransf
 **Config:**
 ```yaml
 embedding:
-  provider: fastembed
-  model: sentence-transformers/all-MiniLM-L6-v2
+  provider: sentence_transformers
+  model: all-MiniLM-L6-v2
 ```
 
 **Available models:**

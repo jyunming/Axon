@@ -280,8 +280,12 @@ Your primary goal is to help the user by answering questions based on the provid
         Source kinds:
           local_path         — absolute path that exists on disk
           local_path_missing — absolute path that does NOT exist (misconfigured)
-          hf_cache           — bare HF model ID present in the local HF hub cache
-          remote_id          — bare HF model ID with no local copy found
+          hf_cache           — bare model ID already cached locally: in the HF
+                               hub cache for sentence_transformers/reranker/
+                               gliner/rebel/llmlingua, or in fastembed's own
+                               cache_dir for the embedding row when
+                               embedding.provider is fastembed
+          remote_id          — bare model ID with no local copy found
           n/a                — feature disabled, model will never be loaded
         """
         cfg = self.config
