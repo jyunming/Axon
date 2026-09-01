@@ -1,4 +1,5 @@
 """Tests for OpenEmbedding providers in axon.embeddings."""
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -46,7 +47,9 @@ class TestOpenEmbeddingSentenceTransformers:
             "sys.modules", {"sentence_transformers": MagicMock(SentenceTransformer=mock_st)}
         ):
             emb = OpenEmbedding(cfg)
-            mock_st.assert_called_once_with("/local/model")
+            # An explicit embedding_model_path always loads online (local_files_only
+            # is only inferred from the HF hub cache for bare model ids).
+            mock_st.assert_called_once_with("/local/model", local_files_only=False)
             assert emb.dimension == 768
 
     def test_embed_returns_list(self):
@@ -158,7 +161,12 @@ class TestOpenEmbeddingFastembed:
 
         with patch.dict("sys.modules", {"fastembed": MagicMock(TextEmbedding=mock_te_cls)}):
             emb = OpenEmbedding(cfg)
-            mock_te_cls.assert_called_once_with(model_name="BAAI/bge-small-en-v1.5")
+            # No explicit embedding_model_path -> cache_dir defaults to
+            # <axon_store_base>/model_cache/fastembed; assert the model name and
+            # that some stable cache_dir was passed, not the exact machine path.
+            call_kwargs = mock_te_cls.call_args.kwargs
+            assert call_kwargs["model_name"] == "BAAI/bge-small-en-v1.5"
+            assert call_kwargs["cache_dir"].endswith(os.path.join("model_cache", "fastembed"))
             assert emb.dimension == 384
 
     def test_init_with_cache_dir(self):
@@ -372,3 +380,140 @@ class TestOpenEmbeddingUnknown:
         cfg = _make_config(embedding_provider="unknown_provider")
         with pytest.raises(ValueError, match="Unknown embedding provider"):
             OpenEmbedding(cfg)
+
+
+class TestEmbeddingIdentity:
+    """embedding_identity() must only equate provider/model pairs actually
+    verified numerically identical — see _VERIFIED_CROSS_PROVIDER_MODELS."""
+
+    def test_verified_model_equivalent_across_providers(self):
+        from axon.embeddings import embedding_identity
+
+        assert embedding_identity(
+            "sentence_transformers", "all-MiniLM-L6-v2"
+        ) == embedding_identity("fastembed", "sentence-transformers/all-MiniLM-L6-v2")
+
+    def test_unverified_model_not_equivalent_across_providers(self):
+        """A bare sentence-transformers-org model that was never verified
+        against its fastembed ONNX export must NOT be silently treated as the
+        same embedding — that would let _validate_embedding_meta wave through
+        a real mismatch."""
+        from axon.embeddings import embedding_identity
+
+        assert embedding_identity(
+            "sentence_transformers", "all-mpnet-base-v2"
+        ) != embedding_identity("fastembed", "sentence-transformers/all-mpnet-base-v2")
+
+    def test_different_models_not_equivalent(self):
+        from axon.embeddings import embedding_identity
+
+        assert embedding_identity(
+            "sentence_transformers", "all-MiniLM-L6-v2"
+        ) != embedding_identity("fastembed", "BAAI/bge-small-en-v1.5")
+
+    def test_unrelated_provider_unaffected(self):
+        from axon.embeddings import embedding_identity
+
+        assert embedding_identity("ollama", "nomic-embed-text") == (
+            "ollama",
+            "nomic-embed-text",
+        )
+
+
+class TestIsHfModelCached:
+    def test_guess_st_prefix_default_true(self, tmp_path, monkeypatch):
+        from axon.embeddings import is_hf_model_cached
+
+        monkeypatch.setenv("HF_HOME", str(tmp_path))
+        (tmp_path / "hub" / "models--sentence-transformers--all-MiniLM-L6-v2").mkdir(parents=True)
+        assert is_hf_model_cached("all-MiniLM-L6-v2") is True
+
+    def test_guess_st_prefix_false_misses_bare_name(self, tmp_path, monkeypatch):
+        """With guess_st_prefix=False, a bare id that only exists under the
+        sentence-transformers org slug must NOT be reported as cached — this
+        is what keeps the reranker/gliner/rebel/llmlingua audit rows honest."""
+        from axon.embeddings import is_hf_model_cached
+
+        monkeypatch.setenv("HF_HOME", str(tmp_path))
+        (tmp_path / "hub" / "models--sentence-transformers--all-MiniLM-L6-v2").mkdir(parents=True)
+        assert is_hf_model_cached("all-MiniLM-L6-v2", guess_st_prefix=False) is False
+
+    def test_exact_slug_match_regardless_of_guess_flag(self, tmp_path, monkeypatch):
+        from axon.embeddings import is_hf_model_cached
+
+        monkeypatch.setenv("HF_HOME", str(tmp_path))
+        (tmp_path / "hub" / "models--cross-encoder--ms-marco-MiniLM-L-6-v2").mkdir(parents=True)
+        assert (
+            is_hf_model_cached("cross-encoder/ms-marco-MiniLM-L-6-v2", guess_st_prefix=False)
+            is True
+        )
+
+
+class TestIsFastembedModelCached:
+    def test_known_default_model_maps_to_qdrant_repo(self, tmp_path):
+        from axon.embeddings import is_fastembed_model_cached
+
+        (tmp_path / "models--qdrant--all-MiniLM-L6-v2-onnx").mkdir(parents=True)
+        assert (
+            is_fastembed_model_cached("sentence-transformers/all-MiniLM-L6-v2", str(tmp_path))
+            is True
+        )
+
+    def test_known_default_model_uses_static_map_without_importing_fastembed(
+        self, tmp_path, monkeypatch
+    ):
+        """The static _KNOWN_FASTEMBED_SOURCES entry must short-circuit before
+        ever touching fastembed's catalog — that import is exactly the ~1s
+        cost this map exists to avoid paying on every boot."""
+        import sys
+
+        from axon.embeddings import is_fastembed_model_cached
+
+        (tmp_path / "models--qdrant--all-MiniLM-L6-v2-onnx").mkdir(parents=True)
+        monkeypatch.setitem(sys.modules, "fastembed", None)  # import fastembed -> ImportError
+        assert (
+            is_fastembed_model_cached("sentence-transformers/all-MiniLM-L6-v2", str(tmp_path))
+            is True
+        )
+
+    def test_missing_cache_dir_returns_false(self, tmp_path):
+        from axon.embeddings import is_fastembed_model_cached
+
+        assert (
+            is_fastembed_model_cached(
+                "sentence-transformers/all-MiniLM-L6-v2", str(tmp_path / "nope")
+            )
+            is False
+        )
+
+    def test_unknown_model_not_in_cache_returns_false(self, tmp_path):
+        from axon.embeddings import is_fastembed_model_cached
+
+        (tmp_path / "models--qdrant--all-MiniLM-L6-v2-onnx").mkdir(parents=True)
+        assert is_fastembed_model_cached("some/other-model", str(tmp_path)) is False
+
+    def test_malformed_catalog_entry_does_not_crash(self, tmp_path, monkeypatch):
+        """A non-dict entry from a future fastembed version must not raise —
+        the audit falls back to the public model_id rather than crashing
+        AxonBrain startup (fastembed is the default provider now, so this
+        path runs on every boot)."""
+        import sys
+        import types
+
+        from axon.embeddings import is_fastembed_model_cached
+
+        # Nothing under this cache_dir matches "some/other-model" itself (the
+        # fallback repo when the catalog lookup can't resolve a real source) —
+        # only a cache dir for an unrelated model exists, so a correct,
+        # non-crashing fallback must still return False.
+        (tmp_path / "models--unrelated--model").mkdir(parents=True)
+        fake_fastembed = types.ModuleType("fastembed")
+        fake_fastembed.TextEmbedding = type(
+            "FakeTextEmbedding",
+            (),
+            {"list_supported_models": staticmethod(lambda: ["not-a-dict"])},
+        )
+        monkeypatch.setitem(sys.modules, "fastembed", fake_fastembed)
+        # "some/other-model" isn't in the static map, so this exercises the
+        # dynamic catalog lookup with a malformed (non-dict) entry.
+        assert is_fastembed_model_cached("some/other-model", str(tmp_path)) is False

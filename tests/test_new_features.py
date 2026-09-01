@@ -91,8 +91,8 @@ class TestAxonConfigNewDefaults:
         from axon.main import AxonConfig
 
         cfg = AxonConfig()
-        assert cfg.embedding_provider == "sentence_transformers"
-        assert cfg.embedding_model == "all-MiniLM-L6-v2"
+        assert cfg.embedding_provider == "fastembed"
+        assert cfg.embedding_model == "sentence-transformers/all-MiniLM-L6-v2"
 
     def test_max_workers_default(self):
         from axon.main import AxonConfig

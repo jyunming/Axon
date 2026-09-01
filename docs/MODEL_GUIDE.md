@@ -631,9 +631,9 @@ Set `max_workers` in `config.yaml` to match your hardware — see
 
 embedding:
 
-  provider: sentence_transformers
+  provider: fastembed
 
-  model: all-MiniLM-L6-v2
+  model: sentence-transformers/all-MiniLM-L6-v2
 
 llm:
 
@@ -657,9 +657,9 @@ vector_store:
 
 embedding:
 
-  provider: sentence_transformers
+  provider: fastembed
 
-  model: all-MiniLM-L6-v2
+  model: sentence-transformers/all-MiniLM-L6-v2
 
 llm:
 

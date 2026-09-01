@@ -702,8 +702,8 @@ YAML section: `embedding:`
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `embedding.provider` | str | `sentence_transformers` | Embedding provider: `sentence_transformers`, `ollama`, `fastembed`, `openai` |
-| `embedding.model` | str | `all-MiniLM-L6-v2` | Embedding model name |
+| `embedding.provider` | str | `fastembed` | Embedding provider: `sentence_transformers`, `ollama`, `fastembed`, `openai` |
+| `embedding.model` | str | `sentence-transformers/all-MiniLM-L6-v2` | Embedding model name |
 | `embedding.model_path` | str | `""` | Local path override for the embedding model (takes precedence over `model` when set) |
 | `embedding.dim` | int | `0` | Override embedding vector dimension (`0` = auto-detect from model) |
 
@@ -711,9 +711,9 @@ Embedding provider install requirements:
 
 | Provider | Description | Install |
 |----------|-------------|---------|
-| `sentence_transformers` | Local CPU inference (default) | Bundled |
+| `fastembed` | Quantised ONNX models (default) — no torch import, ~2s cold start vs ~20s for `sentence_transformers` | Bundled |
+| `sentence_transformers` | Local CPU inference via PyTorch/transformers | Bundled |
 | `ollama` | Via local Ollama endpoint | Ollama running + model pulled |
-| `fastembed` | Quantised ONNX models (BGE, BAAI) | `pip install 'axon[fastembed]'` |
 | `openai` | OpenAI embedding API | `OPENAI_API_KEY` |
 
 ### 6.3 Vector Store Settings

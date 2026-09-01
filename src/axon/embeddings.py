@@ -66,11 +66,109 @@ _KNOWN_DIMS: dict[str, int] = {
     "all-mpnet-base-v2": 768,
     "nomic-embed-text": 768,
     "mxbai-embed-large": 1024,
+    # fastembed uses the org-prefixed hub id even for models sourced from the
+    # sentence-transformers org — same weights/dims as the bare name above.
+    "sentence-transformers/all-MiniLM-L6-v2": 384,
     # OpenAI models
     "text-embedding-3-small": 1536,
     "text-embedding-3-large": 3072,
     "text-embedding-ada-002": 1536,
 }
+
+_ST_ORG_PREFIX = "sentence-transformers/"
+
+
+def _hf_hub_cache_dir() -> str:
+    return os.path.join(os.getenv("HF_HOME", os.path.expanduser("~/.cache/huggingface")), "hub")
+
+
+def is_hf_model_cached(model_id: str, *, guess_st_prefix: bool = True) -> bool:
+    """Check whether an HF hub model id is present in the local hub cache.
+    When *guess_st_prefix* (default), also handles sentence-transformers'
+    short-name auto-resolution: a bare name like ``"all-MiniLM-L6-v2"`` is
+    actually cached on disk as ``models--sentence-transformers--all-MiniLM-L6-v2``,
+    not ``models--all-MiniLM-L6-v2``. That guess is only valid for models
+    sentence_transformers itself resolves this way — pass ``guess_st_prefix=False``
+    for other model kinds (reranker, GLiNER, REBEL, LLMLingua) where a bare id
+    coincidentally matching a cached sentence-transformers-org repo would be a
+    false positive, not a real cache hit.
+    """
+    if not model_id or os.path.isabs(model_id) or model_id.startswith("."):
+        return False
+    cache_dir = _hf_hub_cache_dir()
+    candidates = [model_id]
+    if guess_st_prefix and "/" not in model_id:
+        candidates.append(_ST_ORG_PREFIX + model_id)
+    return any(
+        os.path.isdir(os.path.join(cache_dir, "models--" + candidate.replace("/", "--")))
+        for candidate in candidates
+    )
+
+
+def fastembed_default_cache_dir(axon_store_base: str) -> str:
+    """Stable fastembed cache dir under the AxonStore root (not fastembed's own
+    default, the OS temp dir — Windows/macOS periodically sweep temp, which
+    would silently re-trigger the first-run download)."""
+    return os.path.join(axon_store_base, "model_cache", "fastembed")
+
+
+# Known fastembed catalog-id -> actual backing HF repo, so the common case (the
+# shipped default model) doesn't need to import fastembed just to answer "is
+# this cached?" — that import alone costs ~1s, which the whole point of the
+# preflight audit calling this on every boot is to avoid paying twice.
+_KNOWN_FASTEMBED_SOURCES = {
+    "sentence-transformers/all-MiniLM-L6-v2": "qdrant/all-MiniLM-L6-v2-onnx",
+}
+
+
+def is_fastembed_model_cached(model_id: str, cache_dir: str) -> bool:
+    """Check whether *model_id* is already present in a fastembed cache_dir.
+    fastembed's public catalog name and the HF repo it actually downloads from
+    often differ (e.g. ``"sentence-transformers/all-MiniLM-L6-v2"`` is fetched
+    from ``"qdrant/all-MiniLM-L6-v2-onnx"``), so a plain ``models--<model_id>``
+    slug check would false-negative — resolve the real source repo first, via
+    the static map above for the shipped default, else fastembed's own
+    (offline, bundled) catalog.
+    """
+    if not os.path.isdir(cache_dir):
+        return False
+    repo = _KNOWN_FASTEMBED_SOURCES.get(model_id)
+    if repo is None:
+        repo = model_id
+        try:
+            from fastembed import TextEmbedding
+
+            for entry in TextEmbedding.list_supported_models():
+                if isinstance(entry, dict) and entry.get("model") == model_id:
+                    repo = entry.get("sources", {}).get("hf") or model_id
+                    break
+        except Exception:
+            pass  # fall back to the public model_id; worst case under-detects a cache hit
+    slug = "models--" + repo.replace("/", "--")
+    return os.path.isdir(os.path.join(cache_dir, slug))
+
+
+# Provider/model pairs verified numerically identical across sentence_transformers
+# and fastembed (cosine similarity 1.0 on real embeddings, both providers, same
+# text). Do NOT add an entry without actually verifying it — a wrong equivalence
+# here would let embedding_identity() silently pass a real mismatch, corrupting
+# a collection with vectors from two different models.
+_VERIFIED_CROSS_PROVIDER_MODELS = frozenset({"all-MiniLM-L6-v2"})
+
+
+def embedding_identity(provider: str, model: str) -> tuple[str, str]:
+    """Canonicalize (provider, model) so numerically-identical embeddings
+    compare equal across providers.  Scoped to the specific models in
+    :data:`_VERIFIED_CROSS_PROVIDER_MODELS` — everything else (including other
+    bare sentence-transformers-org model names never verified against their
+    fastembed ONNX export) is returned unchanged, i.e. treated as a real
+    mismatch if the provider/model string differs at all.
+    """
+    if provider in ("sentence_transformers", "fastembed"):
+        bare = model[len(_ST_ORG_PREFIX) :] if model.startswith(_ST_ORG_PREFIX) else model
+        if bare in _VERIFIED_CROSS_PROVIDER_MODELS:
+            return ("st-family", bare)
+    return (provider, model)
 
 
 class OpenEmbedding:
@@ -94,7 +192,24 @@ class OpenEmbedding:
 
             _src = _model_path or self.config.embedding_model
             logger.info(f"Loading Sentence Transformers: {_src}")
-            self.model = SentenceTransformer(_src)
+            # Skip the "check the hub for a newer revision" network round-trip
+            # (~4s of serialized HEAD/GET requests) when the model is already
+            # cached — it's pure overhead for a model we're not going to
+            # re-download anyway.
+            _local_only = not _model_path and is_hf_model_cached(_src)
+            try:
+                self.model = SentenceTransformer(_src, local_files_only=_local_only)
+            except Exception:
+                if not _local_only:
+                    raise
+                # Cache dir existed but the load still failed (e.g. an
+                # interrupted earlier download left a partial models--* dir).
+                # Fall back to the normal online path instead of hard-failing.
+                logger.warning(
+                    "Local-only load of '%s' failed despite a cache hit; retrying online.",
+                    _src,
+                )
+                self.model = SentenceTransformer(_src)
             self.dimension = (
                 getattr(self.config, "embedding_dim", 0)
                 or self.model.get_sentence_embedding_dimension()
@@ -119,12 +234,14 @@ class OpenEmbedding:
                 raise ImportError(
                     "FastEmbed is not installed. " "Install it with: pip install 'axon[fastembed]'"
                 ) from exc
-            _kwargs: dict = {"model_name": self.config.embedding_model}
-            if _model_path:
-                _kwargs["cache_dir"] = _model_path
+            _cache_dir = _model_path or fastembed_default_cache_dir(self.config.axon_store_base)
+            try:
+                os.makedirs(_cache_dir, exist_ok=True)
+            except OSError:
+                pass  # fastembed's own downloader will surface a clearer error if unwritable
+            _kwargs: dict = {"model_name": self.config.embedding_model, "cache_dir": _cache_dir}
             logger.info(
-                f"Loading FastEmbed: {self.config.embedding_model}"
-                + (f" (cache_dir={_model_path})" if _model_path else "")
+                f"Loading FastEmbed: {self.config.embedding_model} (cache_dir={_cache_dir})"
             )
             self.model = TextEmbedding(**_kwargs)
             _cfg_dim = getattr(self.config, "embedding_dim", 0)

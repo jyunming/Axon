@@ -29,8 +29,23 @@ class OpenReranker:
                 try:
                     from sentence_transformers import CrossEncoder
 
+                    from axon.embeddings import is_hf_model_cached
+
                     logger.info(f"Loading Reranker: {self.config.reranker_model}")
-                    self.model = CrossEncoder(self.config.reranker_model)
+                    _local_only = is_hf_model_cached(self.config.reranker_model)
+                    try:
+                        self.model = CrossEncoder(
+                            self.config.reranker_model, local_files_only=_local_only
+                        )
+                    except Exception:
+                        if not _local_only:
+                            raise
+                        logger.warning(
+                            "Local-only load of '%s' failed despite a cache hit; "
+                            "retrying online.",
+                            self.config.reranker_model,
+                        )
+                        self.model = CrossEncoder(self.config.reranker_model)
                 except ImportError:
                     logger.error("sentence-transformers not installed. Reranking disabled.")
                     self.config.rerank = False

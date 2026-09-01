@@ -50,8 +50,8 @@ class TestAxonConfig:
         from axon.main import AxonConfig
 
         config = AxonConfig()
-        assert config.embedding_provider == "sentence_transformers"
-        assert config.embedding_model == "all-MiniLM-L6-v2"
+        assert config.embedding_provider == "fastembed"
+        assert config.embedding_model == "sentence-transformers/all-MiniLM-L6-v2"
         assert config.llm_provider == "ollama"
         assert config.vector_store == "turboquantdb"
         assert config.hybrid_search is True
@@ -2557,8 +2557,8 @@ class TestEmbeddingMetaSafeguard:
         import json
 
         meta = json.loads(meta_path.read_text())
-        assert meta["embedding_provider"] == "sentence_transformers"
-        assert meta["embedding_model"] == "all-MiniLM-L6-v2"
+        assert meta["embedding_provider"] == "fastembed"
+        assert meta["embedding_model"] == "sentence-transformers/all-MiniLM-L6-v2"
         assert meta["dimension"] == 384
 
     def test_same_model_ingest_succeeds(
@@ -2616,10 +2616,50 @@ class TestEmbeddingMetaSafeguard:
         # Store must NOT have been called — no data written
         brain._own_vector_store.add.assert_not_called()
 
-    def test_different_provider_ingest_raises(
+    def test_equivalent_provider_switch_does_not_raise(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
     ):
-        """Switching provider (e.g. sentence_transformers → fastembed) also raises."""
+        """sentence_transformers -> fastembed on the SAME model must NOT raise.
+
+        fastembed's "sentence-transformers/<name>" models are ONNX exports of
+        the identically-weighted sentence_transformers hub model (verified
+        cosine similarity 1.0) — a project ingested under one provider stays
+        valid after switching to the other, which is the whole point of
+        making fastembed the new default in 0.4.6 without breaking existing
+        stores. See embedding_identity() in axon/embeddings.py.
+        """
+        import json
+
+        meta_path = tmp_path / "bm25"
+        meta_path.mkdir(parents=True, exist_ok=True)
+        (meta_path / ".embedding_meta.json").write_text(
+            json.dumps(
+                {
+                    "embedding_provider": "sentence_transformers",
+                    "embedding_model": "all-MiniLM-L6-v2",
+                    "dimension": 384,
+                }
+            )
+        )
+        brain = self._make_brain(
+            MockReranker,
+            MockEmbed,
+            MockLLM,
+            MockStore,
+            MockBM25,
+            tmp_path,
+            embedding_provider="fastembed",
+            embedding_model="sentence-transformers/all-MiniLM-L6-v2",
+        )
+        # Should not raise
+        brain.ingest([{"id": "d1", "text": "hello"}])
+        brain._own_vector_store.add.assert_called_once()
+
+    def test_different_provider_and_model_ingest_raises(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
+    ):
+        """Switching to a genuinely different model (not just a different
+        provider for the same weights) still raises."""
         import json
 
         import pytest
@@ -2643,7 +2683,7 @@ class TestEmbeddingMetaSafeguard:
             MockBM25,
             tmp_path,
             embedding_provider="fastembed",
-            embedding_model="all-MiniLM-L6-v2",
+            embedding_model="BAAI/bge-small-en-v1.5",
         )
         with pytest.raises(ValueError, match="Embedding model mismatch"):
             brain.ingest([{"id": "d1", "text": "hello"}])
@@ -8619,7 +8659,11 @@ class TestLocalModelPaths:
         mock_module.SentenceTransformer = MagicMock(return_value=mock_st)
         with patch.dict(sys.modules, {"sentence_transformers": mock_module}):
             emb = OpenEmbedding(cfg)
-            mock_module.SentenceTransformer.assert_called_once_with("/local/models/minilm")
+            # An explicit embedding_model_path always loads online (local_files_only
+            # is only inferred from the HF hub cache for bare model ids).
+            mock_module.SentenceTransformer.assert_called_once_with(
+                "/local/models/minilm", local_files_only=False
+            )
         assert emb.dimension == 384
 
     def test_sentence_transformers_falls_back_to_model_name(self, tmp_path):
@@ -8640,7 +8684,11 @@ class TestLocalModelPaths:
         mock_module.SentenceTransformer = MagicMock(return_value=mock_st)
         with patch.dict(sys.modules, {"sentence_transformers": mock_module}):
             OpenEmbedding(cfg)
-            mock_module.SentenceTransformer.assert_called_once_with("all-MiniLM-L6-v2")
+            # local_files_only depends on whether this model happens to already be
+            # in the test machine's real HF cache — assert the model id, not that.
+            mock_module.SentenceTransformer.assert_called_once()
+            assert mock_module.SentenceTransformer.call_args.args == ("all-MiniLM-L6-v2",)
+            assert "local_files_only" in mock_module.SentenceTransformer.call_args.kwargs
 
     def test_ollama_models_dir_sets_env_var(self, tmp_path, monkeypatch):
         """AxonBrain sets OLLAMA_MODELS env var when ollama_models_dir is configured."""

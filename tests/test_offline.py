@@ -224,10 +224,27 @@ class TestBrainOfflineInit:
         config = AxonConfig(
             offline_mode=True,
             local_models_dir=str(tmp_path),
+            embedding_provider="sentence_transformers",
             embedding_model="all-MiniLM-L6-v2",
         )
         brain = _make_brain(config)
         assert brain.config.embedding_model == str(model_dir)
+
+    def test_fastembed_embedding_model_not_resolved_on_init(self, tmp_path):
+        """fastembed's model_name must stay a catalog id, not a local directory —
+        unlike sentence_transformers, TextEmbedding can't load an arbitrary path.
+        Locality for fastembed comes from cache_dir instead (see embeddings.py)."""
+        (tmp_path / "all-MiniLM-L6-v2").mkdir()
+        from axon.main import AxonConfig
+
+        config = AxonConfig(
+            offline_mode=True,
+            local_models_dir=str(tmp_path),
+            embedding_provider="fastembed",
+            embedding_model="sentence-transformers/all-MiniLM-L6-v2",
+        )
+        brain = _make_brain(config)
+        assert brain.config.embedding_model == "sentence-transformers/all-MiniLM-L6-v2"
 
     def test_reranker_model_resolved_on_init(self, tmp_path):
         model_dir = tmp_path / "bge-reranker-base"
