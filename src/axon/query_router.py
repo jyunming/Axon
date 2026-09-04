@@ -326,9 +326,11 @@ class QueryRouterMixin:
                 return response
             # Models rarely answer with the bare label — accept an unambiguous
             # mention ("Category: synthesis") rather than discarding the answer.
-            matched = [c for c in valid if c in response]
+            # Whole-word only: a plain substring test matches "factual" inside
+            # "counterfactual", so prose would silently mis-route.
+            matched = {c for c in valid if re.search(rf"(?<!\w){re.escape(c)}(?!\w)", response)}
             if len(matched) == 1:
-                return matched[0]
+                return matched.pop()
         except Exception:
             pass
         return "factual"

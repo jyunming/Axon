@@ -636,7 +636,10 @@ class TestClassifyQueryRouteLLM:
         routing silently degraded to the heuristic on every query while the
         tests stayed green (they mocked ``generate`` on an unspecced MagicMock).
         Assert against the real class so a bad method name fails loudly."""
-        assert not hasattr(OpenLLM, "generate")
+        # The durable guard is the spec=OpenLLM mock in _make_full_stub, which
+        # raises AttributeError on any method OpenLLM does not define. Asserting
+        # the *absence* of `generate` would instead fail the day someone adds a
+        # legitimate generate() alias, so only assert what the router relies on.
         assert hasattr(OpenLLM, "complete")
         stub = _make_full_stub(query_router="llm")
         stub.llm.complete.return_value = "synthesis"
@@ -656,6 +659,29 @@ class TestClassifyQueryRouteLLM:
         stub = _make_full_stub(query_router="llm")
         stub.llm.complete.return_value = "could be synthesis or table_lookup"
         assert stub._classify_query_route_llm("q") == "factual"
+
+    @pytest.mark.parametrize(
+        "response",
+        [
+            "this looks like a counterfactual question",
+            "nonfactual",
+            "the synthesiser handles this",
+        ],
+    )
+    def test_label_embedded_in_a_longer_word_is_not_a_match(self, response):
+        """Matching must be whole-word: a plain substring test finds 'factual'
+        inside 'counterfactual' and 'synthesis' inside 'synthesiser', so prose
+        would silently mis-route to a category the model never named."""
+        stub = _make_full_stub(query_router="llm")
+        stub.llm.complete.return_value = response
+        assert stub._classify_query_route_llm("q") == "factual"
+
+    def test_label_with_adjacent_punctuation_still_matches(self):
+        """Whole-word matching must not be so strict that it rejects the common
+        'Category: synthesis.' shape."""
+        stub = _make_full_stub(query_router="llm")
+        stub.llm.complete.return_value = "Category: table_lookup."
+        assert stub._classify_query_route_llm("q") == "table_lookup"
 
     def test_none_response_falls_back(self):
         stub = _make_full_stub(query_router="llm")
@@ -817,8 +843,10 @@ class TestPrependContextualContext:
     def test_calls_a_real_openllm_method(self):
         """Regression: this called the non-existent ``self.llm.generate()``
         inside a bare except, so contextual-retrieval prepending never once ran
-        in production despite being a documented, shipped feature."""
-        assert not hasattr(OpenLLM, "generate")
+        in production despite being a documented, shipped feature. The spec'd
+        mock in _make_full_stub is what enforces this — it raises on any method
+        OpenLLM does not define."""
+        assert hasattr(OpenLLM, "complete")
         stub = _make_full_stub()
         stub.llm.complete.return_value = "Situating sentence."
         result = stub._prepend_contextual_context({"text": "body"}, "whole doc")
