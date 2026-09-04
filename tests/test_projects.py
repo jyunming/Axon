@@ -166,42 +166,70 @@ class TestActiveProject:
         session. ``.active_project`` still named it, nothing revalidated it, and
         clients restoring their last-known project looped on 404 forever (this
         was live in the maintainer's own store, pointing at 'myproj')."""
-        from axon.projects import ensure_project, get_active_project, set_active_project
-
-        ensure_project("gone")
-        set_active_project("gone")
-        assert get_active_project() == "gone"
-
-        import shutil
-
-        from axon.projects import project_dir
-
-        shutil.rmtree(project_dir("gone"))
-
-        assert get_active_project() == "default"
-
-    def test_heal_rewrites_the_pointer_file(self, tmp_projects):
-        """Healing must persist, or every call pays the same failed lookup."""
         import axon.projects as _p
 
         _p.ensure_project("gone")
         _p.set_active_project("gone")
+        root = _p.PROJECTS_ROOT
+        assert _p.get_active_project(root) == "gone"
+
         import shutil
 
         shutil.rmtree(_p.project_dir("gone"))
 
-        _p.get_active_project()
+        assert _p.get_active_project(root) == "default"
+
+    def test_heal_rewrites_the_pointer_file(self, tmp_projects):
+        """Healing must persist, or every call pays the same failed lookup."""
+        import shutil
+
+        import axon.projects as _p
+
+        _p.ensure_project("gone")
+        _p.set_active_project("gone")
+        shutil.rmtree(_p.project_dir("gone"))
+
+        _p.get_active_project(_p.PROJECTS_ROOT)
 
         assert _p._ACTIVE_FILE.read_text(encoding="utf-8").strip() == "default"
 
+    def test_no_root_given_is_a_plain_read_and_never_heals(self, tmp_projects):
+        """Guard against a state-destroying regression: PROJECTS_ROOT defaults to
+        the legacy ~/.axon/projects while the real store is
+        {axon_store_base}/AxonStore/{user}, and they only converge after
+        set_projects_root(). Validating without an explicit root would resolve a
+        live project against the wrong tree and wipe a good pointer, so the
+        no-arg call must stay a pure read."""
+        import shutil
+
+        import axon.projects as _p
+
+        _p.ensure_project("gone")
+        _p.set_active_project("gone")
+        shutil.rmtree(_p.project_dir("gone"))
+
+        assert _p.get_active_project() == "gone"
+        assert _p._ACTIVE_FILE.read_text(encoding="utf-8").strip() == "gone"
+
+    def test_heal_validates_against_the_root_it_is_given(self, tmp_path, tmp_projects):
+        """A project that exists under the supplied root is kept even when it is
+        absent from the module-global PROJECTS_ROOT."""
+        import axon.projects as _p
+
+        other_root = tmp_path / "elsewhere"
+        (other_root / "liveproj").mkdir(parents=True)
+        _p.set_active_project("liveproj")
+
+        assert _p.get_active_project(other_root) == "liveproj"
+
     def test_mounted_share_pointer_is_not_second_guessed(self, tmp_projects):
-        """Mounts live outside PROJECTS_ROOT and are validated at switch time;
-        the existence check here must not clobber them."""
-        from axon.projects import get_active_project, set_active_project
+        """Mounts live outside the projects root and are validated at switch
+        time; the existence check must not clobber them."""
+        import axon.projects as _p
 
-        set_active_project("mounts/teamshare")
+        _p.set_active_project("mounts/teamshare")
 
-        assert get_active_project() == "mounts/teamshare"
+        assert _p.get_active_project(_p.PROJECTS_ROOT) == "mounts/teamshare"
 
 
 class TestListProjects:

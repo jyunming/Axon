@@ -1611,14 +1611,14 @@ def main():
                 print("  No projects yet. Use --project-new <name> to create one.")
             else:
                 print()
-                active = _proj_mod.get_active_project()
+                active = _proj_mod.get_active_project(config.projects_root)
                 _print_project_tree(projects, active)
                 print(f"\n  Active: {active}")
             return
         if args.project_delete:
             proj_name = args.project_delete.lower()
             try:
-                if _proj_mod.get_active_project() == proj_name:
+                if _proj_mod.get_active_project(config.projects_root) == proj_name:
                     _proj_mod.set_active_project("default")
                 _proj_mod.delete_project(proj_name)
                 print(f"  Deleted project '{proj_name}'.")
@@ -1984,7 +1984,7 @@ def main():
             print(f"\n  User:       {username}")
             print(f"  User dir:   {projects_root}")
             print(f"  Store path: {projects_root.parent}")
-            active = _proj_mod.get_active_project()
+            active = _proj_mod.get_active_project(config.projects_root)
             print(f"  Project:    {active}\n")
             return
         if getattr(args, "mount_refresh", None) is not None:
@@ -2043,7 +2043,7 @@ def main():
         if args.session_list:
             from axon.sessions import _list_sessions, _print_sessions
 
-            sessions = _list_sessions(project=_proj_mod.get_active_project())
+            sessions = _list_sessions(project=_proj_mod.get_active_project(config.projects_root))
             if not sessions:
                 print("  No saved sessions.")
             else:

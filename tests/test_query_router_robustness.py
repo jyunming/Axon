@@ -662,6 +662,22 @@ class TestClassifyQueryRouteLLM:
         stub.llm.complete.return_value = None
         assert stub._classify_query_route_llm("q") == "factual"
 
+    @pytest.mark.parametrize(
+        "err",
+        [
+            "Error: Copilot LLM bridge timed out.",
+            "Error from Copilot: rate limited",
+            "Error: Task response lost.",
+        ],
+    )
+    def test_returned_not_raised_llm_errors_fall_back(self, err):
+        """complete() does not raise for every failure — the copilot provider
+        returns its errors as ordinary strings. Those must not be scanned for
+        category labels."""
+        stub = _make_full_stub(query_router="llm")
+        stub.llm.complete.return_value = err
+        assert stub._classify_query_route_llm("q") == "factual"
+
 
 # ===========================================================================
 # 3. _expand_with_entity_graph (lines 155, 177, 202-203)
@@ -815,6 +831,25 @@ class TestPrependContextualContext:
         stub.llm.complete.return_value = "   "
         result = stub._prepend_contextual_context({"text": "body"}, "whole doc")
         assert result["text"] == "body"
+
+    def test_returned_not_raised_llm_error_is_not_indexed(self):
+        """The copilot provider reports failures by returning a string. Without a
+        guard, a bridge timeout would be prepended to the chunk and then embedded
+        and indexed — permanently poisoning the corpus."""
+        stub = _make_full_stub()
+        stub.llm.complete.return_value = "Error: Copilot LLM bridge timed out."
+        result = stub._prepend_contextual_context({"text": "body"}, "whole doc")
+        assert result["text"] == "body"
+
+    def test_overlong_context_is_capped(self):
+        """complete() has no max_tokens (the dead call passed 60) and this runs
+        on every chunk at ingest, so an essay must not be prepended wholesale."""
+        stub = _make_full_stub()
+        stub.llm.complete.return_value = "x" * 5000
+        result = stub._prepend_contextual_context({"text": "body"}, "whole doc")
+        prefix = result["text"].split("\n", 1)[0]
+        assert len(prefix) <= 400
+        assert result["text"].endswith("body")
 
 
 # ===========================================================================
@@ -1847,11 +1882,23 @@ class TestProfileIntegration:
         assert captured_route.get("route") == expected_route
 
     def test_llm_router_mode_routes_query(self):
+        """The route classifier and the answer generator both go through
+        complete() now that the dead generate() call is gone, so dispatch on the
+        prompt rather than a single return_value — two flat assignments would
+        just overwrite each other and the routing half would never be exercised.
+        """
         stub = _make_full_stub(similarity_threshold=0.0, query_router="llm")
-        stub.llm.complete.return_value = "synthesis"
-        stub.llm.complete.return_value = "answer"
+
+        def _by_prompt(prompt, *args, **kwargs):
+            return "synthesis" if "Classify this query" in prompt else "answer"
+
+        stub.llm.complete.side_effect = _by_prompt
         result = stub.query("complex synthesis question")
         assert isinstance(result, str)
+        classified = [
+            c for c in stub.llm.complete.call_args_list if "Classify this query" in c.args[0]
+        ]
+        assert classified, "LLM route classification never ran"
 
     def test_factual_profile_does_not_enable_hyde(self):
         """Factual profile forces hyde=False even if config had it True."""

@@ -117,6 +117,13 @@ llmlingua = [
 ]
 rebel = [
     "transformers>=4.20.0",
+    # torch used to arrive transitively via the base sentence-transformers dep.
+    # That moved to its own extra in 0.5.0, so declare the backend explicitly —
+    # otherwise transformers imports fine and REBEL fails later inside
+    # AutoModelForSeq2SeqLM.from_pretrained with a "no backend" error.
+    # Unpinned so the user's environment picks the right CPU/CUDA/ROCm wheel,
+    # matching the [sparse] extra.
+    "torch>=2.0",
 ]
 sparse = [
     # Phase 1 SPLADE backend for axon.sparse_retrieval.SpladeSparseRetriever.

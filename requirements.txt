@@ -24,12 +24,13 @@ rich>=13.0.0
 tiktoken>=0.7.0
 
 # Vector Stores
-# turboquantdb (tqdb) is the default. chroma/qdrant are pyproject extras kept
-# here so pip-audit still covers them; lancedb moved to the [lancedb] extra in
-# 0.5.0 and is no longer installed by default.
+# turboquantdb (tqdb) is the default. chroma/qdrant/lancedb are pyproject extras,
+# listed here so `pip-audit --requirement requirements.txt` (security.yml) keeps
+# reporting CVEs for every backend we ship, not just the default one.
 tqdb>=0.7.0
 chromadb>=0.4.0
 qdrant-client>=1.7.0
+lancedb>=0.8.0
 
 # Embeddings
 # fastembed is the DEFAULT embedding provider since 0.4.6. It was previously
