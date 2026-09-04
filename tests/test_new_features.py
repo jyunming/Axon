@@ -454,7 +454,7 @@ class TestQueryRouter:
 
     def test_llm_router_valid_response(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
         brain = self._brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
-        brain.llm.generate = MagicMock(return_value="synthesis\n")
+        brain.llm.complete = MagicMock(return_value="synthesis\n")
         result = brain._classify_query_route_llm("What are the main findings?")
         assert result == "synthesis"
 
@@ -462,7 +462,7 @@ class TestQueryRouter:
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
         brain = self._brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
-        brain.llm.generate = MagicMock(return_value="unknown")
+        brain.llm.complete = MagicMock(return_value="unknown")
         result = brain._classify_query_route_llm("What are the main findings?")
         assert result == "factual"
 

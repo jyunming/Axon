@@ -143,20 +143,65 @@ class TestActiveProject:
         assert get_active_project() == "default"
 
     def test_set_and_get(self, tmp_projects):
-        from axon.projects import get_active_project, set_active_project
+        from axon.projects import ensure_project, get_active_project, set_active_project
 
+        ensure_project("myproj")
         set_active_project("myproj")
 
         assert get_active_project() == "myproj"
 
     def test_overwrite(self, tmp_projects):
-        from axon.projects import get_active_project, set_active_project
+        from axon.projects import ensure_project, get_active_project, set_active_project
 
+        ensure_project("first")
+        ensure_project("second")
         set_active_project("first")
 
         set_active_project("second")
 
         assert get_active_project() == "second"
+
+    def test_deleted_active_project_heals_to_default(self, tmp_projects):
+        """Regression: a deleted active project used to poison every later
+        session. ``.active_project`` still named it, nothing revalidated it, and
+        clients restoring their last-known project looped on 404 forever (this
+        was live in the maintainer's own store, pointing at 'myproj')."""
+        from axon.projects import ensure_project, get_active_project, set_active_project
+
+        ensure_project("gone")
+        set_active_project("gone")
+        assert get_active_project() == "gone"
+
+        import shutil
+
+        from axon.projects import project_dir
+
+        shutil.rmtree(project_dir("gone"))
+
+        assert get_active_project() == "default"
+
+    def test_heal_rewrites_the_pointer_file(self, tmp_projects):
+        """Healing must persist, or every call pays the same failed lookup."""
+        import axon.projects as _p
+
+        _p.ensure_project("gone")
+        _p.set_active_project("gone")
+        import shutil
+
+        shutil.rmtree(_p.project_dir("gone"))
+
+        _p.get_active_project()
+
+        assert _p._ACTIVE_FILE.read_text(encoding="utf-8").strip() == "default"
+
+    def test_mounted_share_pointer_is_not_second_guessed(self, tmp_projects):
+        """Mounts live outside PROJECTS_ROOT and are validated at switch time;
+        the existence check here must not clobber them."""
+        from axon.projects import get_active_project, set_active_project
+
+        set_active_project("mounts/teamshare")
+
+        assert get_active_project() == "mounts/teamshare"
 
 
 class TestListProjects:

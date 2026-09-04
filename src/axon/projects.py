@@ -591,11 +591,36 @@ def list_projects() -> list[dict]:
 
 
 def get_active_project() -> str:
-    """Return the name of the currently active project (defaults to 'default')."""
-    if _ACTIVE_FILE.exists():
+    """Return the name of the currently active project (defaults to 'default').
+
+    Self-heals a stale pointer: if the persisted project has since been deleted,
+    fall back to 'default' rather than handing out a name that no longer
+    resolves. Previously a deleted active project poisoned every later session —
+    clients that restore their last-known project looped on 404 indefinitely,
+    and nothing ever rewrote the file.
+    """
+    if not _ACTIVE_FILE.exists():
+        return "default"
+    try:
         name = _ACTIVE_FILE.read_text(encoding="utf-8").strip()
-        if name:
+    except OSError:
+        return "default"
+    if not name or name == "default":
+        return "default"
+    # Mounted shares live outside PROJECTS_ROOT and are validated on switch;
+    # don't second-guess them here.
+    if name.startswith("mounts/"):
+        return name
+    try:
+        if project_dir(name).is_dir():
             return name
+    except ValueError:
+        pass  # name no longer passes validation (e.g. rules tightened since)
+    logger.warning(
+        "Active project %r no longer exists; falling back to 'default'.",
+        name,
+    )
+    set_active_project("default")
     return "default"
 
 

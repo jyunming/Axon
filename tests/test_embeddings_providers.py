@@ -344,6 +344,21 @@ class TestBGEM3FastEmbed:
             with pytest.raises(ImportError, match="pip install"):
                 OpenEmbedding(cfg)
 
+    def test_sentence_transformers_import_error_names_the_extra(self):
+        """sentence-transformers left the base install in 0.5.0, so a user who
+        selects that provider without the extra must get an actionable error
+        naming the extra — not a bare ModuleNotFoundError from deep in the
+        loader. Matches the guarded-import pattern in sparse_retrieval.py."""
+        from axon.embeddings import OpenEmbedding
+
+        cfg = _make_config(
+            embedding_provider="sentence_transformers", embedding_model="all-MiniLM-L6-v2"
+        )
+
+        with patch.dict("sys.modules", {"sentence_transformers": None}):
+            with pytest.raises(ImportError, match=r"axon-rag\[sentence-transformers\]"):
+                OpenEmbedding(cfg)
+
 
 class TestOllamaUnknownModelWarning:
     def test_unknown_ollama_model_logs_warning(self, caplog):

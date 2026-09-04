@@ -294,9 +294,17 @@ class QueryRouterMixin:
         )
         valid = {"factual", "synthesis", "table_lookup", "entity_relation", "corpus_exploration"}
         try:
-            response = self.llm.generate(prompt, max_tokens=20).strip().lower()
+            # OpenLLM exposes complete()/complete_with_tools()/stream() — there is no
+            # generate(). This called generate() inside a bare except, so LLM routing
+            # silently fell back to the heuristic on every query since it shipped.
+            response = (self.llm.complete(prompt) or "").strip().lower()
             if response in valid:
                 return response
+            # Models rarely answer with the bare label — accept an unambiguous
+            # mention ("Category: synthesis") rather than discarding the answer.
+            matched = [c for c in valid if c in response]
+            if len(matched) == 1:
+                return matched[0]
         except Exception:
             pass
         return "factual"
@@ -325,9 +333,12 @@ class QueryRouterMixin:
             "within the document. Output ONLY that sentence, no preamble."
         ).format(doc=whole_doc_text[:3000], chunk=chunk["text"][:800])
         try:
-            ctx_sentence = self.llm.generate(prompt, max_tokens=60).strip()
-            chunk = dict(chunk)
-            chunk["text"] = ctx_sentence + "\n" + chunk["text"]
+            # See _classify_query_route_llm: generate() does not exist on OpenLLM,
+            # so this whole feature was a silent no-op from the day it shipped.
+            ctx_sentence = (self.llm.complete(prompt) or "").strip()
+            if ctx_sentence:
+                chunk = dict(chunk)
+                chunk["text"] = ctx_sentence + "\n" + chunk["text"]
         except Exception:
             pass  # graceful degradation
         return chunk

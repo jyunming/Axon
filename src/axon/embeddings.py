@@ -188,7 +188,16 @@ class OpenEmbedding:
         """Load the embedding model."""
         _model_path = getattr(self.config, "embedding_model_path", "")
         if self.provider == "sentence_transformers":
-            from sentence_transformers import SentenceTransformer
+            try:
+                from sentence_transformers import SentenceTransformer
+            except ImportError as exc:
+                raise ImportError(
+                    "embedding.provider is 'sentence_transformers' but the package "
+                    "is not installed. It moved out of the base install in 0.5.0 "
+                    "(it pulls ~2.1 GB of torch/TensorFlow). Install it with: "
+                    "pip install 'axon-rag[sentence-transformers]' — or switch to "
+                    "the default provider with embedding.provider: fastembed"
+                ) from exc
 
             _src = _model_path or self.config.embedding_model
             logger.info(f"Loading Sentence Transformers: {_src}")

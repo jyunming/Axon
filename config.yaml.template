@@ -190,7 +190,7 @@ embedding:
 
 
 
-  provider: sentence_transformers     # options: sentence_transformers, openai, ollama
+  provider: fastembed                 # options: fastembed (default, ONNX — no torch), sentence_transformers (pip install axon-rag[sentence-transformers]), openai, ollama
 
 
 
@@ -206,7 +206,7 @@ embedding:
 
 
 
-  model: all-MiniLM-L6-v2             # fast, lightweight; upgrade to BAAI/bge-large for better recall
+  model: sentence-transformers/all-MiniLM-L6-v2   # fast, lightweight; upgrade to BAAI/bge-large-en-v1.5 for better recall. fastembed needs the full catalog id, not a bare short name.
   # dim: 0                            # 0 = auto-detect; set explicitly if dimension mismatches occur
 
 

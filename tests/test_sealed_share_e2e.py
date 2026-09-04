@@ -123,7 +123,6 @@ def _make_brain(cfg):
         mock_emb.dim = _DIM
 
         mock_llm = MockLLM.return_value
-        mock_llm.generate.side_effect = _canned_llm_response
         mock_llm.complete.side_effect = _canned_llm_response
 
         brain = AxonBrain(cfg)
