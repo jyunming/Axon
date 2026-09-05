@@ -740,9 +740,6 @@ YAML section: `rag:`
 | `rag.hybrid_search` | bool | `true` | Combine vector + BM25 sparse retrieval |
 | `rag.hybrid_weight` | float | `0.7` | Hybrid fusion weight (`1.0` = pure vector, `0.0` = pure BM25; only used in `weighted` mode) |
 | `rag.hybrid_mode` | str | `rrf` | Hybrid fusion mode: `rrf` (Reciprocal Rank Fusion, default) or `weighted` |
-| `rag.sparse_retrieval` | bool | `false` | Enable SPLADE learned sparse retrieval alongside dense+BM25 (requires `pip install 'axon-rag[sparse]'`) |
-| `rag.sparse_model` | str | `naver/splade-cocondenser-ensembledistil` | HuggingFace model ID for the SPLADE sparse encoder |
-| `rag.sparse_weight` | float | `0.3` | Weight applied to sparse scores during hybrid fusion (`0.0`–`1.0`); values outside this range are rejected at startup |
 | `rag.rerank` | bool | `false` | BGE cross-encoder reranker |
 | `rag.rerank_top_k` | int | `5` | Max results to return after re-ranking |
 | `rag.sentence_window` | bool | `false` | Expand retrieved chunks with surrounding sentences |
