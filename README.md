@@ -193,14 +193,9 @@ axon --project mounts/owner_research "question"   # 3. query; Axon decrypts to t
 | `axon` | Interactive REPL | — | Day-to-day exploration, power users |
 | `axon-api` | FastAPI REST server **+ web GUI** | `8420` | Agents, scripts, CI pipelines, browser UI |
 | `axon-mcp` | MCP stdio server | — | Any MCP-compatible agent (Claude Code, Codex, Gemini CLI, Cursor, Copilot…) |
-| `axon-ui` | Streamlit UI — **deprecated** | `8501` | Superseded by the web GUI below |
 
 **Browser UI:** start `axon-api` and open **<http://localhost:8420/gui/>**. No extra
 command or dependency needed — the GUI ships with the server.
-
-> **Deprecation:** `axon-ui` (Streamlit) is deprecated and will be removed in a
-> future release. It is no longer part of `[starter]` or `[all]`; install it
-> explicitly with `pip install "axon-rag[ui]"` if you still need it.
 
 > **Single-instance routing.** If an `axon-api` server is already running, the
 > `axon` CLI detects it (a quick `/health/ready` probe) and routes store-mutating

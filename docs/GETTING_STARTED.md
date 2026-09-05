@@ -313,19 +313,6 @@ console, project switcher, settings panel.
 
 **Settings:** left sidebar → **Settings** → toggle hybrid search, reranking, HyDE, RAPTOR, and GraphRAG. Leave these off for now — they are advanced search techniques explained in the [RAPTOR + GraphRAG](#raptor--graphrag--getting-the-most-out-of-axon) section below.
 
-<details>
-<summary>Legacy Streamlit UI (deprecated)</summary>
-
-> **Deprecated.** `axon-ui` is superseded by the WebGUI above and will be removed
-> in a future release. It is no longer part of `[starter]`, so install it first:
-
-```bash
-pip install "axon-rag[ui]"
-axon-ui   # opens automatically at http://localhost:8501
-```
-
-</details>
-
 ---
 
 ## Entry Point 5 — MCP Server (for AI coding agents)

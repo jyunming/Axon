@@ -1,7 +1,7 @@
 """
 src/axon/agent.py
 
-Shared agentic loop for the CLI REPL and Streamlit web GUI.
+Shared agentic loop for the CLI REPL.
 
 Provides:
   - REPL_TOOLS: OpenAI-format tool schemas for in-session agent use.
@@ -603,8 +603,9 @@ REPL_TOOLS: list[dict] = [
     },
 ]
 
-# Destructive tools that require confirmation before execution.
-# run_shell is included so the webapp never exposes arbitrary shell execution.
+# Destructive tools that require confirmation before execution
+# (see dispatch_tool). run_shell is included so arbitrary shell execution is
+# never run unconfirmed.
 _DESTRUCTIVE_TOOLS = {
     "purge_source",
     "delete_documents",
@@ -612,9 +613,6 @@ _DESTRUCTIVE_TOOLS = {
     "delete_project",
     "run_shell",
 }
-
-# Webapp uses a non-destructive subset — delete/clear must use sidebar controls.
-WEBAPP_TOOLS = [t for t in REPL_TOOLS if t["function"]["name"] not in _DESTRUCTIVE_TOOLS]
 
 # ---------------------------------------------------------------------------
 # dispatch_tool — executes a single tool call against AxonBrain

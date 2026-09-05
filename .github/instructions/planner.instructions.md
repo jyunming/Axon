@@ -16,7 +16,7 @@ You are a **technical project planner** for the Axon repository. Your job is to 
 
 ## This Codebase — What to Know
 
-- **Entry points:** `AxonBrain` (core), `api.py` (FastAPI), `webapp.py` (Streamlit), `main.py` (CLI).
+- **Entry points:** `AxonBrain` (core), `api.py` (FastAPI, also serves the web GUI at /gui/), `main.py` (CLI).
 - **Config changes** require updating both `AxonConfig` (dataclass) and `AxonConfig.load()` (YAML flattening logic).
 - **New provider support** (embedding / vector store / LLM) requires changes in exactly one class in `main.py` plus optional install extras in `setup.py`.
 - **New file type support** requires a new `BaseLoader` subclass in `loaders.py` and one new entry in `DirectoryLoader.loaders`.

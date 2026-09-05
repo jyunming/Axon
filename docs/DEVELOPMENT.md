@@ -73,7 +73,6 @@ make all           # Run all checks
 **Run Services:**
 ```bash
 make run-api       # Start FastAPI server (also serves the web GUI at /gui/)
-make run-ui        # Start Streamlit UI (deprecated)
 ```
 
 **Docker:**
@@ -91,7 +90,6 @@ Axon/
 │   ├── main.py             # Core RAG engine
 │   ├── api.py              # FastAPI app factory and route registration
 │   ├── api_routes/         # Route handlers (73 endpoints across 12 files)
-│   ├── webapp.py           # Streamlit UI (deprecated)
 │   ├── gui/                # Native web GUI (static, served by api.py at /gui/)
 │   ├── loaders.py          # Document loaders
 │   ├── retrievers.py       # Search implementations

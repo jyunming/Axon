@@ -186,11 +186,8 @@ def check_optional_extras() -> Check:
     Always non-fatal — Axon works without them; the doctor just nudges
     new users toward ``[starter]`` so they don't hit ImportErrors later.
 
-    ``streamlit`` is deliberately NOT checked here: the Streamlit UI is
-    deprecated and was dropped from ``[starter]``, so warning about it would
-    point users at a bundle that no longer ships it. The maintained browser
-    surface is the web GUI served by ``axon-api`` at ``/gui/``, which needs no
-    extra dependency.
+    The browser surface is the web GUI served by ``axon-api`` at ``/gui/``,
+    which needs no extra dependency, so nothing UI-related is checked here.
     """
     missing: list[str] = []
     try:

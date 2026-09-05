@@ -20,7 +20,7 @@ from typing import Any
 
 import httpx
 
-from axon.tools import get_rag_tool_definition
+from axon.agent import REPL_TOOLS
 
 logger = logging.getLogger(__name__)
 
@@ -204,8 +204,8 @@ def show_tool_schemas() -> None:
     An LLM uses these schemas to decide *which* function to call and what
     arguments to supply — this is the backbone of function-calling agents.
     """
-    print("\n📋  Tool schemas (from get_rag_tool_definition):")
-    tools = get_rag_tool_definition(API_URL)
+    print("\n📋  Tool schemas (from axon.agent.REPL_TOOLS):")
+    tools = REPL_TOOLS
     for tool in tools:
         fn = tool.get("function", {})
         name = fn.get("name", "?")

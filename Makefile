@@ -1,4 +1,4 @@
-.PHONY: help install install-dev test lint format type-check ci clean run-api run-ui docker-build docker-run
+.PHONY: help install install-dev test lint format type-check ci clean run-cli run-api run-all docker-build docker-run
 
 help:  ## Show this help message
 	@echo "Axon - Development Commands"
@@ -32,7 +32,7 @@ type-check:  ## Run type checking
 ci:  ## Run the full CI pipeline locally (lint + type-check + tests with coverage)
 	@echo "=== Syntax check ==="
 	python -m py_compile src/axon/main.py src/axon/api.py src/axon/loaders.py \
-		src/axon/retrievers.py src/axon/splitters.py src/axon/tools.py src/axon/webapp.py
+		src/axon/retrievers.py src/axon/splitters.py src/axon/mcp_server.py
 	@echo "=== Lint (ruff) ==="
 	ruff check src/ tests/
 	@echo "=== Format check (black) ==="
@@ -60,12 +60,9 @@ run-cli:  ## Run the interactive REPL CLI (local, no Docker needed)
 run-api:  ## Run the FastAPI server (also serves the web GUI at :8420/gui/)
 	axon-api
 
-run-ui:  ## Run the Streamlit UI (DEPRECATED — use the web GUI at :8420/gui/)
-	axon-ui
-
-run-all:  ## Run API + UI together (local, no Docker)
-	@echo "Starting API on :8420 and UI on :8501 ..."
-	axon-api & axon-ui
+run-all:  ## Run the API, which also serves the web GUI (local, no Docker)
+	@echo "Starting API on :8420 (web GUI at :8420/gui/) ..."
+	axon-api
 
 docker-build:  ## Build Docker image
 	docker build -t axon:latest .

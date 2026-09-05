@@ -20,33 +20,6 @@ services:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
-  # DEPRECATED: the Streamlit UI is superseded by the web GUI that the axon-api
-  # service already serves at http://localhost:8420/gui/. This service is kept
-  # for existing users and will be removed alongside axon-ui.
-  axon-ui:
-    build: .
-    ports:
-      - "8501:8501"
-    command: ["axon-ui"]
-    volumes:
-      - ./src:/app/src
-      - ./chroma_data:/app/chroma_data
-      - ./bm25_index:/app/bm25_index
-      - ./config.yaml:/app/config.yaml
-      - ./.streamlit:/app/.streamlit
-    environment:
-      - OLLAMA_HOST=http://ollama:11434
-      - AXON_API_URL=http://axon-api:8420
-    env_file:
-      - path: .env
-        required: false
-    depends_on:
-      - ollama
-      - axon-api
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    restart: unless-stopped
-
   # Local Dockerized Ollama Engine
   ollama:
     image: ollama/ollama

@@ -1,5 +1,55 @@
 # Changelog
 
+## [Unreleased]
+
+A slim-down pass: the tool had grown to 244 config fields, 57 MCP tools and a
+2.6 GB default install, much of it behind code paths a default configuration
+never reaches. Nothing a default install can do was removed.
+
+### 💥 Breaking
+
+- **`axon-ui` (the Streamlit UI) is removed**, along with `webapp.py`, the
+  `[ui]` extra, the `streamlit` dependency, the `axon-ui` docker-compose
+  service, and the `run-ui` Make target. 0.4.3 deprecated it and warned it
+  would be removed in a future release; this is that release. The maintained
+  browser surface is the web GUI that `axon-api` serves at `/gui/`, which needs
+  no extra dependency. `Surface.WEBAPP` is retired from the surface-parity
+  registry, taking it from five surfaces to four.
+- **The `refresh_mount` MCP tool is removed.** It posted to `/mount/refresh`
+  with no arguments, which `mount_refresh(project=None)` already does as a
+  strict superset. MCP tool count: 57 → 56.
+- **`sentence-transformers`, `tf-keras` and `lancedb` are no longer base
+  dependencies.** They are reachable only through non-default configuration
+  (`embedding.provider: sentence_transformers`, `rerank.provider: cross-encoder`,
+  `vector_store.provider: lancedb`) but cost ~2.3 GB of every install — `tf-keras`
+  alone pulled in all of TensorFlow, which nothing in the codebase imports.
+  Install them with `pip install "axon-rag[sentence-transformers]"` or
+  `pip install "axon-rag[lancedb]"`. Selecting one of those providers without
+  the extra now raises an error naming the extra rather than a bare
+  `ModuleNotFoundError`.
+- **`axon.tools` is removed** (704 LOC, no importers) — a third, drifted copy of
+  the tool schema that `mcp_server.py` and `agent.py` already define. The
+  `examples/agent_orchestration.py` sample now reads `axon.agent.REPL_TOOLS`.
+
+### 🐛 Fixes
+
+- **Two shipped features had never executed once.** `query_router.py` called
+  `self.llm.generate()` — a method `OpenLLM` has never defined — inside
+  `except Exception: pass`, so LLM-based query routing silently fell back to the
+  heuristic on every query and contextual-retrieval prepending never ran at all.
+  Both now call `complete()`. Both sit behind opt-in flags that default to off,
+  so behaviour is unchanged unless you had enabled them.
+- **`config.yaml.template` still specified `provider: sentence_transformers`**,
+  silently opting anyone who copied it back into the ~20 s torch cold start that
+  0.4.6 removed.
+- **A deleted active project poisoned every later session.** `.active_project`
+  kept naming it, nothing revalidated it, and clients restoring their last-known
+  project looped on 404 indefinitely. It now falls back to `default` and
+  persists the correction.
+- **`requirements.txt` had drifted further than `pyproject.toml`** and feeds two
+  CI workflows plus the Dockerfile: it installed the torch stack while leaving
+  `fastembed` — the actual default embedding provider — commented out.
+
 ## [0.4.5] - 2026-09-01
 
 A third capabilities-audit cycle, this time targeting v0.4.4 itself via an

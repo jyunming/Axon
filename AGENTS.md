@@ -11,7 +11,7 @@ Core code lives in `src/axon/`. Key areas: `api_routes/` for FastAPI handlers, `
 - `make test`: run the Python test suite.
 - `pytest tests/test_api.py -v --no-cov`: run a focused test file.
 - `pytest -q tests/e2e`: run end-to-end coverage; requires Node and the compiled VS Code extension.
-- `axon`, `axon-api`, `axon-ui`, `axon-mcp`: run the REPL, API server, Streamlit UI, and MCP server.
+- `axon`, `axon-api`, `axon-mcp`: run the REPL, API server (which also serves the web GUI at /gui/), and MCP server.
 
 ## Coding Style & Naming Conventions
 Use Python 3.10+ and 4-space indentation. Black and Ruff are the enforced style tools; line length is `100`. Prefer type hints on public functions and keep module names `snake_case`. Use `PascalCase` for classes, `snake_case` for functions/tests, and descriptive test names such as `test_ingest_blocks_windows_system_path`.

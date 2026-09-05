@@ -77,7 +77,6 @@ Axon/
 │       ├── main.py         # Core RAG engine (AxonBrain)
 │       ├── api.py          # FastAPI app factory
 │       ├── api_routes/     # REST route handlers (split by domain)
-│       ├── webapp.py       # Streamlit UI
 │       ├── loaders.py      # Document loaders
 │       ├── retrievers.py   # BM25 and fusion
 │       ├── splitters.py    # Text chunking
