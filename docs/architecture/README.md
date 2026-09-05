@@ -7,3 +7,4 @@ For user-facing guides, see the [docs/](../) directory.
 - [DYNAMIC_GRAPH_ROADMAP.md](DYNAMIC_GRAPH_ROADMAP.md) — Dynamic graph backend implementation roadmap
 - [GRAPH_BACKEND_NEXT_STEPS.md](GRAPH_BACKEND_NEXT_STEPS.md) — prioritized task list for remaining graph-backend roadmap work, written as a session handoff
 - [FRONTIERINSIGHT_SKILL_MEMORY.md](FRONTIERINSIGHT_SKILL_MEMORY.md) — what FrontierInsight expects to need from Axon as it moves to accumulated skills; proposal for discussion, nothing agreed
+- [FRONTIERINSIGHT_SKILL_MEMORY_RESPONSE.md](FRONTIERINSIGHT_SKILL_MEMORY_RESPONSE.md) — Axon-side assessment of that proposal: what each requirement would actually cost here, and why the order should change
