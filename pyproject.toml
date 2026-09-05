@@ -160,9 +160,7 @@ starter = [
     # document-loader formats (EPUB, RTF, .msg) so a fresh `pip install
     # axon-rag[starter]` covers >90% of beginner workflows. Power users can
     # still pick the granular extras (chroma, qdrant, graphrag, gliner, …).
-    # The web GUI needs no extra — `axon-api` serves it at /gui/. The old
-    # Streamlit UI is deprecated and no longer part of this bundle; install it
-    # explicitly with `pip install axon-rag[ui]` if you still need it.
+    # The web GUI needs no extra — `axon-api` serves it at /gui/.
     "cryptography>=42.0.0",
     "keyring>=24.0.0",
     "ebooklib>=0.18",
@@ -204,9 +202,7 @@ dev = [
     "requests>=2.31.0",
 ]
 all = [
-    # NOTE: the deprecated Streamlit UI is deliberately NOT included here.
-    # The web GUI ships with `axon-api` (served at /gui/). Install the old UI
-    # explicitly with `pip install axon-rag[ui]` if you still need it.
+    # NOTE: the web GUI ships with `axon-api` (served at /gui/) and needs no extra.
     "chromadb>=0.4.0",
     "qdrant-client>=1.7.0,<2.0.0",
     "fastembed>=0.1.0,<1.0.0",
@@ -387,7 +383,6 @@ omit = [
     "*/tests/*",
     "*/test_*.py",
     "*/__pycache__/*",
-    "*/axon/webapp.py",
     "*/axon/agent.py",
     "*/axon/api.py",
     "*/axon/api_routes/*",

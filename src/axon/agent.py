@@ -1,7 +1,7 @@
 """
 src/axon/agent.py
 
-Shared agentic loop for the CLI REPL and Streamlit web GUI.
+Shared agentic loop for the CLI REPL.
 
 Provides:
   - REPL_TOOLS: OpenAI-format tool schemas for in-session agent use.

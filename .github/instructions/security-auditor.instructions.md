@@ -39,10 +39,6 @@ Flag any HIGH or CRITICAL CVEs. Check especially: `chromadb`, `qdrant-client`, `
 ### 4. BMP image processing — `src/axon/loaders.py`
 `BMPLoader` passes raw file bytes to Ollama. Ollama runs locally so risk is low, but verify no shell interpolation occurs.
 
-### 5. Streamlit UI — `src/axon/webapp.py`
-The sidebar accepts a directory path string from the user and passes it to the ingestion pipeline.
-In a shared deployment, this is equivalent to the path traversal risk in the API — validate paths against the same `RAG_INGEST_BASE` base directory check.
-
 ## Audit Report Format
 
 ```

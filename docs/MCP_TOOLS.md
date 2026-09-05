@@ -1,6 +1,6 @@
 # Axon MCP Tools Reference
 
-Axon exposes a Model Context Protocol (MCP) server (`axon-mcp`) with **57 tools**.
+Axon exposes a Model Context Protocol (MCP) server (`axon-mcp`) with **56 tools**.
 
 > **Which integration should I use?**
 > - **`@axon` chat participant** — install the VS Code extension (VSIX). Gives you a conversational `@axon` inside Copilot Chat. No `.vscode/mcp.json` needed.
@@ -303,7 +303,7 @@ Retrieve a full session transcript by ID.
 
 ---
 
-## AxonStore & Sharing (9)
+## AxonStore & Sharing (8)
 
 ### `get_store_status`
 
@@ -376,12 +376,6 @@ Renew a share key's expiry, or clear it (`ttl_days=null`). Pairs with `share_pro
 | `ttl_days` | int | `null` | New time-to-live in days from now; `null` clears the expiry entirely |
 
 **Returns:** `{"status": "extended", "key_id": "...", "expires_at": "..."}`
-
-### `refresh_mount`
-
-Re-read the owner's version marker for the currently active mounted share and reopen project handles if the owner has re-ingested. No-op when the active project is not a mount. On a cloud-sync mid-replication race the API may return HTTP 503 + `X-Axon-Mount-Sync-Pending: true`; retry after a few seconds. No parameters.
-
-**Returns:** `{"status": "success", "refreshed": bool, "seq": int|null}` or `{"status": "sync_pending", ...}`
 
 ### `mount_refresh`
 
@@ -622,7 +616,7 @@ Check the on-disk config for errors, unknown keys, and risky combinations.
 
 ## Usage Notes
 
-- Most ingest, search, and query tools operate on the **active project** and accept an optional `project` parameter validated against it (returns 409 on mismatch). Tools that do **not** accept `project`: `ingest_path`, `list_sessions`, `get_session`, `list_shares`, `graph_backend_status`, `refresh_mount`, `graph_status`, `graph_finalize`, `graph_data`, `graph_conflicts`, `graph_retrieve`. `revoke_share` conditionally accepts `project` and **requires** it for sealed shares (`ssk_` prefix). Global tools (`governance_*`, `security_*`, `init_store`, `share_project`, `redeem_share`, `list_shares`) are not scoped to the active project. Use `switch_project` to change the active project.
+- Most ingest, search, and query tools operate on the **active project** and accept an optional `project` parameter validated against it (returns 409 on mismatch). Tools that do **not** accept `project`: `ingest_path`, `list_sessions`, `get_session`, `list_shares`, `graph_backend_status`, `graph_status`, `graph_finalize`, `graph_data`, `graph_conflicts`, `graph_retrieve`. `revoke_share` conditionally accepts `project` and **requires** it for sealed shares (`ssk_` prefix). Global tools (`governance_*`, `security_*`, `init_store`, `share_project`, `redeem_share`, `list_shares`) are not scoped to the active project. Use `switch_project` to change the active project.
 
 - `ingest_path` is async — it returns a `job_id`. Poll `get_job_status` until `status == "completed"` or `"failed"`. `ingest_url` is synchronous and returns `{"status": "ingested"|"skipped", "doc_id": "..."}` immediately — no polling required.
 
@@ -638,4 +632,4 @@ Check the on-disk config for errors, unknown keys, and risky combinations.
 
 - Sealed-store tools (`security_*`, `seal_project`) require Phase 1 bootstrap (`security_bootstrap`) before use. The store must be unlocked (`security_unlock`) after every process restart before sealed projects can be accessed.
 
-- `mount_refresh` and `refresh_mount` serve different use cases: `refresh_mount` (no parameters) refreshes the currently active mount; `mount_refresh` accepts an optional `project` to target a specific mount and switch to it first if needed.
+- `mount_refresh` refreshes the currently active mount when called with no arguments, or accepts an optional `project` to target a specific mount and switch to it first. (A second `refresh_mount` tool duplicated the no-argument case and was removed in 0.5.0.)

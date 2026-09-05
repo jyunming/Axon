@@ -13,7 +13,6 @@ _MYPY_ALLOWED_ERRORS: list[tuple[str, str]] = [
     # code — numpy's own .pyi. Scoped to that specific error in numpy files.
     ("numpy/", "Type statement is only supported"),
     # webapp.py — Streamlit API differences between versions; excluded from tests.
-    ("webapp.py", ""),
     # main.py — all errors here are pre-existing tech debt in the REPL/CLI layer.
     ("main.py", ""),
     # Phase 2 extracted modules — same pre-existing tech debt as main.py.

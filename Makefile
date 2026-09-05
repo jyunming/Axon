@@ -32,7 +32,7 @@ type-check:  ## Run type checking
 ci:  ## Run the full CI pipeline locally (lint + type-check + tests with coverage)
 	@echo "=== Syntax check ==="
 	python -m py_compile src/axon/main.py src/axon/api.py src/axon/loaders.py \
-		src/axon/retrievers.py src/axon/splitters.py src/axon/tools.py src/axon/webapp.py
+		src/axon/retrievers.py src/axon/splitters.py src/axon/mcp_server.py
 	@echo "=== Lint (ruff) ==="
 	ruff check src/ tests/
 	@echo "=== Format check (black) ==="

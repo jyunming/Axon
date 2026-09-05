@@ -231,7 +231,7 @@ class RemoteBrain:
         # queries are single-turn. chat_history is accepted for signature
         # parity but not forwarded (see module docstring / report). Warned
         # once per instance, not per query, so an ongoing multi-turn REPL/
-        # webapp session (chat_history is non-empty on every turn after the
+        # chat session (chat_history is non-empty on every turn after the
         # first) doesn't get a warning on every single message.
         if not self._warned_chat_history_dropped:
             self._warned_chat_history_dropped = True

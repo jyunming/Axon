@@ -609,7 +609,7 @@ Returns: `ingest_path` / `ingest_url` → `{"job_id": "..."}`. `get_job_status` 
 | `list_sessions` | — | List up to 20 most recent sessions |
 | `get_session` | `session_id` (str, required) | Retrieve a full session transcript |
 
-### 5.7 AxonStore & Sharing (8)
+### 5.7 AxonStore & Sharing (7)
 
 | Tool | Parameters | Description |
 |------|-----------|-------------|
@@ -620,7 +620,6 @@ Returns: `ingest_path` / `ingest_url` → `{"job_id": "..."}`. `get_job_status` 
 | `revoke_share` | `key_id` (str, required) | Revoke an outgoing share |
 | `extend_share` | `key_id` (str, required), `ttl_days` (int, optional) | Extend share expiry |
 | `list_shares` | — | List outgoing and incoming shares |
-| `refresh_mount` | — | Force-refresh a mounted shared project's handles |
 
 ### 5.8 Security (Sealed Store) (9)
 
