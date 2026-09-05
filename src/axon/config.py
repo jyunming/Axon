@@ -298,6 +298,20 @@ offline:
 # ---------------------------------------------------------------------------
 
 
+# Config keys removed in a past release. Kept here so a config that still sets
+# them produces an explicit "this was removed, here is what changed" message
+# instead of load() silently dropping the key (and silently changing retrieval
+# behaviour) or validate() guessing it was a typo.
+_REMOVED_FIELDS: dict[str, str] = {
+    "sparse_retrieval": (
+        "SPLADE learned sparse retrieval was removed in 0.5.0. Retrieval now uses "
+        "dense + BM25 hybrid; delete this key to silence this message."
+    ),
+    "sparse_model": "Removed in 0.5.0 with SPLADE learned sparse retrieval.",
+    "sparse_weight": "Removed in 0.5.0 with SPLADE learned sparse retrieval.",
+}
+
+
 _KNOWN_YAML_KEYS: dict[str, set[str]] = {
     "llm": {
         "provider",
@@ -1369,6 +1383,8 @@ class AxonConfig:
             config_dict["ollama_models_dir"] = env_ollama_models
         # Filter only valid fields
         valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
+        for _removed in _REMOVED_FIELDS.keys() & config_dict.keys():
+            logger.warning("config: %s", _REMOVED_FIELDS[_removed])
         filtered_dict = {k: v for k, v in config_dict.items() if k in valid_fields}
         cfg = cls(**filtered_dict)
         cfg._loaded_path = path
@@ -1619,6 +1635,19 @@ class AxonConfig:
                 continue
             for key in keys:
                 if key not in known:
+                    if key in _REMOVED_FIELDS:
+                        # A removed key is not a typo — saying "did you mean...?"
+                        # sends the user looking for a spelling mistake.
+                        issues.append(
+                            ConfigIssue(
+                                level="warn",
+                                section=section,
+                                field=key,
+                                message=f"'{key}' is no longer a valid key and is ignored.",
+                                suggestion=_REMOVED_FIELDS[key],
+                            )
+                        )
+                        continue
                     close = difflib.get_close_matches(key, known, n=1, cutoff=0.6)
                     suggestion = f"Did you mean '{close[0]}'?" if close else ""
                     issues.append(

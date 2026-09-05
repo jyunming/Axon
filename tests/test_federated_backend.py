@@ -128,15 +128,36 @@ class TestWeightedRRF:
 
     def test_weights_are_symmetric(self):
         """Same setup with the weights swapped must flip the order — guards
-        against a hardcoded backend preference."""
-        per = {
-            "graphrag": [_ctx("g1", 0.5, "graphrag")],
-            "dynamic_graph": [_ctx("d1", 0.5, "dynamic_graph")],
-        }
-        first = _weighted_rrf(per, {"graphrag": 10.0, "dynamic_graph": 0.1})
-        second = _weighted_rrf(per, {"graphrag": 0.1, "dynamic_graph": 10.0})
-        assert [c.context_id for c in first] == ["g1", "d1"]
-        assert [c.context_id for c in second] == ["d1", "g1"]
+        against a hardcoded backend preference.
+
+        Each call gets a freshly-built input: _weighted_rrf writes back into the
+        contexts it is given (ctx.score / ctx.rank), so reusing one dict would
+        make the second call sort on the first call's RRF scores instead of the
+        original relevance scores.
+        """
+
+        def _per():
+            return {
+                "graphrag": [_ctx("g1", 0.9, "graphrag"), _ctx("g2", 0.5, "graphrag")],
+                "dynamic_graph": [
+                    _ctx("d1", 0.9, "dynamic_graph"),
+                    _ctx("d2", 0.5, "dynamic_graph"),
+                ],
+            }
+
+        first = _weighted_rrf(_per(), {"graphrag": 10.0, "dynamic_graph": 0.1})
+        second = _weighted_rrf(_per(), {"graphrag": 0.1, "dynamic_graph": 10.0})
+        assert first[0].context_id == "g1"
+        assert second[0].context_id == "d1"
+
+    def test_fusion_writes_back_into_the_contexts_it_is_given(self):
+        """Documented so the mutation is a known property, not a trap: callers
+        must not reuse a context list across two fusions."""
+        ctxs = [_ctx("a", 0.9, "graphrag")]
+        original_score = ctxs[0].score
+        _weighted_rrf({"graphrag": ctxs}, {"graphrag": 1.0})
+        assert ctxs[0].score != original_score
+        assert ctxs[0].rank == 0
 
     def test_same_context_id_from_both_backends_sums_scores(self):
         """Agreement across backends should reinforce, not overwrite."""

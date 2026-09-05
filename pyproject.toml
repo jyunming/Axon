@@ -389,7 +389,11 @@ omit = [
     "*/axon/vector_store.py",
     "*/axon/governance.py",
     "*/axon/dynamic_graph/*",
-    "*/axon/graph_backends/*",
+    # federated_backend.py is deliberately NOT omitted — it carries the
+    # long-term + volatile fusion and now has a dedicated test suite, so its
+    # coverage should be measured.
+    "*/axon/graph_backends/graphrag_*.py",
+    "*/axon/graph_backends/dynamic_graph_backend.py",
     "*/axon/rust_bridge.py",
     "*/axon/code_retrieval.py",
     "*/axon/crag.py",
