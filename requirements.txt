@@ -24,17 +24,30 @@ rich>=13.0.0
 tiktoken>=0.7.0
 
 # Vector Stores
+# turboquantdb (tqdb) is the default. chroma/qdrant/lancedb are pyproject extras,
+# listed here so `pip-audit --requirement requirements.txt` (security.yml) keeps
+# reporting CVEs for every backend we ship, not just the default one.
 tqdb>=0.7.0
 chromadb>=0.4.0
 qdrant-client>=1.7.0
 lancedb>=0.8.0
 
+# Embeddings
+# fastembed is the DEFAULT embedding provider since 0.4.6. It was previously
+# commented out here, so this file installed the torch stack and not the
+# provider the shipped config actually uses.
+fastembed>=0.1.0,<1.0.0
+
 # LLM Providers
 ollama>=0.1.0
 openai>=1.0.0
 google-genai>=1.4.0
-sentence-transformers>=3.0.0
-tf-keras>=2.0.0
+
+# NOTE: sentence-transformers and tf-keras were removed here in 0.5.0. They are
+# only reachable via embedding.provider=sentence_transformers or
+# rerank.provider=cross-encoder (both non-default), and together pulled ~2.1 GB
+# of torch + TensorFlow into every install and Docker image.
+#   pip install 'axon-rag[sentence-transformers]'
 
 # Document loaders
 python-docx>=1.0.0
@@ -43,9 +56,6 @@ pymupdf>=1.24.0
 pypdf>=4.0.0
 openpyxl>=3.1.0
 pyarrow>=10.0.0
-
-# Optional: FastEmbed (lightweight embedding alternative to sentence-transformers)
-# fastembed>=0.2.0
 
 # Optional: For future vLLM support
 # vllm>=0.2.0

@@ -112,14 +112,14 @@ class TestQueryRouterRobustness:
     def test_llm_routing_fallback(self, router):
         router.config.query_router = "llm"
         router.llm = MagicMock()
-        router.llm.generate.return_value = "table_lookup"
+        router.llm.complete.return_value = "table_lookup"
 
         assert router._classify_query_route("Give me stats", router.config) == "table_lookup"
 
     def test_llm_routing_invalid_fallback_to_factual(self, router):
         router.config.query_router = "llm"
         router.llm = MagicMock()
-        router.llm.generate.return_value = "garbage"
+        router.llm.complete.return_value = "garbage"
 
         assert router._classify_query_route("Give me stats", router.config) == "factual"
 
@@ -308,6 +308,7 @@ import pytest
 
 from axon.code_retrieval import CodeRetrievalDiagnostics, CodeRetrievalTrace
 from axon.config import AxonConfig
+from axon.llm import OpenLLM
 from axon.query_router import _ROUTE_PROFILES, QueryRouterMixin
 
 # ---------------------------------------------------------------------------
@@ -390,9 +391,14 @@ def _make_full_stub(**config_kwargs) -> RouterStubV2:
     """Return a RouterStubV2 pre-wired with sensible mock components."""
     cfg = _make_config(**config_kwargs)
     stub = RouterStubV2(cfg)
-    stub.llm = MagicMock()
+    # spec=OpenLLM is load-bearing, not cosmetic: a bare MagicMock auto-creates
+    # any attribute, so tests happily mocked `llm.generate(...)` — a method
+    # OpenLLM has never had. Production called it inside `except Exception: pass`,
+    # so LLM query routing and contextual-retrieval prepending were silently
+    # dead from the day they shipped while these tests stayed green. Spec'ing the
+    # mock makes any such call raise AttributeError here instead.
+    stub.llm = MagicMock(spec=OpenLLM)
     stub.llm.complete.return_value = "mock answer"
-    stub.llm.generate.return_value = "factual"
     stub.llm.stream.return_value = iter(["chunk1", "chunk2"])
     stub.embedding = MagicMock()
     stub.embedding.embed_query.return_value = [0.1] * 10
@@ -593,21 +599,21 @@ class TestRouteProfiles:
 class TestClassifyQueryRouteLLM:
     def test_valid_response_returned(self):
         stub = _make_full_stub(query_router="llm")
-        stub.llm.generate.return_value = "synthesis"
+        stub.llm.complete.return_value = "synthesis"
         result = stub._classify_query_route_llm("What is the big picture?")
         assert result == "synthesis"
 
     def test_invalid_response_falls_back_to_factual(self):
         """Lines 112-113: invalid response → fallback 'factual'."""
         stub = _make_full_stub(query_router="llm")
-        stub.llm.generate.return_value = "not_a_valid_category"
+        stub.llm.complete.return_value = "not_a_valid_category"
         result = stub._classify_query_route_llm("Some query")
         assert result == "factual"
 
     def test_exception_falls_back_to_factual(self):
         """Lines 112-113: exception path → fallback 'factual'."""
         stub = _make_full_stub(query_router="llm")
-        stub.llm.generate.side_effect = RuntimeError("LLM down")
+        stub.llm.complete.side_effect = RuntimeError("LLM down")
         result = stub._classify_query_route_llm("Some query")
         assert result == "factual"
 
@@ -615,14 +621,88 @@ class TestClassifyQueryRouteLLM:
         valid = {"factual", "synthesis", "table_lookup", "entity_relation", "corpus_exploration"}
         stub = _make_full_stub(query_router="llm")
         for cat in valid:
-            stub.llm.generate.return_value = cat
+            stub.llm.complete.return_value = cat
             assert stub._classify_query_route_llm("q") == cat
 
     def test_whitespace_stripped_in_response(self):
         stub = _make_full_stub(query_router="llm")
-        stub.llm.generate.return_value = "  factual  "
+        stub.llm.complete.return_value = "  factual  "
         result = stub._classify_query_route_llm("query")
         assert result == "factual"
+
+    def test_calls_a_real_openllm_method(self):
+        """Regression: the router used to call ``self.llm.generate()``, which
+        OpenLLM has never defined, inside ``except Exception: pass`` — so LLM
+        routing silently degraded to the heuristic on every query while the
+        tests stayed green (they mocked ``generate`` on an unspecced MagicMock).
+        Assert against the real class so a bad method name fails loudly."""
+        # The durable guard is the spec=OpenLLM mock in _make_full_stub, which
+        # raises AttributeError on any method OpenLLM does not define. Asserting
+        # the *absence* of `generate` would instead fail the day someone adds a
+        # legitimate generate() alias, so only assert what the router relies on.
+        assert hasattr(OpenLLM, "complete")
+        stub = _make_full_stub(query_router="llm")
+        stub.llm.complete.return_value = "synthesis"
+        assert stub._classify_query_route_llm("q") == "synthesis"
+        stub.llm.complete.assert_called_once()
+
+    def test_label_embedded_in_prose_is_accepted(self):
+        """Models rarely answer with the bare label; an unambiguous mention is
+        used rather than discarded (which would silently mean 'factual')."""
+        stub = _make_full_stub(query_router="llm")
+        stub.llm.complete.return_value = "Category: entity_relation"
+        assert stub._classify_query_route_llm("how does X relate to Y?") == "entity_relation"
+
+    def test_ambiguous_multi_label_response_falls_back(self):
+        """Two labels mentioned is not a usable answer — fall back rather than
+        guessing which one the model meant."""
+        stub = _make_full_stub(query_router="llm")
+        stub.llm.complete.return_value = "could be synthesis or table_lookup"
+        assert stub._classify_query_route_llm("q") == "factual"
+
+    @pytest.mark.parametrize(
+        "response",
+        [
+            "this looks like a counterfactual question",
+            "nonfactual",
+            "the synthesiser handles this",
+        ],
+    )
+    def test_label_embedded_in_a_longer_word_is_not_a_match(self, response):
+        """Matching must be whole-word: a plain substring test finds 'factual'
+        inside 'counterfactual' and 'synthesis' inside 'synthesiser', so prose
+        would silently mis-route to a category the model never named."""
+        stub = _make_full_stub(query_router="llm")
+        stub.llm.complete.return_value = response
+        assert stub._classify_query_route_llm("q") == "factual"
+
+    def test_label_with_adjacent_punctuation_still_matches(self):
+        """Whole-word matching must not be so strict that it rejects the common
+        'Category: synthesis.' shape."""
+        stub = _make_full_stub(query_router="llm")
+        stub.llm.complete.return_value = "Category: table_lookup."
+        assert stub._classify_query_route_llm("q") == "table_lookup"
+
+    def test_none_response_falls_back(self):
+        stub = _make_full_stub(query_router="llm")
+        stub.llm.complete.return_value = None
+        assert stub._classify_query_route_llm("q") == "factual"
+
+    @pytest.mark.parametrize(
+        "err",
+        [
+            "Error: Copilot LLM bridge timed out.",
+            "Error from Copilot: rate limited",
+            "Error: Task response lost.",
+        ],
+    )
+    def test_returned_not_raised_llm_errors_fall_back(self, err):
+        """complete() does not raise for every failure — the copilot provider
+        returns its errors as ordinary strings. Those must not be scanned for
+        category labels."""
+        stub = _make_full_stub(query_router="llm")
+        stub.llm.complete.return_value = err
+        assert stub._classify_query_route_llm("q") == "factual"
 
 
 # ===========================================================================
@@ -736,7 +816,7 @@ class TestPrependContextualContext:
     def test_normal_prepend(self):
         """Lines 215-228: LLM call succeeds, sentence prepended."""
         stub = _make_full_stub()
-        stub.llm.generate.return_value = "This chunk discusses Python basics."
+        stub.llm.complete.return_value = "This chunk discusses Python basics."
         chunk = {"id": "c1", "text": "Python is a programming language.", "metadata": {}}
         result = stub._prepend_contextual_context(chunk, "A long document about programming...")
         assert "Python is a programming language." in result["text"]
@@ -745,20 +825,59 @@ class TestPrependContextualContext:
     def test_llm_exception_returns_original_chunk(self):
         """Lines 215-228: graceful degradation on LLM failure."""
         stub = _make_full_stub()
-        stub.llm.generate.side_effect = RuntimeError("LLM error")
+        stub.llm.complete.side_effect = RuntimeError("LLM error")
         chunk = {"id": "c1", "text": "original text", "metadata": {}}
         result = stub._prepend_contextual_context(chunk, "whole doc")
         assert result["text"] == "original text"
 
     def test_original_chunk_not_mutated(self):
         stub = _make_full_stub()
-        stub.llm.generate.return_value = "Context sentence."
+        stub.llm.complete.return_value = "Context sentence."
         chunk = {"id": "c1", "text": "original text", "metadata": {}}
         result = stub._prepend_contextual_context(chunk, "doc text")
         # original should be unchanged
         assert chunk["text"] == "original text"
         # result is a copy
         assert result is not chunk
+
+    def test_calls_a_real_openllm_method(self):
+        """Regression: this called the non-existent ``self.llm.generate()``
+        inside a bare except, so contextual-retrieval prepending never once ran
+        in production despite being a documented, shipped feature. The spec'd
+        mock in _make_full_stub is what enforces this — it raises on any method
+        OpenLLM does not define."""
+        assert hasattr(OpenLLM, "complete")
+        stub = _make_full_stub()
+        stub.llm.complete.return_value = "Situating sentence."
+        result = stub._prepend_contextual_context({"text": "body"}, "whole doc")
+        stub.llm.complete.assert_called_once()
+        assert result["text"].startswith("Situating sentence.")
+
+    def test_blank_context_leaves_chunk_untouched(self):
+        """A whitespace-only completion must not prepend a bare newline."""
+        stub = _make_full_stub()
+        stub.llm.complete.return_value = "   "
+        result = stub._prepend_contextual_context({"text": "body"}, "whole doc")
+        assert result["text"] == "body"
+
+    def test_returned_not_raised_llm_error_is_not_indexed(self):
+        """The copilot provider reports failures by returning a string. Without a
+        guard, a bridge timeout would be prepended to the chunk and then embedded
+        and indexed — permanently poisoning the corpus."""
+        stub = _make_full_stub()
+        stub.llm.complete.return_value = "Error: Copilot LLM bridge timed out."
+        result = stub._prepend_contextual_context({"text": "body"}, "whole doc")
+        assert result["text"] == "body"
+
+    def test_overlong_context_is_capped(self):
+        """complete() has no max_tokens (the dead call passed 60) and this runs
+        on every chunk at ingest, so an essay must not be prepended wholesale."""
+        stub = _make_full_stub()
+        stub.llm.complete.return_value = "x" * 5000
+        result = stub._prepend_contextual_context({"text": "body"}, "whole doc")
+        prefix = result["text"].split("\n", 1)[0]
+        assert len(prefix) <= 400
+        assert result["text"].endswith("body")
 
 
 # ===========================================================================
@@ -1791,11 +1910,23 @@ class TestProfileIntegration:
         assert captured_route.get("route") == expected_route
 
     def test_llm_router_mode_routes_query(self):
+        """The route classifier and the answer generator both go through
+        complete() now that the dead generate() call is gone, so dispatch on the
+        prompt rather than a single return_value — two flat assignments would
+        just overwrite each other and the routing half would never be exercised.
+        """
         stub = _make_full_stub(similarity_threshold=0.0, query_router="llm")
-        stub.llm.generate.return_value = "synthesis"
-        stub.llm.complete.return_value = "answer"
+
+        def _by_prompt(prompt, *args, **kwargs):
+            return "synthesis" if "Classify this query" in prompt else "answer"
+
+        stub.llm.complete.side_effect = _by_prompt
         result = stub.query("complex synthesis question")
         assert isinstance(result, str)
+        classified = [
+            c for c in stub.llm.complete.call_args_list if "Classify this query" in c.args[0]
+        ]
+        assert classified, "LLM route classification never ran"
 
     def test_factual_profile_does_not_enable_hyde(self):
         """Factual profile forces hyde=False even if config had it True."""

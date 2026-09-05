@@ -23,6 +23,24 @@ from axon.code_retrieval import (  # noqa: E402
 
 logger = logging.getLogger("Axon")
 
+# OpenLLM.complete() does not raise for every failure: the copilot provider
+# reports bridge timeouts and task errors by *returning* these strings. Callers
+# that feed the result into the index (contextual retrieval) or branch on it
+# (route classification) must reject them explicitly.
+_LLM_ERROR_PREFIXES = ("error:", "error from ")
+
+# complete() has no max_tokens parameter, so it always spends llm_max_tokens
+# (8192 by default). These cap the two call sites that only ever want a short
+# answer, and are deliberately generous — they are a guard, not a budget.
+_ROUTE_RESPONSE_MAX_CHARS = 200
+_CONTEXTUAL_PREFIX_MAX_CHARS = 400
+
+
+def _looks_like_llm_error(text: str) -> bool:
+    """True when a completion is one of OpenLLM's returned-not-raised errors."""
+    return text.strip().lower().startswith(_LLM_ERROR_PREFIXES)
+
+
 _ROUTE_PROFILES: dict = {
     "factual": {
         "raptor": False,
@@ -294,9 +312,25 @@ class QueryRouterMixin:
         )
         valid = {"factual", "synthesis", "table_lookup", "entity_relation", "corpus_exploration"}
         try:
-            response = self.llm.generate(prompt, max_tokens=20).strip().lower()
+            # OpenLLM exposes complete()/complete_with_tools()/stream() — there is no
+            # generate(). This called generate() inside a bare except, so LLM routing
+            # silently fell back to the heuristic on every query since it shipped.
+            response = (self.llm.complete(prompt) or "").strip()
+            if _looks_like_llm_error(response):
+                return "factual"
+            # Cap before scanning: complete() has no max_tokens (the old dead call
+            # passed 20), so a chatty model could otherwise return prose long
+            # enough to mention several labels by coincidence.
+            response = response[:_ROUTE_RESPONSE_MAX_CHARS].lower()
             if response in valid:
                 return response
+            # Models rarely answer with the bare label — accept an unambiguous
+            # mention ("Category: synthesis") rather than discarding the answer.
+            # Whole-word only: a plain substring test matches "factual" inside
+            # "counterfactual", so prose would silently mis-route.
+            matched = {c for c in valid if re.search(rf"(?<!\w){re.escape(c)}(?!\w)", response)}
+            if len(matched) == 1:
+                return matched.pop()
         except Exception:
             pass
         return "factual"
@@ -325,9 +359,21 @@ class QueryRouterMixin:
             "within the document. Output ONLY that sentence, no preamble."
         ).format(doc=whole_doc_text[:3000], chunk=chunk["text"][:800])
         try:
-            ctx_sentence = self.llm.generate(prompt, max_tokens=60).strip()
-            chunk = dict(chunk)
-            chunk["text"] = ctx_sentence + "\n" + chunk["text"]
+            # See _classify_query_route_llm: generate() does not exist on OpenLLM,
+            # so this whole feature was a silent no-op from the day it shipped.
+            ctx_sentence = (self.llm.complete(prompt) or "").strip()
+            # complete() does not raise for every failure — the copilot provider
+            # returns its errors as plain strings. Without this guard a bridge
+            # timeout would be prepended to the chunk and then embedded and
+            # indexed, permanently poisoning the corpus.
+            if ctx_sentence and not _looks_like_llm_error(ctx_sentence):
+                # The old (dead) call passed max_tokens=60; complete() has no such
+                # parameter and falls back to llm_max_tokens (8192), so cap here —
+                # this prepends to *every* chunk at ingest and is meant to be one
+                # situating sentence, not an essay.
+                ctx_sentence = ctx_sentence[:_CONTEXTUAL_PREFIX_MAX_CHARS].strip()
+                chunk = dict(chunk)
+                chunk["text"] = ctx_sentence + "\n" + chunk["text"]
         except Exception:
             pass  # graceful degradation
         return chunk

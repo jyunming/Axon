@@ -47,7 +47,13 @@ class OpenReranker:
                         )
                         self.model = CrossEncoder(self.config.reranker_model)
                 except ImportError:
-                    logger.error("sentence-transformers not installed. Reranking disabled.")
+                    logger.error(
+                        "Cross-encoder reranking needs sentence-transformers, which moved "
+                        "out of the base install in 0.5.0. Install it with: "
+                        "pip install 'axon-rag[sentence-transformers]' — or set "
+                        "rerank.provider: llm to rerank with the configured LLM instead. "
+                        "Reranking is disabled for this session."
+                    )
                     self.config.rerank = False
             elif self.config.reranker_provider == "llm":
                 from axon.llm import OpenLLM

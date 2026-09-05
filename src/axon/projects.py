@@ -590,12 +590,53 @@ def list_projects() -> list[dict]:
     return result
 
 
-def get_active_project() -> str:
-    """Return the name of the currently active project (defaults to 'default')."""
-    if _ACTIVE_FILE.exists():
+def get_active_project(projects_root: Path | str | None = None) -> str:
+    """Return the name of the currently active project (defaults to 'default').
+
+    Args:
+        projects_root: When supplied, the stored name is validated against this
+            root and a pointer to a deleted project self-heals to 'default'
+            (and is persisted). Without it the stored value is returned as-is.
+
+    The validation is opt-in *by design*. The module-global ``PROJECTS_ROOT``
+    defaults to ``~/.axon/projects``, but the real store is
+    ``{axon_store_base}/AxonStore/{username}`` — they only converge once
+    ``AxonBrain.__init__`` calls ``set_projects_root()``. Callers on the
+    lightweight CLI paths never construct a brain, so validating against the
+    module global there would resolve a perfectly good project against the wrong
+    (legacy) root and permanently reset the pointer. Pass ``config.projects_root``
+    to get the heal; omit it to get a plain read.
+    """
+    if not _ACTIVE_FILE.exists():
+        return "default"
+    try:
         name = _ACTIVE_FILE.read_text(encoding="utf-8").strip()
-        if name:
+    except OSError:
+        return "default"
+    if not name or name == "default":
+        return "default"
+    if projects_root is None:
+        return name  # plain read — caller can't vouch for the root
+    # Mounted shares live outside the projects root and are validated on switch.
+    if name.startswith("mounts/"):
+        return name
+    root = Path(projects_root)
+    try:
+        segments = _parse_name(name)
+    except ValueError:
+        segments = None
+    if segments:
+        candidate = root / segments[0]
+        for seg in segments[1:]:
+            candidate = candidate / "subs" / seg
+        if candidate.is_dir():
             return name
+    logger.warning(
+        "Active project %r no longer exists under %s; falling back to 'default'.",
+        name,
+        root,
+    )
+    set_active_project("default")
     return "default"
 
 

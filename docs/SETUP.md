@@ -95,6 +95,8 @@ pip install -e ".[all]"
 | `qdrant` | Qdrant vector store backend (remote or local server). Default vector store is TurboQuantDB. | `pip install -e ".[qdrant]"` |
 | `chroma` | ChromaDB vector store backend. Useful if you have an existing Chroma collection to migrate. | `pip install -e ".[chroma]"` |
 | `fastembed` | Bundled in every install since 0.4.6 (it's the default embedding provider) — this extra is now a no-op, kept only so `pip install "axon-rag[fastembed]"` in existing scripts still resolves. | Already installed |
+| `sentence-transformers` | The `sentence_transformers` embedding provider and the cross-encoder reranker. Left the base install in 0.5.0 — it pulls torch and TensorFlow (~2.1 GB) for code paths a default config never reaches. | `pip install -e ".[sentence-transformers]"` |
+| `lancedb` | LanceDB vector store backend. Left the base install in 0.5.0; default is TurboQuantDB. | `pip install -e ".[lancedb]"` |
 | `all` | Everything above plus development tools — for contributors. | `pip install -e ".[all]"` |
 
 > **`graphrag` extra and Python 3.13+:** The `[graphrag]` extra uses `leidenalg` + `igraph`, which ship pre-built wheels for Python 3.13 on all platforms.
@@ -298,9 +300,10 @@ fully supported — pick it if you want the broader HuggingFace model catalog
 sentence-transformers supports beyond FastEmbed's curated list. The model
 downloads automatically on first use.
 
-**Install (if not already installed with the package):**
+**Install** — required since 0.5.0, when this moved out of the base install
+(it pulls ~2.1 GB of torch + TensorFlow that a default `fastembed` setup never loads):
 ```bash
-pip install sentence-transformers
+pip install 'axon-rag[sentence-transformers]'
 ```
 
 **No manual model download needed** — it downloads on first run. To pre-download:

@@ -101,7 +101,15 @@ class OpenVectorStore:
                 logger.info(f"Initializing Qdrant (local): {self.config.vector_store_path}")
                 self.client = QdrantClient(path=self.config.vector_store_path)
         elif self.provider == "lancedb":
-            import lancedb
+            try:
+                import lancedb
+            except ImportError as exc:
+                raise ImportError(
+                    "vector_store.provider is 'lancedb' but the package is not "
+                    "installed. It moved out of the base install in 0.5.0. "
+                    "Install it with: pip install 'axon-rag[lancedb]' — or use "
+                    "the default store with vector_store.provider: turboquantdb"
+                ) from exc
 
             logger.info(f"Initializing LanceDB: {self.config.vector_store_path}")
             self.client = lancedb.connect(self.config.vector_store_path)

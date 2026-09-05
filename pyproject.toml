@@ -31,12 +31,13 @@ dependencies = [
     "numpy>=1.20.0",
     "pydantic>=2.0.0",
     "python-dotenv>=1.0.0",
-    "sentence-transformers>=3.0.0",
-    "tf-keras>=2.0.0",
     # Default embedding provider since 0.4.6 (ONNX runtime, no torch import —
-    # cuts axon-api cold start from ~20s to ~2s). sentence-transformers stays a
-    # base dep too since it remains a supported provider and backs the
-    # cross-encoder reranker.
+    # cuts axon-api cold start from ~20s to ~2s).
+    # sentence-transformers (and its torch/tf-keras chain) moved OUT of base in
+    # 0.5.0: it is reachable only via embedding.provider=sentence_transformers or
+    # rerank.provider=cross-encoder, both non-default. It cost ~2.1 GB of every
+    # install for a code path a default config never touches. See the
+    # [sentence-transformers] extra below.
     "fastembed>=0.1.0,<1.0.0",
     "ollama>=0.1.0",
     "openai>=1.0.0",
@@ -64,7 +65,9 @@ dependencies = [
     "prompt_toolkit>=3.0.0",
     "rich>=13.0.0",
     "tiktoken>=0.7.0",
-    "lancedb>=0.8.0",
+    # lancedb moved to the [lancedb] extra in 0.5.0 — the default vector store is
+    # turboquantdb (tqdb), and lancedb is only imported inside the
+    # `provider == "lancedb"` branch. Matches how chroma/qdrant are already handled.
     "tqdb>=0.7.0",
     "prometheus-client>=0.20",
 ]
@@ -88,6 +91,19 @@ fastembed = [
     # `pip install axon-rag[fastembed]` in existing docs/scripts still resolves.
     "fastembed>=0.1.0,<1.0.0",
 ]
+sentence-transformers = [
+    # Required only for embedding.provider=sentence_transformers or
+    # rerank.provider=cross-encoder. Pulls torch (~0.7 GB with scipy/sklearn/
+    # transformers); tf-keras drags in TensorFlow (~1.4 GB) and exists purely as a
+    # transformers/Keras-3 compat shim — nothing in axon imports it directly, but
+    # it travels with this stack rather than base.
+    "sentence-transformers>=3.0.0",
+    "tf-keras>=2.0.0",
+]
+lancedb = [
+    # Alternative vector store. Default is turboquantdb (tqdb, in base deps).
+    "lancedb>=0.8.0",
+]
 graphrag = [
     "networkx>=3.0",
     "leidenalg>=0.11.0",
@@ -101,6 +117,13 @@ llmlingua = [
 ]
 rebel = [
     "transformers>=4.20.0",
+    # torch used to arrive transitively via the base sentence-transformers dep.
+    # That moved to its own extra in 0.5.0, so declare the backend explicitly —
+    # otherwise transformers imports fine and REBEL fails later inside
+    # AutoModelForSeq2SeqLM.from_pretrained with a "no backend" error.
+    # Unpinned so the user's environment picks the right CPU/CUDA/ROCm wheel,
+    # matching the [sparse] extra.
+    "torch>=2.0",
 ]
 sparse = [
     # Phase 1 SPLADE backend for axon.sparse_retrieval.SpladeSparseRetriever.
@@ -172,6 +195,12 @@ dev = [
     "mypy>=1.5.0,<2.0.0",
     "pre-commit>=3.4.0,<4.0.0",
     "chromadb>=0.4.0",
+    # Demoted from base in 0.5.0, but kept here so CI keeps exercising the real
+    # sentence-transformers / cross-encoder / lancedb code paths instead of
+    # silently falling through to the ImportError stubs and mocked unit tests.
+    "sentence-transformers>=3.0.0",
+    "tf-keras>=2.0.0",
+    "lancedb>=0.8.0",
     # Sealed-store deps so CI exercises the real master/seal/cache paths
     # rather than the ImportError-fallback stubs (Phase 2 of #SEALED).
     "cryptography>=42.0.0",
@@ -188,6 +217,10 @@ all = [
     "chromadb>=0.4.0",
     "qdrant-client>=1.7.0,<2.0.0",
     "fastembed>=0.1.0,<1.0.0",
+    # Demoted from base in 0.5.0 — re-listed here so "all" still means all.
+    "sentence-transformers>=3.0.0",
+    "tf-keras>=2.0.0",
+    "lancedb>=0.8.0",
     "networkx>=3.0",
     "leidenalg>=0.11.0",
     "igraph>=1.0.0",

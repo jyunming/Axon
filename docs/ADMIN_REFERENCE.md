@@ -712,7 +712,7 @@ Embedding provider install requirements:
 | Provider | Description | Install |
 |----------|-------------|---------|
 | `fastembed` | Quantised ONNX models (default) — no torch import, ~2s cold start vs ~20s for `sentence_transformers` | Bundled |
-| `sentence_transformers` | Local CPU inference via PyTorch/transformers | Bundled |
+| `sentence_transformers` | Local CPU inference via PyTorch/transformers | `pip install 'axon-rag[sentence-transformers]'` — moved out of the base install in 0.5.0 (~2.1 GB of torch + TensorFlow) |
 | `ollama` | Via local Ollama endpoint | Ollama running + model pulled |
 | `openai` | OpenAI embedding API | `OPENAI_API_KEY` |
 
