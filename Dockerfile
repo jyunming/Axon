@@ -18,9 +18,8 @@ COPY . .
 # Install the package in editable mode
 RUN pip install -e .
 
-# Expose ports for API and UI
+# Expose the API port (the web GUI is served by axon-api at /gui/)
 EXPOSE 8420
-EXPOSE 8501
 
 # Run as non-root user for security
 RUN useradd -m appuser && chown -R appuser /app

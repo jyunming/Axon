@@ -73,13 +73,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-ui = [
-    # DEPRECATED: the Streamlit UI (axon-ui) is superseded by the native web GUI,
-    # which is served at /gui/ by `axon-api` and needs no extra dependency.
-    # This extra is kept so existing users can still install the old UI; it will
-    # be removed in a future release.
-    "streamlit>=1.30.0",
-]
 chroma = [
     "chromadb>=0.4.0",
 ]
@@ -251,7 +244,6 @@ Security = "https://github.com/jyunming/Axon/blob/main/SECURITY.md"
 
 [project.scripts]
 axon = "axon.cli:main"
-axon-ui = "axon.webapp_launcher:main_ui"
 axon-api = "axon.api:main"
 axon-mcp = "axon.mcp_server:main"
 axon-ext = "axon.ext_install:install_vscode_extension"

@@ -262,19 +262,10 @@ async def switch_project(project_name: str) -> Any:
     return await _post("/project/switch", {"project_name": project_name})
 
 
-@mcp.tool()
-async def refresh_mount() -> Any:
-    """Re-read the owner's version marker for an active mounted share and
-    reopen project handles if the owner has re-ingested.
-    No-op when the active project is not a mount (mounts/<name>). On a
-    cloud-sync mid-replication race the API may respond with HTTP 503
-    + ``X-Axon-Mount-Sync-Pending: true``; retry after a few seconds.
-    Returns:
-        ``{"status": "success", "refreshed": bool, "seq": int|null}``
-        when refresh completed, or ``{"status": "sync_pending", ...}``
-        when the owner advanced but index files are still in flight.
-    """
-    return await _post("/mount/refresh", {})
+# NOTE: refresh_mount() was removed in 0.5.0. It posted to /mount/refresh with
+# no arguments, which mount_refresh(project=None) already does — mount_refresh
+# is a strict superset (it can switch to the target project first). Two tools
+# for one operation cost agents context and tool-selection accuracy for nothing.
 
 
 @mcp.tool()

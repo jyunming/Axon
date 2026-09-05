@@ -21,7 +21,6 @@ import pytest
 collect_ignore: list[str] = []
 
 _OPTIONAL_TEST_FILES = {
-    "test_webapp_ui.py": "streamlit",
     "e2e/test_mcp_bridge_e2e.py": "mcp",
 }
 

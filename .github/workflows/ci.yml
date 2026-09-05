@@ -67,8 +67,7 @@ jobs:
           python -m py_compile src/axon/loaders.py
           python -m py_compile src/axon/retrievers.py
           python -m py_compile src/axon/splitters.py
-          python -m py_compile src/axon/tools.py
-          python -m py_compile src/axon/webapp.py
+          python -m py_compile src/axon/mcp_server.py
 
       - name: Lint with ruff (if installed)
         shell: bash

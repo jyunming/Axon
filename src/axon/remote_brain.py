@@ -1,12 +1,12 @@
 """Single-instance reuse: a ``RemoteBrain`` proxy over a running ``axon-api``.
 
-When an ``axon-api`` server is already serving *the same store*, the Streamlit
-UI (:mod:`axon.webapp`) and the CLI REPL (:mod:`axon.cli`) should NOT construct a
+When an ``axon-api`` server is already serving *the same store*, the CLI REPL
+(:mod:`axon.cli`) should NOT construct a
 second in-process :class:`~axon.main.AxonBrain` on that store — two processes
 racing on the TurboQuantDB files crash, and every extra brain re-loads the
 embedding model and attaches to the shared rotating log. Instead they call
 :func:`get_brain`, which returns a :class:`RemoteBrain` that exposes the subset
-of the ``AxonBrain`` interface those two surfaces use, backed by the server's
+of the ``AxonBrain`` interface that surface uses, backed by the server's
 HTTP API (via :mod:`axon.server_client` helpers + stdlib ``urllib``).
 
 Design notes

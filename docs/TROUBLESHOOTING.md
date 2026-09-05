@@ -91,19 +91,6 @@ TypeError: SentenceTransformer.encode() got an unexpected keyword argument 'conv
 
 ---
 
-## Docker: File Changes Not Reflected in Streamlit UI (deprecated UI)
-
-**Symptom:** You edited source files but the Streamlit UI still runs old code.
-
-**Cause:** Docker Desktop on Windows sometimes fails to propagate filesystem events through volume mounts, so Streamlit's auto-reloader doesn't trigger.
-
-**Fix:**
-```bash
-docker compose restart axon-ui
-```
-
----
-
 ## Brave Search: `truth_grounding` Enabled But No Web Results
 
 **Symptom:** Web search toggle is on but no 🌐 sources appear.
@@ -112,7 +99,7 @@ docker compose restart axon-ui
 
 **Fix:**
 1. Get a free API key at [https://brave.com/search/api/](https://brave.com/search/api/)
-2. Either set `BRAVE_API_KEY` in your `.env` file, or enter it in the Web UI sidebar under "🌐 Web Search"
+2. Either set `BRAVE_API_KEY` in your `.env` file, or enter it in the built-in web GUI's Settings panel (`/gui/`) under "🌐 Web Search"
 
 ---
 

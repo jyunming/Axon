@@ -84,7 +84,6 @@ pip install -e ".[all]"
 | Extra | What it enables | Install |
 |---|---|---|
 | `starter` | Recommended for first-time users — bundles `cryptography` + `keyring` (sealed sharing) and `loaders` (EPUB/RTF/.msg). Covers >90% of beginner workflows. The web GUI needs no extra. | `pip install "axon-rag[starter]"` |
-| `ui` | **Deprecated** — the legacy Streamlit UI (`axon-ui`). Superseded by the built-in WebGUI at `/gui/`; will be removed in a future release. | `pip install "axon-rag[ui]"` |
 | `graphrag` | GraphRAG community detection using the Leiden algorithm (better than the default networkx Louvain fallback) | `pip install -e ".[graphrag]"` |
 | `gliner` | GLiNER fast NER backend for entity extraction — skips the LLM call during ingest (`graph_rag_ner_backend: gliner` in config) | `pip install -e ".[gliner]"` |
 | `llmlingua` | LLMLingua-2 token compression for GraphRAG community reports before map-reduce (`graph_rag_report_compress: true` in config) | `pip install -e ".[llmlingua]"` |
@@ -679,9 +678,6 @@ BM25_INDEX_PATH=./bm25_index
 LOG_LEVEL=INFO
 # Security: restrict file ingestion to this directory
 # RAG_INGEST_BASE=/home/user/documents
-# Streamlit UI port (deprecated UI — see axon-ui deprecation note)
-STREAMLIT_SERVER_PORT=8501
-STREAMLIT_SERVER_ADDRESS=0.0.0.0
 ```
 
 > **Security note:** Set `RAG_INGEST_BASE` to restrict which directories the `/ingest` endpoint can access. This prevents path traversal attacks.
@@ -758,23 +754,6 @@ Open [http://localhost:8420/gui/](http://localhost:8420/gui/) in your browser. N
 
 This is the maintained browser surface: chat, Graph Explorer, Knowledge Base,
 Governance console and Settings.
-
-<details>
-<summary><b>Streamlit UI</b> (deprecated — legacy)</summary>
-
-> **Deprecated.** `axon-ui` is superseded by the built-in WebGUI above and will
-> be removed in a future release. It is no longer bundled by `[starter]` or
-> `[all]`; install it explicitly first.
-
-```bash
-pip install "axon-rag[ui]"
-axon-ui
-# Or:
-make run-ui
-```
-Open [http://localhost:8501](http://localhost:8501) in your browser.
-
-</details>
 
 ---
 
@@ -1339,7 +1318,6 @@ For common errors and step-by-step fixes, see [TROUBLESHOOTING.md](TROUBLESHOOTI
 | List pulled models | `ollama list` |
 | Start API | `axon-api` or `make run-api` |
 | Open WebGUI | `http://localhost:8420/gui/` (when `axon-api` is running) |
-| Start Streamlit UI (deprecated) | `axon-ui` or `make run-ui` |
 | Health check | `curl http://localhost:8420/health` |
 | Upgrade (PyPI install) | `axon update` |
 | Ingest a file | `axon --ingest ./path/to/file` |

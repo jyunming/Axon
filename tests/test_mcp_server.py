@@ -43,7 +43,6 @@ EXPECTED_MCP_TOOL_NAMES = {
     "switch_project",
     "create_project",
     "delete_project",
-    "refresh_mount",
     # Settings / sessions
     "get_current_settings",
     "update_settings",
@@ -646,26 +645,6 @@ def test_query_knowledge_top_k_zero_raises():
 # ---------------------------------------------------------------------------
 # Share-mount tools (#51–#54): proxy behavior
 # ---------------------------------------------------------------------------
-
-
-def test_refresh_mount_proxies_to_mount_refresh_endpoint():
-    import asyncio
-    from unittest.mock import patch
-
-    from axon.mcp_server import refresh_mount
-
-    async def _run():
-        rv = {"status": "success", "refreshed": True, "seq": 7}
-        mock = _mock_post(rv)
-        with patch("httpx.AsyncClient.post", mock):
-            result = await refresh_mount()
-        assert result == rv
-        # POST goes to /mount/refresh with an empty body.
-        args, kwargs = mock.call_args
-        assert args[0].endswith("/mount/refresh")
-        assert kwargs.get("json") == {}
-
-    asyncio.run(_run())
 
 
 def test_share_project_passes_ttl_days_when_set():

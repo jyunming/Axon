@@ -15,15 +15,9 @@ For interactive API docs, start `axon-api` and open `http://localhost:8420/docs`
 | `axon` | Interactive REPL | — | Day-to-day exploration, power users |
 | `axon-api` | FastAPI REST server + WebGUI | `8420` | Agents, scripts, CI pipelines, browser UI |
 | `axon-mcp` | MCP stdio server | — | GitHub Copilot agent mode, Claude Code |
-| `axon-ui` | Streamlit web UI — **deprecated** | `8501` | Superseded by the built-in WebGUI; removal planned |
 | `axon-ext` | Install VS Code extension | — | Registers the bundled VSIX in VS Code |
 
 When `axon-api` is running, the built-in WebGUI is at `http://localhost:8420/gui/`.
-
-> **Deprecation:** `axon-ui` (Streamlit) is deprecated and will be removed in a
-> future release. It is no longer bundled by the `[starter]` or `[all]` extras —
-> install it explicitly with `pip install "axon-rag[ui]"`. The built-in WebGUI is
-> the maintained browser surface.
 
 Start flags for the API server (resolved in this order: flag > env var >
 `config.yaml`'s `api.port` > `8420` default; `--host` does not read
@@ -176,8 +170,8 @@ startup — non-blocking (fire-and-forget, short timeout), rate-limited to
 once/day via an on-disk cache at `~/.axon/.update_check_cache.json`, and
 silent when `offline_mode` is on or the check itself fails. `axon`/the REPL
 print a one-line suggestion after the startup banner; `axon-api` logs it.
-`axon-mcp`/`axon-ui` are not checked (no clear human consumer watching
-their stdout — see §8).
+`axon-mcp` is not checked (no clear human consumer watching
+its stdout — see §8).
 
 `axon update` is a bare subcommand (not a flag) that performs the upgrade:
 

@@ -4,7 +4,7 @@
 
 ### Installation
 ```bash
-# Recommended for first-time users — UI + sealed sharing + extra loaders
+# Recommended for first-time users — sealed sharing + extra loaders (the web GUI ships with axon-api, no extra needed)
 pip install "axon-rag[starter]"
 # Bare retrieval engine
 pip install axon-rag
@@ -55,9 +55,6 @@ pytest -v -s  # Verbose with output
 # API Server — also serves the web GUI at http://localhost:8420/gui/
 make run-api
 axon-api
-# Streamlit UI (DEPRECATED — superseded by the web GUI above)
-make run-ui
-axon-ui
 # CLI — interactive REPL (default when no args)
 axon
 # CLI — single-shot query
@@ -627,14 +624,6 @@ chunk:
 - **Ollama:** https://ollama.ai/
 - **ChromaDB:** https://www.trychroma.com/
 - **FastAPI:** https://fastapi.tiangolo.com/
-- **Streamlit:** https://streamlit.io/
-
-## Keyboard Shortcuts (Streamlit UI — deprecated)
-
-- `Ctrl + K` - Focus chat input
-- `Ctrl + L` - Clear chat
-- `R` - Rerun app
-- `C` - Clear cache
 
 ## Environment Setup Scripts
 

@@ -37,29 +37,12 @@ class Surface(str, Enum):
     REPL = "repl"
     CLI = "cli"
     VSCODE = "vscode"
-    # Streamlit web UI.  DEPRECATED — superseded by the native web GUI served
-    # at /gui/ by `axon-api`.  Kept as a supplemental surface for existing
-    # users; destructive and admin-oriented capabilities (graph, sharing,
-    # store) were never exposed there and no new capability should be added.
-    WEBAPP = "webapp"
 
 
 ALL_SURFACES = frozenset(Surface)
 
 
 NO_VSCODE = frozenset({Surface.API, Surface.REPL, Surface.CLI})
-
-
-# Streamlit is intentionally excluded from capabilities that are:
-
-
-#   (a) administrative / destructive (delete, graph finalize, store ops)
-
-
-#   (b) multi-user sharing (share keys, store migration)
-
-
-#   (c) MCP/agent-oriented (raw data payloads, lease inspection)
 
 
 PRIMARY_SURFACES = frozenset({Surface.API, Surface.REPL, Surface.CLI, Surface.VSCODE})
@@ -113,7 +96,6 @@ REGISTRY: list[Capability] = [
         supported_surfaces=frozenset({Surface.API, Surface.CLI, Surface.VSCODE}),
         intentional_exceptions={
             Surface.REPL: "REPL renders tokens incrementally via print; no separate mode needed",
-            Surface.WEBAPP: "Streamlit uses a blocking query model; streaming not exposed",
         },
         api_route="/query/stream",
     ),
@@ -136,7 +118,6 @@ REGISTRY: list[Capability] = [
         intentional_exceptions={
             Surface.REPL: "Available via /query --dry-run equivalent",
             Surface.VSCODE: "Not exposed as a tool; requires explicit decision to add",
-            Surface.WEBAPP: "Developer diagnostic tool not exposed in Streamlit UI",
         },
         api_route="/search/raw",
     ),
@@ -203,9 +184,7 @@ REGISTRY: list[Capability] = [
         tier=Tier.ONE,
         description="Remove specific document chunks by ID.",
         supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={
-            Surface.WEBAPP: "Destructive operation not exposed in Streamlit UI",
-        },
+        intentional_exceptions={},
         api_route="/delete",
     ),
     Capability(
@@ -215,9 +194,7 @@ REGISTRY: list[Capability] = [
         tier=Tier.ONE,
         description="Delete all documents in the current project.",
         supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={
-            Surface.WEBAPP: "Destructive operation not exposed in Streamlit UI",
-        },
+        intentional_exceptions={},
         api_route="/clear",
     ),
     # ── Project ──────────────────────────────────────────────────────────────
@@ -255,9 +232,7 @@ REGISTRY: list[Capability] = [
         tier=Tier.ONE,
         description="Delete a project and all its stored knowledge.",
         supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={
-            Surface.WEBAPP: "Destructive operation not exposed in Streamlit UI",
-        },
+        intentional_exceptions={},
         api_route="/project/delete/{name}",
     ),
     # ── Config ───────────────────────────────────────────────────────────────
@@ -290,7 +265,6 @@ REGISTRY: list[Capability] = [
         intentional_exceptions={
             Surface.REPL: "REPL always launches with an initialised store — startup guarantees it",
             Surface.CLI: "CLI always launches with an initialised store — startup guarantees it",
-            Surface.WEBAPP: "Streamlit always runs against an initialised store",
         },
         api_route="/store/status",
     ),
@@ -301,9 +275,7 @@ REGISTRY: list[Capability] = [
         tier=Tier.ONE,
         description="Move the AxonStore to a different base path (e.g. a shared drive).",
         supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={
-            Surface.WEBAPP: "Administrative store migration not exposed in Streamlit UI",
-        },
+        intentional_exceptions={},
         api_route="/store/init",
     ),
     Capability(
@@ -313,9 +285,7 @@ REGISTRY: list[Capability] = [
         tier=Tier.ONE,
         description="Create an HMAC share token for a grantee.",
         supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={
-            Surface.WEBAPP: "Multi-user share management not exposed in Streamlit UI",
-        },
+        intentional_exceptions={},
         api_route="/share/generate",
     ),
     Capability(
@@ -325,9 +295,7 @@ REGISTRY: list[Capability] = [
         tier=Tier.ONE,
         description="Mount a shared project using a share token.",
         supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={
-            Surface.WEBAPP: "Multi-user share management not exposed in Streamlit UI",
-        },
+        intentional_exceptions={},
         api_route="/share/redeem",
     ),
     Capability(
@@ -337,9 +305,7 @@ REGISTRY: list[Capability] = [
         tier=Tier.ONE,
         description="Revoke an active share grant.",
         supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={
-            Surface.WEBAPP: "Multi-user share management not exposed in Streamlit UI",
-        },
+        intentional_exceptions={},
         api_route="/share/revoke",
     ),
     Capability(
@@ -349,9 +315,7 @@ REGISTRY: list[Capability] = [
         tier=Tier.ONE,
         description="List active shares granted and received.",
         supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={
-            Surface.WEBAPP: "Multi-user share management not exposed in Streamlit UI",
-        },
+        intentional_exceptions={},
         api_route="/share/list",
     ),
     # ── Graph ────────────────────────────────────────────────────────────────
@@ -371,9 +335,7 @@ REGISTRY: list[Capability] = [
         tier=Tier.TWO,
         description="Rebuild community summaries and finalize the knowledge graph.",
         supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={
-            Surface.WEBAPP: "Long-running rebuild operation not exposed in Streamlit UI",
-        },
+        intentional_exceptions={},
         api_route="/graph/finalize",
     ),
     Capability(
@@ -386,7 +348,6 @@ REGISTRY: list[Capability] = [
         intentional_exceptions={
             Surface.REPL: "Raw JSON payload not useful in interactive REPL; use graph_viz instead",
             Surface.CLI: "Raw JSON payload not useful in CLI; use graph_viz instead",
-            Surface.WEBAPP: "Streamlit uses graph_viz (HTML) not the raw data payload",
         },
         api_route="/graph/data",
     ),
@@ -399,7 +360,6 @@ REGISTRY: list[Capability] = [
         supported_surfaces=frozenset({Surface.API, Surface.REPL, Surface.CLI}),
         intentional_exceptions={
             Surface.VSCODE: "Graph panel exists but uses /graph/data; separate from viz export",
-            Surface.WEBAPP: "Streamlit embeds the graph panel inline rather than exporting HTML",
         },
         api_route="/graph/visualize",
     ),
@@ -414,9 +374,7 @@ REGISTRY: list[Capability] = [
             "not track conflicts (e.g. graphrag)."
         ),
         supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={
-            Surface.WEBAPP: "Conflict-resolution UI is operator-tier; not exposed in Streamlit",
-        },
+        intentional_exceptions={},
         api_route="/graph/conflicts",
     ),
     Capability(
@@ -430,9 +388,7 @@ REGISTRY: list[Capability] = [
             "per-query federation_weights overrides without an LLM call."
         ),
         supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={
-            Surface.WEBAPP: "Bypasses the standard query pipeline; not exposed in Streamlit",
-        },
+        intentional_exceptions={},
         api_route="/graph/retrieve",
     ),
     # ── Session ──────────────────────────────────────────────────────────────
@@ -445,7 +401,6 @@ REGISTRY: list[Capability] = [
         supported_surfaces=frozenset({Surface.API, Surface.REPL, Surface.CLI}),
         intentional_exceptions={
             Surface.VSCODE: "Session management is a REPL/CLI workflow; extension focuses on single-turn tool calls",
-            Surface.WEBAPP: "Session history is a REPL/CLI concept; Streamlit manages its own state",
         },
         api_route="/sessions",
     ),
@@ -460,7 +415,6 @@ REGISTRY: list[Capability] = [
         intentional_exceptions={
             Surface.REPL: "Governance operator tool — not meaningful in single-session interactive use",
             Surface.CLI: "Governance operator tool — not meaningful in single-session interactive use",
-            Surface.WEBAPP: "Operator tool not exposed in Streamlit UI",
         },
         api_route="/registry/leases",
     ),
@@ -487,9 +441,7 @@ REGISTRY: list[Capability] = [
         tier=Tier.TWO,
         description="Renew or clear a share key's TTL so it stays valid without revoking and re-issuing.",
         supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={
-            Surface.WEBAPP: "Share lifecycle management not exposed in Streamlit UI",
-        },
+        intentional_exceptions={},
         api_route="/share/extend",
     ),
     # ── Store whoami (SP-B1 parity sweep) ────────────────────────────────────
@@ -500,9 +452,7 @@ REGISTRY: list[Capability] = [
         tier=Tier.TWO,
         description="Return the current user's OS identity, store path, user directory, and active project.",
         supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={
-            Surface.WEBAPP: "Store identity inspection not exposed in Streamlit UI",
-        },
+        intentional_exceptions={},
         api_route="/store/whoami",
     ),
     # ── Seal project (SP-B1 parity sweep) ────────────────────────────────────
@@ -513,9 +463,7 @@ REGISTRY: list[Capability] = [
         tier=Tier.TWO,
         description="Encrypt every content file in a project at rest using AES-256-GCM.",
         supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={
-            Surface.WEBAPP: "Destructive encryption operation not exposed in Streamlit UI",
-        },
+        intentional_exceptions={},
         api_route="/project/seal",
     ),
     # ── Pack / unpack project ─────────────────────────────────────────────────
@@ -529,9 +477,7 @@ REGISTRY: list[Capability] = [
             "sub-projects, and .security/ if sealed) for backup, restore, or relocation."
         ),
         supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={
-            Surface.WEBAPP: "Filesystem-path-based archive operation not exposed in Streamlit UI",
-        },
+        intentional_exceptions={},
         api_route="/project/pack",
     ),
     Capability(
@@ -541,9 +487,7 @@ REGISTRY: list[Capability] = [
         tier=Tier.TWO,
         description="Restore a project from a zip archive produced by pack_project into AxonStore.",
         supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={
-            Surface.WEBAPP: "Filesystem-path-based archive operation not exposed in Streamlit UI",
-        },
+        intentional_exceptions={},
         api_route="/project/unpack",
     ),
     # ── Mount refresh (SP-B1 parity sweep) ───────────────────────────────────
@@ -554,9 +498,7 @@ REGISTRY: list[Capability] = [
         tier=Tier.TWO,
         description="Re-read the owner's version marker for an active mounted share and reopen project handles.",
         supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={
-            Surface.WEBAPP: "Mount lifecycle management not exposed in Streamlit UI",
-        },
+        intentional_exceptions={},
         api_route="/mount/refresh",
     ),
     # ── Governance overview (SP-B1 parity sweep) ─────────────────────────────
@@ -567,9 +509,7 @@ REGISTRY: list[Capability] = [
         tier=Tier.TWO,
         description="Return aggregated operator status: projects, graph, write-leases, shares, and Copilot sessions.",
         supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={
-            Surface.WEBAPP: "Operator console not exposed in Streamlit UI",
-        },
+        intentional_exceptions={},
         api_route="/governance/overview",
     ),
     # ── Governance audit (SP-B1 parity sweep) ────────────────────────────────
@@ -580,9 +520,7 @@ REGISTRY: list[Capability] = [
         tier=Tier.TWO,
         description="Return filtered audit log entries for operator review.",
         supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={
-            Surface.WEBAPP: "Operator console not exposed in Streamlit UI",
-        },
+        intentional_exceptions={},
         api_route="/governance/audit",
     ),
     # ── Governance projects (SP-B1 parity sweep) ─────────────────────────────
@@ -593,9 +531,7 @@ REGISTRY: list[Capability] = [
         tier=Tier.TWO,
         description="Return all projects with maintenance state and graph statistics for operator review.",
         supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={
-            Surface.WEBAPP: "Operator console not exposed in Streamlit UI",
-        },
+        intentional_exceptions={},
         api_route="/governance/projects",
     ),
 ]

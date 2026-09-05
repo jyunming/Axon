@@ -21,7 +21,6 @@ import pytest
 from axon.agent import (
     _DESTRUCTIVE_TOOLS,
     REPL_TOOLS,
-    WEBAPP_TOOLS,
     ToolCall,
     _tool_get_config,
     _tool_get_stale_docs,
@@ -115,12 +114,14 @@ class TestReplTools:
             assert "function" in t
             assert "name" in t["function"]
 
-    def test_destructive_tools_not_in_webapp(self):
-        webapp_names = {t["function"]["name"] for t in WEBAPP_TOOLS}
-        for dt in _DESTRUCTIVE_TOOLS:
-            assert (
-                dt not in webapp_names
-            ), f"Destructive tool '{dt}' must not appear in WEBAPP_TOOLS"
+    def test_destructive_tool_names_match_real_tools(self):
+        """_DESTRUCTIVE_TOOLS gates the confirmation prompt in dispatch_tool by
+        exact name, so a typo or a renamed tool would silently disable the
+        prompt for a destructive operation. (Replaces the old
+        WEBAPP_TOOLS-subset test — the Streamlit UI it existed for is gone.)"""
+        names = {t["function"]["name"] for t in REPL_TOOLS}
+        unknown = _DESTRUCTIVE_TOOLS - names
+        assert not unknown, f"_DESTRUCTIVE_TOOLS names no real tool: {sorted(unknown)}"
 
     def test_ingest_path_tool_present(self):
         names = {t["function"]["name"] for t in REPL_TOOLS}
