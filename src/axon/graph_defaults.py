@@ -14,9 +14,18 @@ config surface. The values are unchanged; this is a move, not a retune.
 Two rules for anything added here:
 
 1. **Import the constant, do not reach for it through ``getattr``.** The old
-   ``getattr(cfg, "graph_rag_local_...", <fallback>)`` pattern hid 24 fallbacks
-   that disagreed with the dataclass default they shadowed — several inverting
-   a boolean. Those fallbacks were dead only because the field always existed.
+   ``getattr(cfg, "graph_rag_local_...", <fallback>)`` pattern let a fallback
+   drift from the dataclass default it shadowed, harmlessly, because the field
+   always existed and the fallback never fired. Six of the fields moved here had
+   drifted that way — ``GLOBAL_MAP_MAX_LENGTH`` (fallback 500 vs default 1000),
+   ``GLOBAL_REDUCE_MAX_LENGTH`` (500 vs 2000), ``GLOBAL_MAX_MAP_CHUNKS`` (0 vs
+   200), ``GLOBAL_REDUCE_SKIP_IF_TOP_POINTS_LE`` (1 vs 0),
+   ``GLOBAL_REDUCE_SKIP_IF_TOP_SCORE_GTE`` (95.0 vs 0) and
+   ``LOCAL_EARLY_CUTOFF_FACTOR`` (0.2 vs 1.5). Each constant here takes the
+   *dataclass* value, so behaviour is unchanged. Across the wider ``graph_rag_*``
+   surface the same audit found 24 such drifts among 143 call sites, some of them
+   inverting a boolean; those fields are not in this module yet, and deleting one
+   without replacing its read would make its stale fallback live.
 2. **If a value ever genuinely needs to be user-settable, promote it back to a
    real ``AxonConfig`` field** — with an entry in ``_KNOWN_YAML_KEYS`` and in
    ``config_routes.py``'s map, so every surface sees it. A constant here is a
