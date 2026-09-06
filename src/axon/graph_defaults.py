@@ -42,9 +42,11 @@ GLOBAL_MIN_SCORE = 20
 GLOBAL_TOP_POINTS = 50
 #: Token budget for the reduce-phase prompt.
 GLOBAL_REDUCE_MAX_TOKENS = 8000
-#: Character cap on each map-phase response.
+#: Map-phase window, in tokens. The call site multiplies by 4 to get the
+#: character width of each community-report chunk.
 GLOBAL_MAP_MAX_LENGTH = 1000
-#: Character cap on the reduce-phase response.
+#: Reduce-phase response budget, in tokens. Interpolated into the prompt as
+#: "Respond in at most N tokens" — a request to the model, not a hard cap.
 GLOBAL_REDUCE_MAX_LENGTH = 2000
 #: Whether the reduce prompt may draw on the model's general knowledge.
 GLOBAL_ALLOW_GENERAL_KNOWLEDGE = False

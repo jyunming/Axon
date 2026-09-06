@@ -1426,17 +1426,22 @@ class TestDemotedGraphTuning:
     def test_graph_rag_no_longer_reaches_demoted_fields_via_getattr(self):
         """A stale getattr would resurrect the old fallback, which often differed.
 
-        24 of the pre-0.5.0 getattr fallbacks disagreed with the dataclass
-        default they shadowed — several inverting a boolean — and were dead only
-        because the field always existed. Deleting the field without deleting
-        the getattr would have made those fallbacks live.
+        Six of the fields moved to graph_defaults.py had a pre-0.5.0 getattr
+        fallback that disagreed with the dataclass default it shadowed; across
+        the wider graph_rag_* surface the same audit found 24 among 143 call
+        sites, some inverting a boolean. Every one was dead only because the
+        field always existed, so deleting a field without deleting its getattr
+        would make that stale fallback live.
         """
         import re
         from pathlib import Path
 
+        import axon.graph_rag
         from axon.config import _DEMOTED_GRAPH_TUNING
 
-        src = Path("src/axon/graph_rag.py").read_text(encoding="utf-8", errors="replace")
+        # Resolve via the imported module, not the cwd — pytest may run from
+        # anywhere, and on some runners the package is installed, not in-tree.
+        src = Path(axon.graph_rag.__file__).read_text(encoding="utf-8", errors="replace")
         stale = [f for f in _DEMOTED_GRAPH_TUNING if re.search(rf'getattr\([^)]*"{f}"', src)]
         assert not stale, f"getattr still reaching demoted fields: {stale}"
 
