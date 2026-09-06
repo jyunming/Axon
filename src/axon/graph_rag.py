@@ -1231,10 +1231,7 @@ class GraphRagMixin:
                 ):
                     shard_names = list(self._rel_shard_names_cache)
                 else:
-                    if (
-                        bool(_gd.RELATION_SHARD_LIST_MANIFEST)
-                        and shards_list_manifest.exists()
-                    ):
+                    if bool(_gd.RELATION_SHARD_LIST_MANIFEST) and shards_list_manifest.exists():
                         shard_names = [
                             ln.strip()
                             for ln in shards_list_manifest.read_text(encoding="utf-8").splitlines()
@@ -1261,18 +1258,12 @@ class GraphRagMixin:
                         shard_raw = self._gr_json_load_path(shard_path)
                         return self._normalize_relation_graph(shard_raw)
 
-                    use_parallel = (
-                        bool(_gd.RELATION_SHARD_PARALLEL_LOAD)
-                        and len(shard_names) > 1
-                    )
+                    use_parallel = bool(_gd.RELATION_SHARD_PARALLEL_LOAD) and len(shard_names) > 1
                     if use_parallel:
                         from concurrent.futures import ThreadPoolExecutor
 
                         workers = min(
-                            int(
-                                _gd.RELATION_SHARD_LOAD_WORKERS
-                                or 4
-                            ),
+                            int(_gd.RELATION_SHARD_LOAD_WORKERS or 4),
                             len(shard_names),
                         )
                         workers = max(1, workers)
@@ -1285,19 +1276,13 @@ class GraphRagMixin:
                             part = _decode_shard(n)
                             for key, value in part.items():
                                 merged.setdefault(key, []).extend(value)
-                    if (
-                        bool(_gd.RELATION_PICKLE_CACHE)
-                        and cache_key
-                    ):
+                    if bool(_gd.RELATION_PICKLE_CACHE) and cache_key:
                         try:
                             import json as _json
                             import os as _os
                             import pickle as _pickle
 
-                            proto = int(
-                                _gd.RELATION_PICKLE_CACHE_PROTOCOL
-                                or 4
-                            )
+                            proto = int(_gd.RELATION_PICKLE_CACHE_PROTOCOL or 4)
                             proto = min(max(1, proto), 5)
                             # Audit P0: compute HMAC over the pickle bytes
                             # and store it in the meta file so _load can
@@ -1365,24 +1350,12 @@ class GraphRagMixin:
             "shard_persist": bool(_gd.RELATION_SHARD_PERSIST),
             "shard_count": int(_gd.RELATION_SHARD_COUNT or 16),
             "compact_persist": bool(_gd.RELATION_COMPACT_PERSIST),
-            "shard_selective_rewrite": bool(
-                _gd.RELATION_SHARD_SELECTIVE_REWRITE
-            ),
-            "shard_parallel_signatures": bool(
-                _gd.RELATION_SHARD_PARALLEL_SIGNATURES
-            ),
-            "shard_signature_workers": int(
-                _gd.RELATION_SHARD_SIGNATURE_WORKERS or 4
-            ),
-            "shard_parallel_writes": bool(
-                _gd.RELATION_SHARD_PARALLEL_WRITES
-            ),
-            "shard_write_workers": int(
-                _gd.RELATION_SHARD_WRITE_WORKERS or 4
-            ),
-            "shard_list_manifest": bool(
-                _gd.RELATION_SHARD_LIST_MANIFEST
-            ),
+            "shard_selective_rewrite": bool(_gd.RELATION_SHARD_SELECTIVE_REWRITE),
+            "shard_parallel_signatures": bool(_gd.RELATION_SHARD_PARALLEL_SIGNATURES),
+            "shard_signature_workers": int(_gd.RELATION_SHARD_SIGNATURE_WORKERS or 4),
+            "shard_parallel_writes": bool(_gd.RELATION_SHARD_PARALLEL_WRITES),
+            "shard_write_workers": int(_gd.RELATION_SHARD_WRITE_WORKERS or 4),
+            "shard_list_manifest": bool(_gd.RELATION_SHARD_LIST_MANIFEST),
             "msgpack_persist": bool(_gd.RELATION_MSGPACK_PERSIST),
         }
         future = self._persist_executor.submit(self._do_save_relation_graph, snapshot, rg_cfg)
@@ -4135,9 +4108,7 @@ class GraphRagMixin:
         """
         threshold = _gd.ENTITY_RESOLVE_THRESHOLD
         max_entities = _gd.ENTITY_RESOLVE_MAX
-        backend = str(
-            _gd.ENTITY_RESOLVE_BACKEND or "rust"
-        ).lower()
+        backend = str(_gd.ENTITY_RESOLVE_BACKEND or "rust").lower()
         keys = [k for k, v in self._entity_graph.items() if isinstance(v, dict)]
         n = len(keys)
         if n < 2:

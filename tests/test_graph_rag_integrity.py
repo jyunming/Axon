@@ -8,9 +8,15 @@ from axon.graph_rag import GraphRagMixin
 
 
 class MockConfig:
+    """Minimal stand-in for AxonConfig.
+
+    It carries only ``bm25_path`` since 0.5.0: the graph fields it used to
+    mirror are now graph_defaults constants, which the loader reads directly.
+    Tests that need a non-default value monkeypatch the constant.
+    """
+
     def __init__(self, bm25_path: str):
         self.bm25_path = bm25_path
-        # Defaults that match AxonConfig for graph fields the loader inspects.
 
 
 class TestGraphRagIntegrity:
