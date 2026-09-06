@@ -4,8 +4,10 @@ import inspect
 import os
 from unittest.mock import MagicMock, patch
 
+import pytest
 import yaml
 
+from axon import graph_defaults as _gd
 from axon.graph_backends.graphrag_engine import GraphRagEngine
 from tests._graphrag_engine_test_utils import (
     _bare_graphrag_engine,
@@ -3887,10 +3889,6 @@ class TestGraphRAGCommunity:
         brain._executor = SyncExecutor()
 
         class _Cfg:
-            graph_rag_global_min_score = 20
-
-            graph_rag_global_top_points = 50
-
             graph_rag_community_level = 0
 
         result = brain._global_search_map_reduce("test query", _Cfg())
@@ -3920,10 +3918,6 @@ class TestGraphRAGCommunity:
         brain._executor = SyncExecutor()
 
         class _Cfg:
-            graph_rag_global_min_score = 20
-
-            graph_rag_global_top_points = 50
-
             graph_rag_community_level = 0
 
             graph_rag_map_batch_size = 1  # use single-chunk mode so mock JSON format matches
@@ -4083,6 +4077,12 @@ class TestGraphRAGRealImplementation:
 
     """Tests for the 9 GraphRAG correctness gaps (GAPs 1-9)."""
 
+    @pytest.fixture(autouse=True)
+    def _graph_tuning(self, monkeypatch):
+        """Values this class's helpers used to set on config, before 0.5.0
+        demoted them to constants in axon/graph_defaults.py."""
+        monkeypatch.setattr(_gd, "LOCAL_CACHED_INCOMING", False)
+
     def _make_brain(self):
         """Return a MagicMock AxonBrain with real methods bound."""
 
@@ -4099,7 +4099,6 @@ class TestGraphRAGRealImplementation:
         # (.relation_graph.incoming.json under the real store) can leak
         # stale content across test runs — force the always-correct
         # in-memory scan fallback instead (graph_rag.py:873).
-        brain.config.graph_rag_local_cached_incoming = False
 
         brain.llm = MagicMock()
 
@@ -4215,13 +4214,7 @@ class TestGraphRAGRealImplementation:
         brain._executor = SyncExecutor()
 
         class _Cfg:
-            graph_rag_global_min_score = 20
-
-            graph_rag_global_top_points = 50
-
             graph_rag_community_level = 0
-
-            graph_rag_global_reduce_max_tokens = 8000
 
             graph_rag_map_batch_size = 1  # use single-chunk mode so mock JSON format matches
 
@@ -4256,20 +4249,15 @@ class TestGraphRAGRealImplementation:
         brain._executor = SyncExecutor()
 
         class _Cfg:
-            graph_rag_global_min_score = 20
-
-            graph_rag_global_top_points = 50
-
             graph_rag_community_level = 0
-
-            graph_rag_global_reduce_max_tokens = 8000
 
         result = brain._global_search_map_reduce("test query", _Cfg())
 
         assert result == _GRAPHRAG_NO_DATA_ANSWER
 
-    def test_global_search_token_budget_respected(self):
+    def test_global_search_token_budget_respected(self, monkeypatch):
         """With a very small reduce_max_tokens, reduce prompt is truncated to few analysts."""
+        monkeypatch.setattr(_gd, "GLOBAL_REDUCE_MAX_TOKENS", 10)
         brain = self._make_brain()
         summaries = {}
         for i in range(5):
@@ -4299,13 +4287,7 @@ class TestGraphRAGRealImplementation:
         brain._executor = SyncExecutor()
 
         class _Cfg:
-            graph_rag_global_min_score = 20
-
-            graph_rag_global_top_points = 50
-
             graph_rag_community_level = 0
-
-            graph_rag_global_reduce_max_tokens = 10
 
         brain._global_search_map_reduce("test query", _Cfg())
 
@@ -4552,6 +4534,12 @@ class TestGraphRAGAuditFixes:
 
     """Tests for GraphRAG audit fixes from GRAPHRAG_REAUDIT_2026_03_16_NEW_TASK_5."""
 
+    @pytest.fixture(autouse=True)
+    def _graph_tuning(self, monkeypatch):
+        """Values this class's helpers used to set on config, before 0.5.0
+        demoted them to constants in axon/graph_defaults.py."""
+        monkeypatch.setattr(_gd, "GLOBAL_MAX_MAP_CHUNKS", 0)
+
     def _make_brain(self):
         from axon.main import AxonBrain
 
@@ -4573,26 +4561,6 @@ class TestGraphRAGAuditFixes:
 
         brain.config.graph_rag_claims = False
 
-        brain.config.graph_rag_local_max_context_tokens = 8000
-
-        brain.config.graph_rag_local_community_prop = 0.25
-
-        brain.config.graph_rag_local_text_unit_prop = 0.5
-
-        brain.config.graph_rag_local_top_k_entities = 10
-
-        brain.config.graph_rag_local_top_k_relationships = 10
-
-        brain.config.graph_rag_local_include_relationship_weight = False
-
-        brain.config.graph_rag_local_entity_weight = 3.0
-
-        brain.config.graph_rag_local_relation_weight = 2.0
-
-        brain.config.graph_rag_local_community_weight = 1.5
-
-        brain.config.graph_rag_local_text_unit_weight = 1.0
-
         brain.config.graph_rag_community_min_size = 3
 
         brain.config.graph_rag_community_llm_top_n_per_level = 50
@@ -4610,8 +4578,6 @@ class TestGraphRAGAuditFixes:
         brain.config.graph_rag_map_use_dedicated_pool = False
 
         brain.config.graph_rag_map_auto_workers = 0
-
-        brain.config.graph_rag_global_max_map_chunks = 0
 
         brain.config.graph_rag_large_graph_threshold = 50000
 
@@ -4865,13 +4831,19 @@ class TestGraphRAGAuditFixes:
         assert len(result) == 1
         assert result[0]["strength"] == 5
 
-    def test_global_search_map_uses_chunks_not_raw_report(self):
-        """Global search map phase must chunk long reports so later content is not lost."""
+    def test_global_search_map_uses_chunks_not_raw_report(self, monkeypatch):
+        """Global search map phase must chunk long reports so later content is not lost.
+
+        Before 0.5.0 this passed for the wrong reason: ``brain.config`` is a
+        MagicMock, so ``int(getattr(cfg, "graph_rag_global_map_max_length", 500))``
+        read ``int(MagicMock())`` — which is 1 — giving a 4-character chunk
+        window rather than the 2000 the report length was chosen for. Pinning
+        the constant makes the window the one the test claims to exercise.
+        """
+        monkeypatch.setattr(_gd, "GLOBAL_MIN_SCORE", 0)
+        monkeypatch.setattr(_gd, "GLOBAL_MAP_MAX_LENGTH", 500)  # 500 * 4 = 2000 chars
         b = self._make_brain()
-        b.config.graph_rag_global_min_score = 0
-        b.config.graph_rag_global_top_points = 50
         b.config.graph_rag_community_level = 0
-        b.config.graph_rag_global_reduce_max_tokens = 8000
         # Build a report long enough to require chunking (>2000 chars)
         long_report = "Important fact: the answer is 42. " * 100  # ~3400 chars
         b._community_summaries = {
@@ -4967,6 +4939,15 @@ class TestGraphRAGTask6Fixes:
 
     """Tests for GraphRAG audit fixes from TASK_6."""
 
+    @pytest.fixture(autouse=True)
+    def _graph_tuning(self, monkeypatch):
+        """Values this class's helpers used to set on config, before 0.5.0
+        demoted them to constants in axon/graph_defaults.py."""
+        monkeypatch.setattr(_gd, "GLOBAL_MAP_MAX_LENGTH", 500)
+        monkeypatch.setattr(_gd, "GLOBAL_REDUCE_MAX_LENGTH", 500)
+        monkeypatch.setattr(_gd, "GLOBAL_MIN_SCORE", 0)
+        monkeypatch.setattr(_gd, "GLOBAL_MAX_MAP_CHUNKS", 0)
+
     def _make_brain(self):
         from axon.main import AxonBrain
 
@@ -4988,26 +4969,6 @@ class TestGraphRAGTask6Fixes:
 
         brain.config.graph_rag_claims = False
 
-        brain.config.graph_rag_local_max_context_tokens = 8000
-
-        brain.config.graph_rag_local_community_prop = 0.25
-
-        brain.config.graph_rag_local_text_unit_prop = 0.5
-
-        brain.config.graph_rag_local_top_k_entities = 10
-
-        brain.config.graph_rag_local_top_k_relationships = 10
-
-        brain.config.graph_rag_local_include_relationship_weight = False
-
-        brain.config.graph_rag_local_entity_weight = 3.0
-
-        brain.config.graph_rag_local_relation_weight = 2.0
-
-        brain.config.graph_rag_local_community_weight = 1.5
-
-        brain.config.graph_rag_local_text_unit_weight = 1.0
-
         brain.config.graph_rag_community_min_size = 3
 
         brain.config.graph_rag_community_llm_top_n_per_level = 50
@@ -5020,19 +4981,7 @@ class TestGraphRAGTask6Fixes:
 
         brain.config.raptor_min_source_size_mb = 0.0
 
-        brain.config.graph_rag_global_map_max_length = 500
-
-        brain.config.graph_rag_global_reduce_max_length = 500
-
-        brain.config.graph_rag_global_allow_general_knowledge = False
-
-        brain.config.graph_rag_global_min_score = 0
-
-        brain.config.graph_rag_global_top_points = 50
-
         brain.config.graph_rag_community_level = 0
-
-        brain.config.graph_rag_global_reduce_max_tokens = 8000
 
         brain._entity_graph = {}
 
@@ -5071,8 +5020,6 @@ class TestGraphRAGTask6Fixes:
         brain.config.graph_rag_map_use_dedicated_pool = False
 
         brain.config.graph_rag_map_auto_workers = 0
-
-        brain.config.graph_rag_global_max_map_chunks = 0
 
         brain._executor = SyncExecutor()
 
@@ -5358,11 +5305,11 @@ class TestGraphRAGTask6Fixes:
             tail in prompt
         ), "Context was hard-truncated at 3000 chars — tail of description not found in prompt"
 
-    def test_global_search_map_length_config_respected(self):
-        """graph_rag_global_map_max_length=100 must produce chunk size of ~400 chars."""
+    def test_global_search_map_length_config_respected(self, monkeypatch):
+        """GLOBAL_MAP_MAX_LENGTH=100 must produce chunk size of ~400 chars."""
 
+        monkeypatch.setattr(_gd, "GLOBAL_MAP_MAX_LENGTH", 100)  # 100 * 4 = 400 chars per chunk
         b = self._make_brain()
-        b.config.graph_rag_global_map_max_length = 100  # 100 * 4 = 400 chars per chunk
         # Disable LLM cache so each chunk (even with identical text) triggers a real llm.complete
         # call — otherwise the second and third identical "A"*400 chunks get a cache hit and
         # llm.complete is only called once, making the map-call count check unreliable.
@@ -5409,6 +5356,14 @@ class TestGraphRAGTask7Fixes:
 
     """Tests for GraphRAG runtime fixes from TASK_7."""
 
+    @pytest.fixture(autouse=True)
+    def _graph_tuning(self, monkeypatch):
+        """Values this class's helpers used to set on config, before 0.5.0
+        demoted them to constants in axon/graph_defaults.py."""
+        monkeypatch.setattr(_gd, "GLOBAL_MAP_MAX_LENGTH", 500)
+        monkeypatch.setattr(_gd, "GLOBAL_REDUCE_MAX_LENGTH", 500)
+        monkeypatch.setattr(_gd, "GLOBAL_MIN_SCORE", 0)
+
     def _make_brain(self):
         from axon.main import AxonBrain
 
@@ -5429,26 +5384,6 @@ class TestGraphRAGTask7Fixes:
         brain.config.graph_rag_community_include_claims = False
 
         brain.config.graph_rag_claims = False
-
-        brain.config.graph_rag_local_max_context_tokens = 8000
-
-        brain.config.graph_rag_local_community_prop = 0.25
-
-        brain.config.graph_rag_local_text_unit_prop = 0.5
-
-        brain.config.graph_rag_local_top_k_entities = 10
-
-        brain.config.graph_rag_local_top_k_relationships = 10
-
-        brain.config.graph_rag_local_include_relationship_weight = False
-
-        brain.config.graph_rag_local_entity_weight = 3.0
-
-        brain.config.graph_rag_local_relation_weight = 2.0
-
-        brain.config.graph_rag_local_community_weight = 1.5
-
-        brain.config.graph_rag_local_text_unit_weight = 1.0
 
         brain.config.graph_rag_community_min_size = 3
 
@@ -5474,19 +5409,7 @@ class TestGraphRAGTask7Fixes:
 
         brain.config.graph_rag_community = True
 
-        brain.config.graph_rag_global_map_max_length = 500
-
-        brain.config.graph_rag_global_reduce_max_length = 500
-
-        brain.config.graph_rag_global_allow_general_knowledge = False
-
-        brain.config.graph_rag_global_min_score = 0
-
-        brain.config.graph_rag_global_top_points = 50
-
         brain.config.graph_rag_community_level = 0
-
-        brain.config.graph_rag_global_reduce_max_tokens = 8000
 
         brain.config.graph_rag_index_community_reports = True
 
@@ -6755,26 +6678,6 @@ class TestFundamentalFixes:
 
         brain.config.graph_rag_exact_entity_boost = 3.0
 
-        brain.config.graph_rag_local_max_context_tokens = 8000
-
-        brain.config.graph_rag_local_community_prop = 0.25
-
-        brain.config.graph_rag_local_text_unit_prop = 0.5
-
-        brain.config.graph_rag_local_top_k_entities = 10
-
-        brain.config.graph_rag_local_top_k_relationships = 10
-
-        brain.config.graph_rag_local_include_relationship_weight = False
-
-        brain.config.graph_rag_local_entity_weight = 3.0
-
-        brain.config.graph_rag_local_relation_weight = 2.0
-
-        brain.config.graph_rag_local_community_weight = 1.5
-
-        brain.config.graph_rag_local_text_unit_weight = 1.0
-
         brain.config.graph_rag_community_min_size = 3
 
         brain.config.graph_rag_community_llm_top_n_per_level = 50
@@ -6959,9 +6862,11 @@ class TestFundamentalFixes:
     # ------------------------------------------------------------------
     # Step 2: Unified ranking
     # ------------------------------------------------------------------
-    def test_unified_ranking_no_section_cap(self):
+    def test_unified_ranking_no_section_cap(self, monkeypatch):
         """With tight token budget, a high-scoring text unit beats a low-scoring community."""
 
+        # Tight budget: only enough for 2-3 candidates.
+        monkeypatch.setattr(_gd, "LOCAL_MAX_CONTEXT_TOKENS", 30)
         brain = self._make_brain()
         # One entity, one community (low rank), one text unit with high relation count
         brain._entity_graph = {
@@ -6987,20 +6892,17 @@ class TestFundamentalFixes:
             return_value=[{"text": "High-value text unit content about alpha.", "id": "tu1"}]
         )
         # Use a tight budget: only enough for 2-3 candidates
-        brain.config.graph_rag_local_max_context_tokens = 30
-        brain.config.graph_rag_local_entity_weight = 3.0
-        brain.config.graph_rag_local_relation_weight = 2.0
-        brain.config.graph_rag_local_community_weight = 1.5
-        brain.config.graph_rag_local_text_unit_weight = 1.0
         ctx = _bare_graphrag_engine(brain)._local_search_context("alpha", ["alpha"], brain.config)
         # With unified ranking, text unit (score = 1.0 * 1.0) should appear even if community
         # would have consumed the budget first under fixed-split.
         # The key assertion: no hard floor for community means text_unit can appear.
         assert ctx != "", "Context must not be empty"
 
-    def test_unified_ranking_respects_token_budget(self):
-        """Total tokens in selected candidates must not exceed graph_rag_local_max_context_tokens."""
+    def test_unified_ranking_respects_token_budget(self, monkeypatch):
+        """Total tokens in selected candidates must not exceed LOCAL_MAX_CONTEXT_TOKENS."""
 
+        budget = 100
+        monkeypatch.setattr(_gd, "LOCAL_MAX_CONTEXT_TOKENS", budget)
         brain = self._make_brain()
         brain._entity_graph = {
             f"ent{i}": {
@@ -7018,8 +6920,6 @@ class TestFundamentalFixes:
         brain._community_summaries = {}
         brain.vector_store = MagicMock()
         brain.vector_store.get_by_ids = MagicMock(return_value=[])
-        budget = 100
-        brain.config.graph_rag_local_max_context_tokens = budget
         entities = list(brain._entity_graph.keys())
         ctx = _bare_graphrag_engine(brain)._local_search_context("entity", entities, brain.config)
         used_tokens = len(ctx) // 4
@@ -7323,9 +7223,12 @@ class TestRuntimeFixes:
     # Fix 4: Global search pre-filter
     # ------------------------------------------------------------------
     def test_global_top_communities_prefilter(
-        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, monkeypatch
     ):
         """graph_rag_global_top_communities=2 limits map phase to 2 communities (≤2 LLM calls)."""
+        monkeypatch.setattr(_gd, "GLOBAL_MIN_SCORE", 0)
+        monkeypatch.setattr(_gd, "GLOBAL_MAP_MAX_LENGTH", 500)
+        monkeypatch.setattr(_gd, "GLOBAL_REDUCE_MAX_LENGTH", 500)
         from axon.main import AxonBrain, AxonConfig
 
         brain = MagicMock(spec=AxonBrain)
@@ -7374,18 +7277,6 @@ class TestRuntimeFixes:
 
         class _Cfg:
             graph_rag_community_level = 0
-
-            graph_rag_global_min_score = 0
-
-            graph_rag_global_top_points = 50
-
-            graph_rag_global_map_max_length = 500
-
-            graph_rag_global_reduce_max_length = 500
-
-            graph_rag_global_allow_general_knowledge = False
-
-            graph_rag_global_reduce_max_tokens = 8000
 
             graph_rag_global_top_communities = 2
 
@@ -8044,6 +7935,16 @@ class TestMapReduceDedicatedPool:
 
     """Item 4 — graph_rag_map_workers set → dedicated ThreadPoolExecutor used."""
 
+    @pytest.fixture(autouse=True)
+    def _graph_tuning(self, monkeypatch):
+        """Values this class's helpers used to set on config, before 0.5.0
+        demoted them to constants in axon/graph_defaults.py."""
+        monkeypatch.setattr(_gd, "GLOBAL_MAX_MAP_CHUNKS", 0)
+        monkeypatch.setattr(_gd, "GLOBAL_MAP_MAX_LENGTH", 500)
+        monkeypatch.setattr(_gd, "GLOBAL_MIN_SCORE", 0)
+        monkeypatch.setattr(_gd, "GLOBAL_TOP_POINTS", 10)
+        monkeypatch.setattr(_gd, "GLOBAL_REDUCE_MAX_LENGTH", 500)
+
     def _make_cfg(self, map_workers=0):
         cfg = MagicMock()
 
@@ -8055,21 +7956,7 @@ class TestMapReduceDedicatedPool:
 
         cfg.graph_rag_map_auto_workers = map_workers
 
-        cfg.graph_rag_global_max_map_chunks = 0
-
-        cfg.graph_rag_global_map_max_length = 500
-
-        cfg.graph_rag_global_min_score = 0
-
-        cfg.graph_rag_global_top_points = 10
-
         cfg.graph_rag_community_level = 0
-
-        cfg.graph_rag_global_reduce_max_tokens = 8000
-
-        cfg.graph_rag_global_reduce_max_length = 500
-
-        cfg.graph_rag_global_allow_general_knowledge = False
 
         cfg.graph_rag_global_top_communities = 0
 
@@ -8246,6 +8133,15 @@ class TestLLMLinguaCompression:
 
     """Item 2 — graph_rag_report_compress=True → chunks compressed via LLMLingua."""
 
+    @pytest.fixture(autouse=True)
+    def _graph_tuning(self, monkeypatch):
+        """Values this class's helpers used to set on config, before 0.5.0
+        demoted them to constants in axon/graph_defaults.py."""
+        monkeypatch.setattr(_gd, "GLOBAL_MAP_MAX_LENGTH", 500)
+        monkeypatch.setattr(_gd, "GLOBAL_MIN_SCORE", 0)
+        monkeypatch.setattr(_gd, "GLOBAL_TOP_POINTS", 10)
+        monkeypatch.setattr(_gd, "GLOBAL_REDUCE_MAX_LENGTH", 500)
+
     def _make_brain(self):
         from axon.main import AxonBrain
 
@@ -8276,19 +8172,7 @@ class TestLLMLinguaCompression:
 
         cfg.graph_rag_map_workers = 0
 
-        cfg.graph_rag_global_map_max_length = 500
-
-        cfg.graph_rag_global_min_score = 0
-
-        cfg.graph_rag_global_top_points = 10
-
         cfg.graph_rag_community_level = 0
-
-        cfg.graph_rag_global_reduce_max_tokens = 8000
-
-        cfg.graph_rag_global_reduce_max_length = 500
-
-        cfg.graph_rag_global_allow_general_knowledge = False
 
         cfg.graph_rag_global_top_communities = 0
 
