@@ -34,6 +34,70 @@ Two rules for anything added here:
 
 from __future__ import annotations
 
+# ── Entity / relation extraction internals ──────────────────────────────────
+#
+# What stays a config field here is the switches and the backends: whether
+# relations are extracted at all, which backend does NER and relation
+# extraction (an install and offline-bundle decision), the per-ingest budget,
+# the entity-frequency floor, and the canonicalize / claims / entity-resolve
+# feature toggles. Model *ids* also stay fields — offline mode rewrites them
+# in place with a resolved local path (`main.py:_resolve_model_path`), which a
+# module constant could not carry per brain.
+
+#: Occurrences an entity description needs before canonicalisation rewrites it.
+CANONICALIZE_MIN_OCCURRENCES = 2
+#: Same floor for relation descriptions.
+CANONICALIZE_RELATIONS_MIN_OCCURRENCES = 2
+
+#: Match query entities to graph entities by embedding, not just by string.
+ENTITY_EMBEDDING_MATCH = True
+#: Cosine floor for that embedding match.
+ENTITY_MATCH_THRESHOLD = 0.5
+#: Score multiplier for an exact entity-name hit.
+EXACT_ENTITY_BOOST = 3.0
+
+#: Implementation backing entity-alias resolution.
+ENTITY_RESOLVE_BACKEND = "rust"
+#: Entity ceiling above which alias resolution is skipped as too costly.
+ENTITY_RESOLVE_MAX = 5000
+#: Cosine floor for treating two entity names as the same entity.
+ENTITY_RESOLVE_THRESHOLD = 0.92
+
+# ── Relation-graph persistence ──────────────────────────────────────────────
+#
+# How the relation graph is written to disk: sharding, worker counts and
+# serialisation format. None of it changes what Axon retrieves, and none of it
+# was documented anywhere.
+
+#: Store the relation graph in the compact on-disk form.
+RELATION_COMPACT_PERSIST = True
+#: Serialise relation shards with msgpack instead of JSON.
+#: The pre-0.5.0 getattr fallback for this said True while the field defaulted
+#: to False; False is the format that shipped.
+RELATION_MSGPACK_PERSIST = False
+#: Keep a pickle cache of the parsed relation graph.
+RELATION_PICKLE_CACHE = False
+#: Pickle protocol for that cache.
+RELATION_PICKLE_CACHE_PROTOCOL = 4
+
+#: Write the relation graph as shards rather than one file.
+RELATION_SHARD_PERSIST = False
+#: Number of shards when sharded persistence is on.
+RELATION_SHARD_COUNT = 16
+#: Maintain a manifest listing the shards.
+RELATION_SHARD_LIST_MANIFEST = True
+#: Rewrite only the shards whose contents changed.
+RELATION_SHARD_SELECTIVE_REWRITE = True
+#: Load shards concurrently, and with how many workers.
+RELATION_SHARD_PARALLEL_LOAD = True
+RELATION_SHARD_LOAD_WORKERS = 4
+#: Compute shard signatures concurrently, and with how many workers.
+RELATION_SHARD_PARALLEL_SIGNATURES = True
+RELATION_SHARD_SIGNATURE_WORKERS = 4
+#: Write shards concurrently, and with how many workers.
+RELATION_SHARD_PARALLEL_WRITES = True
+RELATION_SHARD_WRITE_WORKERS = 4
+
 # ── Community detection and summarisation ───────────────────────────────────
 #
 # The knobs an operator actually reaches for stay real config fields:

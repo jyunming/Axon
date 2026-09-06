@@ -1422,6 +1422,20 @@ class TestDemotedGraphTuning:
         assert _gd.LOCAL_COMMUNITY_WEIGHT == 1.5
         assert _gd.LOCAL_TEXT_UNIT_WEIGHT == 1.0
         assert _gd.LOCAL_EARLY_CUTOFF_FACTOR == 1.5
+        # Group B — community clustering. USE_LCC is the one that mattered:
+        # its old getattr fallback said True, which would have silently
+        # dropped every component outside the largest.
+        assert _gd.COMMUNITY_USE_LCC is False
+        assert _gd.COMMUNITY_MIN_SIZE == 3
+        assert _gd.COMMUNITY_LLM_MAX_TOTAL == 30
+        assert _gd.LEIDEN_SEED == 42
+        # Group C — extraction and relation persistence. MSGPACK_PERSIST is
+        # the inverted-fallback case here.
+        assert _gd.RELATION_MSGPACK_PERSIST is False
+        assert _gd.ENTITY_RESOLVE_THRESHOLD == 0.92
+        assert _gd.ENTITY_RESOLVE_MAX == 5000
+        assert _gd.ENTITY_MATCH_THRESHOLD == 0.5
+        assert _gd.RELATION_SHARD_COUNT == 16
 
     def test_no_module_reaches_demoted_fields_via_getattr(self):
         """A stale getattr would resurrect the old fallback, which often differed.

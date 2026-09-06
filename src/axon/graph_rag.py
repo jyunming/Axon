@@ -19,7 +19,7 @@ logger = logging.getLogger("Axon")
 # Pickle-cache HMAC helpers (audit P0: prevent untrusted pickle deserialization).
 #
 # The relation-graph pickle cache (.relation_graph.cache.pkl) is an opt-in perf
-# optimization (graph_rag_relation_pickle_cache, default False). pickle.load on
+# optimization (graph_defaults.RELATION_PICKLE_CACHE, default False). pickle.load on
 # attacker-controlled bytes is RCE; when bm25_path is on a shared / cloud-synced
 # directory, an attacker who can write that file gets RCE on every load.
 #
@@ -1153,7 +1153,7 @@ class GraphRagMixin:
         )
         bridge = get_rust_bridge()
         if (
-            bool(getattr(self.config, "graph_rag_relation_msgpack_persist", True))
+            bool(_gd.RELATION_MSGPACK_PERSIST)
             and mp_path.exists()
             and bridge.can_relation_graph_codec()
         ):
@@ -1169,7 +1169,7 @@ class GraphRagMixin:
         if shards_manifest.exists():
             try:
                 cache_key = None
-                if bool(getattr(self.config, "graph_rag_relation_pickle_cache", False)):
+                if bool(_gd.RELATION_PICKLE_CACHE):
                     try:
                         if shard_state_path.exists():
                             _state = self._gr_json_load_path(shard_state_path)
@@ -1232,7 +1232,7 @@ class GraphRagMixin:
                     shard_names = list(self._rel_shard_names_cache)
                 else:
                     if (
-                        bool(getattr(self.config, "graph_rag_relation_shard_list_manifest", True))
+                        bool(_gd.RELATION_SHARD_LIST_MANIFEST)
                         and shards_list_manifest.exists()
                     ):
                         shard_names = [
@@ -1262,7 +1262,7 @@ class GraphRagMixin:
                         return self._normalize_relation_graph(shard_raw)
 
                     use_parallel = (
-                        bool(getattr(self.config, "graph_rag_relation_shard_parallel_load", True))
+                        bool(_gd.RELATION_SHARD_PARALLEL_LOAD)
                         and len(shard_names) > 1
                     )
                     if use_parallel:
@@ -1270,7 +1270,7 @@ class GraphRagMixin:
 
                         workers = min(
                             int(
-                                getattr(self.config, "graph_rag_relation_shard_load_workers", 4)
+                                _gd.RELATION_SHARD_LOAD_WORKERS
                                 or 4
                             ),
                             len(shard_names),
@@ -1286,7 +1286,7 @@ class GraphRagMixin:
                             for key, value in part.items():
                                 merged.setdefault(key, []).extend(value)
                     if (
-                        bool(getattr(self.config, "graph_rag_relation_pickle_cache", False))
+                        bool(_gd.RELATION_PICKLE_CACHE)
                         and cache_key
                     ):
                         try:
@@ -1295,7 +1295,7 @@ class GraphRagMixin:
                             import pickle as _pickle
 
                             proto = int(
-                                getattr(self.config, "graph_rag_relation_pickle_cache_protocol", 4)
+                                _gd.RELATION_PICKLE_CACHE_PROTOCOL
                                 or 4
                             )
                             proto = min(max(1, proto), 5)
@@ -1362,28 +1362,28 @@ class GraphRagMixin:
         cfg = self.config
         rg_cfg = {
             "bm25_path": cfg.bm25_path,
-            "shard_persist": bool(getattr(cfg, "graph_rag_relation_shard_persist", False)),
-            "shard_count": int(getattr(cfg, "graph_rag_relation_shard_count", 16) or 16),
-            "compact_persist": bool(getattr(cfg, "graph_rag_relation_compact_persist", True)),
+            "shard_persist": bool(_gd.RELATION_SHARD_PERSIST),
+            "shard_count": int(_gd.RELATION_SHARD_COUNT or 16),
+            "compact_persist": bool(_gd.RELATION_COMPACT_PERSIST),
             "shard_selective_rewrite": bool(
-                getattr(cfg, "graph_rag_relation_shard_selective_rewrite", True)
+                _gd.RELATION_SHARD_SELECTIVE_REWRITE
             ),
             "shard_parallel_signatures": bool(
-                getattr(cfg, "graph_rag_relation_shard_parallel_signatures", True)
+                _gd.RELATION_SHARD_PARALLEL_SIGNATURES
             ),
             "shard_signature_workers": int(
-                getattr(cfg, "graph_rag_relation_shard_signature_workers", 4) or 4
+                _gd.RELATION_SHARD_SIGNATURE_WORKERS or 4
             ),
             "shard_parallel_writes": bool(
-                getattr(cfg, "graph_rag_relation_shard_parallel_writes", True)
+                _gd.RELATION_SHARD_PARALLEL_WRITES
             ),
             "shard_write_workers": int(
-                getattr(cfg, "graph_rag_relation_shard_write_workers", 4) or 4
+                _gd.RELATION_SHARD_WRITE_WORKERS or 4
             ),
             "shard_list_manifest": bool(
-                getattr(cfg, "graph_rag_relation_shard_list_manifest", True)
+                _gd.RELATION_SHARD_LIST_MANIFEST
             ),
-            "msgpack_persist": bool(getattr(cfg, "graph_rag_relation_msgpack_persist", True)),
+            "msgpack_persist": bool(_gd.RELATION_MSGPACK_PERSIST),
         }
         future = self._persist_executor.submit(self._do_save_relation_graph, snapshot, rg_cfg)
         self._track_persist_future(future)
@@ -3063,7 +3063,7 @@ class GraphRagMixin:
         community_weight = _gd.LOCAL_COMMUNITY_WEIGHT
         text_unit_weight = _gd.LOCAL_TEXT_UNIT_WEIGHT
         _query_tokens = set(query.lower().split()) | set(_re.split(r"[\s\W_]+", query.lower()))
-        _boost = getattr(self.config, "graph_rag_exact_entity_boost", 3.0)
+        _boost = _gd.EXACT_ENTITY_BOOST
         _fast_degree = bool(_gd.LOCAL_ENTITY_DEGREE_FAST)
         _incoming_count_map: dict[str, int] = {}
         if _fast_degree:
@@ -4055,7 +4055,7 @@ class GraphRagMixin:
                         continue
                     sim = float(np.dot(q_vec, ev) / (q_norm * ev_norm))
                     scored.append((sim, entity_key))
-                threshold = getattr(self.config, "graph_rag_entity_match_threshold", 0.5)
+                threshold = _gd.ENTITY_MATCH_THRESHOLD
                 scored = [(s, k) for s, k in scored if s >= threshold]
                 scored.sort(reverse=True)
                 return [k for _, k in scored[:top_k]]
@@ -4128,15 +4128,15 @@ class GraphRagMixin:
     def _resolve_entity_aliases(self) -> int:
         """Merge semantically equivalent entity nodes into a single canonical node (P1).
         Uses cosine similarity on entity-name embeddings from the active embedding model.
-        Entities whose name-embeddings exceed ``graph_rag_entity_resolve_threshold`` are
+        Entities whose name-embeddings exceed ``graph_defaults.ENTITY_RESOLVE_THRESHOLD`` are
         grouped; within each group the node with the most chunk_ids becomes canonical and
         all alias nodes are merged into it (chunk_ids, description, relations).
         Returns the number of alias nodes merged (0 if nothing to merge).
         """
-        threshold = getattr(self.config, "graph_rag_entity_resolve_threshold", 0.92)
-        max_entities = getattr(self.config, "graph_rag_entity_resolve_max", 5000)
+        threshold = _gd.ENTITY_RESOLVE_THRESHOLD
+        max_entities = _gd.ENTITY_RESOLVE_MAX
         backend = str(
-            getattr(self.config, "graph_rag_entity_resolve_backend", "rust") or "rust"
+            _gd.ENTITY_RESOLVE_BACKEND or "rust"
         ).lower()
         keys = [k for k, v in self._entity_graph.items() if isinstance(v, dict)]
         n = len(keys)
@@ -4145,7 +4145,8 @@ class GraphRagMixin:
         if n > max_entities:
             logger.warning(
                 "GraphRAG entity resolution: entity graph has %d nodes (limit=%d). "
-                "Skipping alias resolution — increase graph_rag_entity_resolve_max to enable.",
+                "Skipping alias resolution — the graph is larger than the pairwise "
+                "similarity pass is affordable on.",
                 n,
                 max_entities,
             )
@@ -4258,7 +4259,7 @@ class GraphRagMixin:
 
     def _canonicalize_entity_descriptions(self) -> None:
         """Synthesize canonical descriptions for entities with multiple descriptions (Item 10)."""
-        min_occ = getattr(self.config, "graph_rag_canonicalize_min_occurrences", 3)
+        min_occ = _gd.CANONICALIZE_MIN_OCCURRENCES
         to_canonicalize = {
             k: descs
             for k, descs in self._entity_description_buffer.items()
@@ -4307,7 +4308,7 @@ class GraphRagMixin:
         """Synthesize canonical descriptions for repeated (subject, object) pairs (GAP 3b)."""
         if not getattr(self.config, "graph_rag_canonicalize_relations", False):
             return
-        min_occ = getattr(self.config, "graph_rag_canonicalize_relations_min_occurrences", 2)
+        min_occ = _gd.CANONICALIZE_RELATIONS_MIN_OCCURRENCES
         to_canonicalize = {
             pair: descs
             for pair, descs in self._relation_description_buffer.items()

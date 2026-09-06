@@ -3,6 +3,7 @@ import pickle
 
 import pytest
 
+from axon import graph_defaults as _gd
 from axon.graph_rag import GraphRagMixin
 
 
@@ -10,13 +11,6 @@ class MockConfig:
     def __init__(self, bm25_path: str):
         self.bm25_path = bm25_path
         # Defaults that match AxonConfig for graph fields the loader inspects.
-        self.graph_rag_relation_msgpack_persist = True
-        self.graph_rag_relation_pickle_cache = False
-        self.graph_rag_relation_pickle_cache_protocol = 4
-        self.graph_rag_relation_shard_list_manifest = True
-        self.graph_rag_relation_shard_parallel_load = True
-        self.graph_rag_relation_shard_load_workers = 4
-        self.graph_rag_relation_shard_persist = False
 
 
 class TestGraphRagIntegrity:
@@ -133,6 +127,8 @@ class TestRelationPickleCacheHmac:
         # Pin Path.home() so the HMAC key lands in tmp_path and the test
         # doesn't pollute the developer's real ~/.axon.
         monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "home")
+        # The cache is opt-in and ships off; this suite exists to test it.
+        monkeypatch.setattr(_gd, "RELATION_PICKLE_CACHE", True)
 
         class Brain(GraphRagMixin):
             def __init__(self, config):
@@ -141,8 +137,6 @@ class TestRelationPickleCacheHmac:
                 self._relation_graph = {}
 
         cfg = MockConfig(str(tmp_path))
-        cfg.graph_rag_relation_pickle_cache = True
-        cfg.graph_rag_relation_msgpack_persist = False
         return Brain(cfg)
 
     def _seed_shards_with_cache(self, brain, tmp_path, payload):

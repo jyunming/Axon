@@ -701,7 +701,7 @@ class GraphRagEngine(GraphRagMixin):
                         self._relation_graph.get(entity_key, [])
                     )
             # Item 5: Embed entity descriptions for query-time matching
-            if getattr(self.config, "graph_rag_entity_embedding_match", True):
+            if _gd.ENTITY_EMBEDDING_MATCH:
                 entity_keys_this_batch = list(
                     {ent["name"].lower() for ent in entities_extracted_this_run if ent.get("name")}
                 )
@@ -792,7 +792,7 @@ class GraphRagEngine(GraphRagMixin):
         # LLM extraction captures exact textual mentions; embedding matching adds semantic neighbors.
         query_entities = self._extract_entities(query)
         if (
-            getattr(self.config, "graph_rag_entity_embedding_match", True)
+            _gd.ENTITY_EMBEDDING_MATCH
             and self._entity_embeddings
         ):
             matched_keys = self._match_entities_by_embedding(query)

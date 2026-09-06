@@ -3925,7 +3925,6 @@ class TestGraphRAGCommunity:
         brain = self._make_brain()
         brain._entity_embeddings = {"openai": [0.1, 0.2, 0.3]}
         brain.embedding.embed_query.return_value = [0.1, 0.2, 0.3]
-        brain.config.graph_rag_entity_match_threshold = 0.5
         result = brain._match_entities_by_embedding("openai query")
         assert "openai" in result
 
@@ -4033,8 +4032,9 @@ class TestGraphRAGCommunity:
         ids_passed = call_args[0][0]
         assert any("__community__" in id_ for id_ in ids_passed)
 
-    def test_canonicalize_entity_descriptions(self):
+    def test_canonicalize_entity_descriptions(self, monkeypatch):
         """_canonicalize_entity_descriptions updates entity graph with synthesized description."""
+        monkeypatch.setattr(_gd, "CANONICALIZE_MIN_OCCURRENCES", 3)
         brain = self._make_brain()
         brain._entity_graph = {
             "openai": {
@@ -4046,7 +4046,6 @@ class TestGraphRAGCommunity:
             }
         }
         brain._entity_description_buffer = {"openai": ["AI company", "Research org", "GPT maker"]}
-        brain.config.graph_rag_canonicalize_min_occurrences = 3
         brain.llm.complete.return_value = "Leading AI research organization"
         brain._executor = SyncExecutor()
         brain._canonicalize_entity_descriptions()
@@ -4873,7 +4872,6 @@ class TestGraphRAGAuditFixes:
         """_expand_with_entity_graph must union LLM-extracted and embedding-matched entities."""
 
         b = self._make_brain()
-        b.config.graph_rag_entity_embedding_match = True
         b.config.graph_rag_relations = False
         b.config.graph_rag_budget = 3
         b.config.top_k = 3
@@ -5347,8 +5345,6 @@ class TestGraphRAGTask7Fixes:
 
         brain.config.raptor_min_source_size_mb = 0.0
 
-        brain.config.graph_rag_exact_entity_boost = 3.0
-
         brain.config.graph_rag_community_defer = False
 
         brain.config.graph_rag_include_raptor_summaries = False
@@ -5443,7 +5439,7 @@ class TestGraphRAGTask7Fixes:
         query = "service_17"
         # Mirror the production token-building logic: whitespace split + regex split
         query_tokens = set(query.lower().split()) | set(_re.split(r"[\s\W_]+", query.lower()))
-        boost = b.config.graph_rag_exact_entity_boost
+        boost = _gd.EXACT_ENTITY_BOOST
 
         def _entity_degree(ent):
             outgoing = len(b._relation_graph.get(ent.lower(), []))
@@ -5474,7 +5470,7 @@ class TestGraphRAGTask7Fixes:
         matched = ["alpha", "beta"]
         query = "some unrelated query"
         query_tokens = set(_re.split(r"[\s\W_]+", query.lower()))
-        boost = b.config.graph_rag_exact_entity_boost
+        boost = _gd.EXACT_ENTITY_BOOST
 
         def _entity_degree(ent):
             return len(b._relation_graph.get(ent.lower(), []))
@@ -6626,8 +6622,6 @@ class TestFundamentalFixes:
         brain = MagicMock(spec=AxonBrain)
 
         brain.config = MagicMock()
-
-        brain.config.graph_rag_exact_entity_boost = 3.0
 
         brain.config.graph_rag_community_lazy = False
 
@@ -8649,6 +8643,12 @@ class TestEntityAliasResolution:
 
     """Tests for P1 — semantic entity alias resolution."""
 
+    @pytest.fixture(autouse=True)
+    def _graph_tuning(self, monkeypatch):
+        """Values this class used to set on config, before 0.5.0
+        demoted them to graph_defaults constants."""
+        monkeypatch.setattr(_gd, "ENTITY_RESOLVE_THRESHOLD", 0.90)
+
     def _make_brain(self, tmp_path, **cfg_kwargs):
         from unittest.mock import MagicMock
 
@@ -8689,7 +8689,6 @@ class TestEntityAliasResolution:
         brain = self._make_brain(
             tmp_path,
             graph_rag_entity_resolve=True,
-            graph_rag_entity_resolve_threshold=0.90,
         )
         brain._entity_graph = {
             "apple inc": {
@@ -8716,7 +8715,6 @@ class TestEntityAliasResolution:
         brain = self._make_brain(
             tmp_path,
             graph_rag_entity_resolve=True,
-            graph_rag_entity_resolve_threshold=0.90,
         )
         brain._entity_graph = {
             "apple": {"chunk_ids": ["c1"], "description": "Fruit", "type": "CONCEPT"},
@@ -8744,7 +8742,6 @@ class TestEntityAliasResolution:
         brain = self._make_brain(
             tmp_path,
             graph_rag_entity_resolve=True,
-            graph_rag_entity_resolve_threshold=0.90,
         )
         brain._entity_graph = {
             "apple inc": {"chunk_ids": ["c1", "c2"], "description": "Tech", "type": "ORGANIZATION"},
@@ -8777,7 +8774,6 @@ class TestEntityAliasResolution:
         brain = self._make_brain(
             tmp_path,
             graph_rag_entity_resolve=True,
-            graph_rag_entity_resolve_threshold=0.90,
         )
         brain._entity_graph = {
             "apple inc": {"chunk_ids": ["c1", "c2"], "description": "Tech", "type": "ORGANIZATION"},
@@ -8802,12 +8798,12 @@ class TestEntityAliasResolution:
         assert "apple inc" in brain._relation_graph
         assert len(brain._relation_graph["apple inc"]) == 1
 
-    def test_skips_when_entity_count_exceeds_max(self, tmp_path):
-        """Returns 0 and logs warning when entity count exceeds graph_rag_entity_resolve_max."""
+    def test_skips_when_entity_count_exceeds_max(self, tmp_path, monkeypatch):
+        """Returns 0 and logs warning when entity count exceeds ENTITY_RESOLVE_MAX."""
+        monkeypatch.setattr(_gd, "ENTITY_RESOLVE_MAX", 2)
         brain = self._make_brain(
             tmp_path,
             graph_rag_entity_resolve=True,
-            graph_rag_entity_resolve_max=2,
         )
         # 3 entities > max of 2
         brain._entity_graph = {
@@ -8832,13 +8828,17 @@ class TestEntityAliasResolution:
         brain.embedding.embed.assert_not_called()
 
     def test_config_defaults(self):
-        """Default config has entity_resolve=False with sensible thresholds."""
+        """entity_resolve ships off.
+
+        Its threshold and ceiling became graph_defaults constants in 0.5.0 and
+        are asserted in test_config.py::TestDemotedGraphTuning — not here,
+        because this class's autouse fixture pins the threshold to exercise
+        merging, so a shipped-default assertion in this class would read the
+        patched value.
+        """
         from axon.main import AxonConfig
 
-        cfg = AxonConfig()
-        assert cfg.graph_rag_entity_resolve is False
-        assert cfg.graph_rag_entity_resolve_threshold == 0.92
-        assert cfg.graph_rag_entity_resolve_max == 5000
+        assert AxonConfig().graph_rag_entity_resolve is False
 
     def test_rebuild_communities_calls_resolve_when_enabled(self, tmp_path):
         """_rebuild_communities() calls _resolve_entity_aliases() when entity_resolve=True."""

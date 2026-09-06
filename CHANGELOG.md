@@ -67,6 +67,30 @@ never reaches. Nothing a default install can do was removed.
   of them as fixes; removing them would take away the way out of a problem
   rather than making the tool lighter.
 
+- **22 more GraphRAG extraction and relation-persistence config keys are
+  removed.** Thirteen concern how the relation graph is written to disk —
+  `graph_rag_relation_shard_*` (shard count, manifest, selective rewrite, and
+  three parallel/worker pairs), `_relation_compact_persist`,
+  `_relation_msgpack_persist`, `_relation_pickle_cache` and its protocol. The
+  rest are extraction internals: the canonicalisation occurrence floors, the
+  entity embedding-match toggle and threshold, `graph_rag_exact_entity_boost`,
+  and entity-resolution's backend, ceiling and similarity threshold. None was
+  in `_KNOWN_YAML_KEYS`, in `/config/get`, or in any doc.
+
+  The switches and backends stay: `graph_rag_relations`,
+  `_relation_backend`, `_ner_backend`, `_relation_budget`,
+  `_entity_min_frequency`, `_canonicalize`, `_canonicalize_relations`,
+  `_claims`, `_entity_resolve` and `_min_entities_for_relations`.
+  `docs/OFFLINE_GUIDE.md` and `docs/TROUBLESHOOTING.md` both walk operators
+  through choosing a backend, and `_relation_budget` is the documented cost
+  lever.
+
+  Model ids (`graph_rag_gliner_model`, `_rebel_model`, `_llmlingua_model`)
+  also stay fields, for a mechanical reason rather than a documentary one:
+  offline mode rewrites them in place with a resolved local path
+  (`main.py:_resolve_model_path`), which a module constant cannot carry per
+  brain instance.
+
 ### 🐛 Fixes
 
 - **`validate()` reported working config keys as typos, and misnamed the fix.**
