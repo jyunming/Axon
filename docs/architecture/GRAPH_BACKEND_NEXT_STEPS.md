@@ -368,10 +368,10 @@ pick any subset, they don't block anything.
 - `tests/test_api_e2e.py:42` — stale skip reason references a "Phase 5
   refactor" that's already done; the audit found the test actually passes
   now. Verify and remove the skip.
-- `tests/test_sparse_retrieval.py:461` — uses `skipif(True, ...)`, meaning
-  it has never actually run in CI since it was written. Either env-gate it
-  properly (matching how other slow/optional tests are marked, e.g.
-  `@pytest.mark.slow`) or delete it if it's no longer relevant.
+- ~~`tests/test_sparse_retrieval.py:461` — uses `skipif(True, ...)`, meaning
+  it has never actually run in CI since it was written.~~ **Resolved in 0.5.0**:
+  the whole SPLADE feature was removed, and this test file with it. The dead
+  `skipif(True, ...)` was itself the evidence the feature was never exercised.
 - CI: the mypy and Rust-extension-import steps run with
   `continue-on-error: true`, and bandit findings currently can't fail CI
   (only `pip-audit` can). Not necessarily bugs — flagged by the audit as

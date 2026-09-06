@@ -500,38 +500,6 @@ Your primary goal is to help the user by answering questions based on the provid
         # so ingest(), dedup, and GraphRAG always write to the right place.
         self._own_vector_store: OpenVectorStore = self.vector_store
         self._own_bm25 = self.bm25
-        # Optional learned-sparse retriever (Phase 1 — SPLADE).
-        # Gated on cfg.sparse_retrieval; the SPLADE model + transformers/torch are
-        # only imported here to keep startup fast and the dep optional.
-        self._sparse_retriever = None
-        if getattr(self.config, "sparse_retrieval", False):
-            try:
-                from axon.sparse_retrieval import SpladeSparseRetriever
-
-                _sparse_dir = os.path.join(self.config.bm25_path, "sparse_index")
-                self._sparse_retriever = SpladeSparseRetriever(
-                    storage_path=_sparse_dir,
-                    model=getattr(
-                        self.config,
-                        "sparse_model",
-                        "naver/splade-cocondenser-ensembledistil",
-                    ),
-                )
-            except ImportError as exc:
-                logger.warning(
-                    "Sparse retrieval requested but optional dep is missing (%s). "
-                    "Install with: pip install axon-rag[sparse]. "
-                    "Falling back to dense+BM25 only.",
-                    exc,
-                )
-                self._sparse_retriever = None
-            except Exception as exc:
-                logger.warning(
-                    "Failed to initialise SpladeSparseRetriever: %s. "
-                    "Falling back to dense+BM25 only.",
-                    exc,
-                )
-                self._sparse_retriever = None
         try:
             if self.config.chunk_strategy == "semantic":
                 from axon.splitters import SemanticTextSplitter
@@ -1768,9 +1736,6 @@ Your primary goal is to help the user by answering questions based on the provid
             if self._own_bm25:
                 self._own_bm25.flush()
                 logger.info("finalize_ingest: BM25 corpus flushed.")
-            if getattr(self, "_sparse_retriever", None) is not None:
-                self._sparse_retriever.save()
-                logger.info("finalize_ingest: sparse index flushed.")
             if self._code_graph.get("nodes"):
                 self._save_code_graph()
                 logger.info("finalize_ingest: code graph saved.")
@@ -2564,14 +2529,6 @@ Your primary goal is to help the user by answering questions based on the provid
         n_chunks = len(documents)
         if self._own_bm25:
             self._own_bm25.add_documents(documents, save_deferred=_defer_saves)
-        # Optional learned-sparse index (Phase 1 — SPLADE).
-        # Populated only when cfg.sparse_retrieval is true; failures are logged
-        # but never abort the ingest pipeline.
-        if getattr(self, "_sparse_retriever", None) is not None:
-            try:
-                self._sparse_retriever.add(documents, save=not _defer_saves)
-            except Exception as exc:
-                logger.warning("Sparse retriever add() failed: %s", exc)
         ids = [d["id"] for d in documents]
         texts = [d["text"] for d in documents]
         metadatas = [d.get("metadata", {}) for d in documents]

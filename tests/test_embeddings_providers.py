@@ -348,7 +348,7 @@ class TestBGEM3FastEmbed:
         """sentence-transformers left the base install in 0.5.0, so a user who
         selects that provider without the extra must get an actionable error
         naming the extra — not a bare ModuleNotFoundError from deep in the
-        loader. Matches the guarded-import pattern in sparse_retrieval.py."""
+        loader, matching the guarded-import pattern used across optional deps."""
         from axon.embeddings import OpenEmbedding
 
         cfg = _make_config(

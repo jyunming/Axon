@@ -8,6 +8,14 @@ never reaches. Nothing a default install can do was removed.
 
 ### 💥 Breaking
 
+- **SPLADE learned sparse retrieval is removed**, along with the `[sparse]`
+  extra and the `rag.sparse_retrieval` / `rag.sparse_model` / `rag.sparse_weight`
+  config keys. It was never enabled in five months of use and had no
+  REST/MCP/CLI/REPL surface. Retrieval falls back to the dense + BM25 hybrid it
+  already used by default. A config that still sets those keys keeps loading —
+  they are ignored, and both `axon --doctor` and the startup log now say so
+  explicitly rather than dropping them silently.
+
 - **`axon-ui` (the Streamlit UI) is removed**, along with `webapp.py`, the
   `[ui]` extra, the `streamlit` dependency, the `axon-ui` docker-compose
   service, and the `run-ui` Make target. 0.4.3 deprecated it and warned it

@@ -1313,6 +1313,57 @@ class TestLoad:
 # ===========================================================================
 
 
+class TestRemovedFields:
+    """Keys removed in a past release must announce themselves.
+
+    Regression: dropping the sparse_retrieval / sparse_model / sparse_weight
+    dataclass fields made load() filter them out against valid_fields with no
+    log at all, so a user upgrading with ``rag.sparse_retrieval: true`` silently
+    lost SPLADE and saw retrieval behaviour change with zero signal. validate()
+    also reported it as an unknown key with a difflib "Did you mean...?", which
+    reads like a typo rather than a removed feature.
+    """
+
+    def _cfg(self, tmp_path, body: str) -> str:
+        p = tmp_path / "config.yaml"
+        p.write_text(body, encoding="utf-8")
+        return str(p)
+
+    def test_load_still_succeeds_with_a_removed_key(self, tmp_path):
+        from axon.config import AxonConfig
+
+        path = self._cfg(tmp_path, "rag:\n  sparse_retrieval: true\n  top_k: 5\n")
+        cfg = AxonConfig.load(path)
+        assert cfg.top_k == 5
+
+    def test_load_warns_that_the_key_was_removed(self, tmp_path, caplog):
+        import logging
+
+        from axon.config import AxonConfig
+
+        path = self._cfg(tmp_path, "rag:\n  sparse_retrieval: true\n")
+        with caplog.at_level(logging.WARNING):
+            AxonConfig.load(path)
+        assert any("removed in 0.5.0" in r.message for r in caplog.records)
+
+    def test_validate_says_removed_not_did_you_mean(self, tmp_path):
+        from axon.config import AxonConfig
+
+        path = self._cfg(tmp_path, "rag:\n  sparse_retrieval: true\n")
+        match = [i for i in AxonConfig.validate(path) if i.field == "sparse_retrieval"]
+        assert match, "removed key produced no issue"
+        assert "no longer a valid key" in match[0].message
+        assert "Did you mean" not in (match[0].suggestion or "")
+
+    def test_a_genuine_typo_still_gets_a_suggestion(self, tmp_path):
+        """The removed-key branch must not swallow the typo branch."""
+        from axon.config import AxonConfig
+
+        path = self._cfg(tmp_path, "rag:\n  top_kk: 5\n")
+        match = [i for i in AxonConfig.validate(path) if i.field == "top_kk"]
+        assert match and "Did you mean" in (match[0].suggestion or "")
+
+
 class TestPostInit:
     """Tests for __post_init__ environment-variable handling."""
 
