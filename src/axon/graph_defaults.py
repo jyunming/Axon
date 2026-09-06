@@ -34,6 +34,43 @@ Two rules for anything added here:
 
 from __future__ import annotations
 
+# ── Community detection and summarisation ───────────────────────────────────
+#
+# The knobs an operator actually reaches for stay real config fields:
+# graph_rag_community (on/off), _async, _backend (louvain vs leidenalg — an
+# install choice), _defer and _lazy (when the LLM work happens), and _levels.
+# TROUBLESHOOTING.md names several of those as fixes. What is left here is the
+# shape of the clustering itself.
+
+#: Leiden/Louvain maximum cluster size.
+COMMUNITY_MAX_CLUSTER_SIZE = 10
+#: Restrict clustering to the largest connected component.
+#: The pre-0.5.0 getattr fallback for this said True while the field defaulted
+#: to False; False is the behaviour that shipped.
+COMMUNITY_USE_LCC = False
+#: Seed for Leiden, so community ids are reproducible across runs.
+LEIDEN_SEED = 42
+
+#: Communities smaller than this get a template summary, never an LLM call.
+COMMUNITY_MIN_SIZE = 3
+#: Per-level ceiling on LLM-summarised communities (0 = unlimited).
+COMMUNITY_LLM_TOP_N_PER_LEVEL = 15
+#: Ceiling on LLM calls across all levels (0 = unlimited).
+COMMUNITY_LLM_MAX_TOTAL = 30
+#: Token budget for the context handed to community summarisation.
+COMMUNITY_MAX_CONTEXT_TOKENS = 4000
+#: Include extracted claims in community reports.
+COMMUNITY_INCLUDE_CLAIMS = False
+
+#: Hierarchy level global search reads when none is requested.
+COMMUNITY_LEVEL = 0
+#: Index community reports into the vector store so they are retrievable.
+INDEX_COMMUNITY_REPORTS = True
+#: Store community summaries in the compact on-disk form.
+COMMUNITY_SUMMARY_COMPACT_PERSIST = True
+#: Seconds to coalesce repeated community rebuild requests.
+COMMUNITY_REBUILD_DEBOUNCE_S = 2.0
+
 # ── Global search: map-reduce over community summaries ──────────────────────
 
 #: Minimum map-phase score for a point to survive into the reduce phase.

@@ -127,14 +127,10 @@ class TestAxonConfig:
         assert AxonConfig().graph_rag_gliner_model == "urchade/gliner_medium-v2.1"
 
     def test_community_top_n_default(self):
-        from axon.main import AxonConfig
-
-        assert AxonConfig().graph_rag_community_llm_top_n_per_level == 15
+        assert _gd.COMMUNITY_LLM_TOP_N_PER_LEVEL == 15
 
     def test_community_max_total_default(self):
-        from axon.main import AxonConfig
-
-        assert AxonConfig().graph_rag_community_llm_max_total == 30
+        assert _gd.COMMUNITY_LLM_MAX_TOTAL == 30
 
     def test_local_assets_only_default(self):
         from axon.main import AxonConfig
@@ -3789,7 +3785,6 @@ class TestGraphRAGCommunity:
         # graph_rag_community defaults to True (best-tested GraphRAG profile)
         assert cfg.graph_rag_community is True
         assert cfg.graph_rag_community_async is True
-        assert cfg.graph_rag_community_top_k == 5
         assert cfg.graph_rag_mode == "local"
 
     # ── New tests for Items 1-11 ───────────────────────────────────────────
@@ -3830,11 +3825,11 @@ class TestGraphRAGCommunity:
             node["frequency"] = len(node.get("chunk_ids", []))
         assert brain._entity_graph["apple"]["frequency"] == 2
 
-    def test_community_report_has_title_and_findings(self):
+    def test_community_report_has_title_and_findings(self, monkeypatch):
         """_generate_community_summaries stores title, findings, and rank from JSON."""
+        monkeypatch.setattr(_gd, "COMMUNITY_MIN_SIZE", 0)
         brain = self._make_brain()
         brain._community_levels = {0: {"apple": 0, "beats": 0}}
-        brain.config.graph_rag_community_min_size = 0  # disable size gate for this test
         brain._entity_graph = {
             "apple": {"description": "tech company", "type": "ORGANIZATION", "chunk_ids": ["c1"]},
             "beats": {"description": "audio brand", "type": "PRODUCT", "chunk_ids": ["c2"]},
@@ -3889,7 +3884,8 @@ class TestGraphRAGCommunity:
         brain._executor = SyncExecutor()
 
         class _Cfg:
-            graph_rag_community_level = 0
+            # every field this stub carried is now a graph_defaults constant
+            pass
 
         result = brain._global_search_map_reduce("test query", _Cfg())
 
@@ -3918,8 +3914,6 @@ class TestGraphRAGCommunity:
         brain._executor = SyncExecutor()
 
         class _Cfg:
-            graph_rag_community_level = 0
-
             graph_rag_map_batch_size = 1  # use single-chunk mode so mock JSON format matches
 
         result = brain._global_search_map_reduce("AI trends", _Cfg())
@@ -4214,8 +4208,6 @@ class TestGraphRAGRealImplementation:
         brain._executor = SyncExecutor()
 
         class _Cfg:
-            graph_rag_community_level = 0
-
             graph_rag_map_batch_size = 1  # use single-chunk mode so mock JSON format matches
 
         result = brain._global_search_map_reduce("test query", _Cfg())
@@ -4249,7 +4241,8 @@ class TestGraphRAGRealImplementation:
         brain._executor = SyncExecutor()
 
         class _Cfg:
-            graph_rag_community_level = 0
+            # every field this stub carried is now a graph_defaults constant
+            pass
 
         result = brain._global_search_map_reduce("test query", _Cfg())
 
@@ -4287,7 +4280,8 @@ class TestGraphRAGRealImplementation:
         brain._executor = SyncExecutor()
 
         class _Cfg:
-            graph_rag_community_level = 0
+            # every field this stub carried is now a graph_defaults constant
+            pass
 
         brain._global_search_map_reduce("test query", _Cfg())
 
@@ -4539,6 +4533,8 @@ class TestGraphRAGAuditFixes:
         """Values this class's helpers used to set on config, before 0.5.0
         demoted them to constants in axon/graph_defaults.py."""
         monkeypatch.setattr(_gd, "GLOBAL_MAX_MAP_CHUNKS", 0)
+        monkeypatch.setattr(_gd, "COMMUNITY_LLM_TOP_N_PER_LEVEL", 50)
+        monkeypatch.setattr(_gd, "COMMUNITY_LLM_MAX_TOTAL", 200)
 
     def _make_brain(self):
         from axon.main import AxonBrain
@@ -4549,23 +4545,7 @@ class TestGraphRAGAuditFixes:
 
         brain.config.graph_rag_community_levels = 2
 
-        brain.config.graph_rag_community_max_cluster_size = 10
-
-        brain.config.graph_rag_leiden_seed = 42
-
-        brain.config.graph_rag_community_use_lcc = False
-
-        brain.config.graph_rag_community_max_context_tokens = 4000
-
-        brain.config.graph_rag_community_include_claims = False
-
         brain.config.graph_rag_claims = False
-
-        brain.config.graph_rag_community_min_size = 3
-
-        brain.config.graph_rag_community_llm_top_n_per_level = 50
-
-        brain.config.graph_rag_community_llm_max_total = 200
 
         brain.config.graph_rag_community_lazy = False
 
@@ -4700,15 +4680,17 @@ class TestGraphRAGAuditFixes:
             ), f"Hierarchy key {key!r} is not level-qualified — collision risk"
 
     def test_use_lcc_default_is_false(self):
-        """graph_rag_community_use_lcc should default to False to preserve all graph components."""
-        import dataclasses
+        """COMMUNITY_USE_LCC must stay False so no graph component is dropped.
 
-        from axon.main import AxonConfig
-
-        fields = {f.name: f.default for f in dataclasses.fields(AxonConfig)}
+        Worth guarding twice over: before 0.5.0 demoted this to a constant, its
+        getattr fallback said True while the dataclass default said False. The
+        fallback was dead only because the field existed, so the demotion had to
+        take the dataclass value — taking the fallback would have silently
+        started discarding every component outside the largest one.
+        """
         assert (
-            fields.get("graph_rag_community_use_lcc") is False
-        ), "use_lcc defaults True — disconnected components would be silently dropped"
+            _gd.COMMUNITY_USE_LCC is False
+        ), "use_lcc is True — disconnected components would be silently dropped"
 
     def test_entity_ranking_uses_total_degree(self):
         """Entity ranking in local search should count both incoming and outgoing relations."""
@@ -4843,7 +4825,6 @@ class TestGraphRAGAuditFixes:
         monkeypatch.setattr(_gd, "GLOBAL_MIN_SCORE", 0)
         monkeypatch.setattr(_gd, "GLOBAL_MAP_MAX_LENGTH", 500)  # 500 * 4 = 2000 chars
         b = self._make_brain()
-        b.config.graph_rag_community_level = 0
         # Build a report long enough to require chunking (>2000 chars)
         long_report = "Important fact: the answer is 42. " * 100  # ~3400 chars
         b._community_summaries = {
@@ -4947,6 +4928,8 @@ class TestGraphRAGTask6Fixes:
         monkeypatch.setattr(_gd, "GLOBAL_REDUCE_MAX_LENGTH", 500)
         monkeypatch.setattr(_gd, "GLOBAL_MIN_SCORE", 0)
         monkeypatch.setattr(_gd, "GLOBAL_MAX_MAP_CHUNKS", 0)
+        monkeypatch.setattr(_gd, "COMMUNITY_LLM_TOP_N_PER_LEVEL", 50)
+        monkeypatch.setattr(_gd, "COMMUNITY_LLM_MAX_TOTAL", 200)
 
     def _make_brain(self):
         from axon.main import AxonBrain
@@ -4957,31 +4940,13 @@ class TestGraphRAGTask6Fixes:
 
         brain.config.graph_rag_community_levels = 2
 
-        brain.config.graph_rag_community_max_cluster_size = 10
-
-        brain.config.graph_rag_leiden_seed = 42
-
-        brain.config.graph_rag_community_use_lcc = False
-
-        brain.config.graph_rag_community_max_context_tokens = 4000
-
-        brain.config.graph_rag_community_include_claims = False
-
         brain.config.graph_rag_claims = False
-
-        brain.config.graph_rag_community_min_size = 3
-
-        brain.config.graph_rag_community_llm_top_n_per_level = 50
-
-        brain.config.graph_rag_community_llm_max_total = 200
 
         brain.config.graph_rag_community_lazy = False
 
         brain.config.graph_rag_global_top_communities = 0
 
         brain.config.raptor_min_source_size_mb = 0.0
-
-        brain.config.graph_rag_community_level = 0
 
         brain._entity_graph = {}
 
@@ -5178,14 +5143,13 @@ class TestGraphRAGTask6Fixes:
                 isinstance(key, str) and "_" in key
             ), f"Hierarchy key {key!r} is not level-qualified string"
 
-    def test_leiden_child_substitution_finds_summary(self):
+    def test_leiden_child_substitution_finds_summary(self, monkeypatch):
         """When community context exceeds token budget, _generate_community_summaries
         substitutes ranked child reports by rank (highest rank first)."""
+        monkeypatch.setattr(_gd, "COMMUNITY_MAX_CONTEXT_TOKENS", 1)
+        monkeypatch.setattr(_gd, "COMMUNITY_MIN_SIZE", 0)
 
         b = self._make_brain()
-        b.config.graph_rag_community_max_context_tokens = (
-            1  # force substitution for any non-empty context
-        )
         # Pre-populate existing summaries for child communities (level 1)
         b._community_summaries = {
             "1_0": {
@@ -5212,7 +5176,6 @@ class TestGraphRAGTask6Fixes:
         b._community_children = {"0_0": ["1_0", "1_1"]}
         # Level 0 has one community (id=0) containing x and y
         b._community_levels = {0: {"x": 0, "y": 0}}
-        b.config.graph_rag_community_min_size = 0  # disable size gate for this test
         b._entity_graph = {
             "x": {
                 "chunk_ids": ["c1"],
@@ -5261,12 +5224,12 @@ class TestGraphRAGTask6Fixes:
             "Sub B content"
         ), "Sub-community reports not sorted by rank (Sub A should precede Sub B)"
 
-    def test_community_prompt_no_hard_truncation(self):
+    def test_community_prompt_no_hard_truncation(self, monkeypatch):
         """Community prompt must include context beyond 3000 chars (no hard truncation)."""
+        monkeypatch.setattr(_gd, "COMMUNITY_MAX_CONTEXT_TOKENS", 999999)
+        monkeypatch.setattr(_gd, "COMMUNITY_MIN_SIZE", 0)
 
         b = self._make_brain()
-        b.config.graph_rag_community_max_context_tokens = 999999  # do not trigger substitution
-        b.config.graph_rag_community_min_size = 0  # disable size gate for this test
         # Set up a community with a single entity whose description exceeds 3000 chars
         b._community_levels = {0: {"entity_long": 0}}
         b._community_summaries = {}
@@ -5363,6 +5326,9 @@ class TestGraphRAGTask7Fixes:
         monkeypatch.setattr(_gd, "GLOBAL_MAP_MAX_LENGTH", 500)
         monkeypatch.setattr(_gd, "GLOBAL_REDUCE_MAX_LENGTH", 500)
         monkeypatch.setattr(_gd, "GLOBAL_MIN_SCORE", 0)
+        monkeypatch.setattr(_gd, "COMMUNITY_LLM_TOP_N_PER_LEVEL", 50)
+        monkeypatch.setattr(_gd, "COMMUNITY_LLM_MAX_TOTAL", 200)
+        monkeypatch.setattr(_gd, "COMMUNITY_REBUILD_DEBOUNCE_S", 0.0)
 
     def _make_brain(self):
         from axon.main import AxonBrain
@@ -5373,23 +5339,7 @@ class TestGraphRAGTask7Fixes:
 
         brain.config.graph_rag_community_levels = 2
 
-        brain.config.graph_rag_community_max_cluster_size = 10
-
-        brain.config.graph_rag_leiden_seed = 42
-
-        brain.config.graph_rag_community_use_lcc = False
-
-        brain.config.graph_rag_community_max_context_tokens = 4000
-
-        brain.config.graph_rag_community_include_claims = False
-
         brain.config.graph_rag_claims = False
-
-        brain.config.graph_rag_community_min_size = 3
-
-        brain.config.graph_rag_community_llm_top_n_per_level = 50
-
-        brain.config.graph_rag_community_llm_max_total = 200
 
         brain.config.graph_rag_community_lazy = False
 
@@ -5403,15 +5353,9 @@ class TestGraphRAGTask7Fixes:
 
         brain.config.graph_rag_include_raptor_summaries = False
 
-        brain.config.graph_rag_community_rebuild_debounce_s = 0.0
-
         brain.config.graph_rag_community_async = False
 
         brain.config.graph_rag_community = True
-
-        brain.config.graph_rag_community_level = 0
-
-        brain.config.graph_rag_index_community_reports = True
 
         brain._entity_graph = {}
 
@@ -6667,6 +6611,13 @@ class TestFundamentalFixes:
 
     """Tests for TASK_11: relation-target normalization, unified ranking, structure-aware RAPTOR."""
 
+    @pytest.fixture(autouse=True)
+    def _graph_tuning(self, monkeypatch):
+        """Community caps this class's helpers used to set on config,
+        before 0.5.0 demoted them to graph_defaults constants."""
+        monkeypatch.setattr(_gd, "COMMUNITY_LLM_TOP_N_PER_LEVEL", 50)
+        monkeypatch.setattr(_gd, "COMMUNITY_LLM_MAX_TOTAL", 200)
+
     def _make_brain(self):
         """Return a minimal AxonBrain spec-mock with real method bindings."""
 
@@ -6677,12 +6628,6 @@ class TestFundamentalFixes:
         brain.config = MagicMock()
 
         brain.config.graph_rag_exact_entity_boost = 3.0
-
-        brain.config.graph_rag_community_min_size = 3
-
-        brain.config.graph_rag_community_llm_top_n_per_level = 50
-
-        brain.config.graph_rag_community_llm_max_total = 200
 
         brain.config.graph_rag_community_lazy = False
 
@@ -6974,6 +6919,13 @@ class TestRuntimeFixes:
 
     """TASK_12: Runtime cost reduction — community triage, RAPTOR guard, lazy mode, pre-filter."""
 
+    @pytest.fixture(autouse=True)
+    def _graph_tuning(self, monkeypatch):
+        """Community caps this class's helpers used to set on config,
+        before 0.5.0 demoted them to graph_defaults constants."""
+        monkeypatch.setattr(_gd, "COMMUNITY_LLM_TOP_N_PER_LEVEL", 50)
+        monkeypatch.setattr(_gd, "COMMUNITY_LLM_MAX_TOTAL", 200)
+
     # ------------------------------------------------------------------
 
     # Helpers
@@ -6991,16 +6943,6 @@ class TestRuntimeFixes:
 
         brain.config = MagicMock()
 
-        brain.config.graph_rag_community_min_size = 3
-
-        brain.config.graph_rag_community_llm_top_n_per_level = 50
-
-        brain.config.graph_rag_community_llm_max_total = 200
-
-        brain.config.graph_rag_community_max_context_tokens = 4000
-
-        brain.config.graph_rag_community_include_claims = False
-
         brain.config.graph_rag_claims = False
 
         brain.config.graph_rag_community_lazy = False
@@ -7010,8 +6952,6 @@ class TestRuntimeFixes:
         brain.config.raptor_min_source_size_mb = 0.0
 
         brain.config.graph_rag_community = True
-
-        brain.config.graph_rag_index_community_reports = True
 
         brain._entity_graph = {}
 
@@ -7079,13 +7019,12 @@ class TestRuntimeFixes:
     # ------------------------------------------------------------------
 
     def test_small_community_gets_template_no_llm(
-        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, monkeypatch
     ):
         """Community with 2 members under min_size=3 → template summary, LLM not called."""
+        monkeypatch.setattr(_gd, "COMMUNITY_LLM_TOP_N_PER_LEVEL", 0)
+        monkeypatch.setattr(_gd, "COMMUNITY_LLM_MAX_TOTAL", 0)
         brain = self._make_triage_brain()
-        brain.config.graph_rag_community_min_size = 3
-        brain.config.graph_rag_community_llm_top_n_per_level = 0  # no per-level cap
-        brain.config.graph_rag_community_llm_max_total = 0  # no total cap
         brain._community_levels = {0: {"entityA": 0, "entityB": 0}}  # 2 members, cid=0
         brain._generate_community_summaries()
         brain.llm.complete.assert_not_called()
@@ -7093,13 +7032,13 @@ class TestRuntimeFixes:
         assert result.get("template") is True, f"Expected template=True, got: {result}"
 
     def test_per_level_cap_limits_llm_calls(
-        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, monkeypatch
     ):
         """top_n_per_level=2 with 5 communities → at most 2 LLM calls, ≥3 template summaries."""
+        monkeypatch.setattr(_gd, "COMMUNITY_MIN_SIZE", 0)
+        monkeypatch.setattr(_gd, "COMMUNITY_LLM_TOP_N_PER_LEVEL", 2)
+        monkeypatch.setattr(_gd, "COMMUNITY_LLM_MAX_TOTAL", 0)
         brain = self._make_triage_brain()
-        brain.config.graph_rag_community_min_size = 0  # disable size gate
-        brain.config.graph_rag_community_llm_top_n_per_level = 2
-        brain.config.graph_rag_community_llm_max_total = 0  # no total cap
         level_map = {}
         for cid in range(5):
             for i in range(5):
@@ -7115,13 +7054,13 @@ class TestRuntimeFixes:
         assert template_count >= 3, f"Expected ≥3 template summaries, got {template_count}"
 
     def test_global_hard_cap_stops_llm_across_levels(
-        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, monkeypatch
     ):
         """max_total=3 with 8 communities across 2 levels → LLM called at most 3 times."""
+        monkeypatch.setattr(_gd, "COMMUNITY_MIN_SIZE", 0)
+        monkeypatch.setattr(_gd, "COMMUNITY_LLM_TOP_N_PER_LEVEL", 0)
+        monkeypatch.setattr(_gd, "COMMUNITY_LLM_MAX_TOTAL", 3)
         brain = self._make_triage_brain()
-        brain.config.graph_rag_community_min_size = 0
-        brain.config.graph_rag_community_llm_top_n_per_level = 0
-        brain.config.graph_rag_community_llm_max_total = 3
         level_map_0 = {}
         level_map_1 = {}
         for cid in range(4):
@@ -7276,8 +7215,6 @@ class TestRuntimeFixes:
         brain.llm.complete = MagicMock(return_value="[]")
 
         class _Cfg:
-            graph_rag_community_level = 0
-
             graph_rag_global_top_communities = 2
 
         _bare_graphrag_engine(brain)._global_search_map_reduce("machine learning", _Cfg())
@@ -7903,9 +7840,6 @@ class TestGraspoLogicFallbackWarning:
         brain = MagicMock(spec=AxonBrain)
         brain.config = MagicMock()
         brain.config.graph_rag_community_levels = 1
-        brain.config.graph_rag_community_max_cluster_size = 10
-        brain.config.graph_rag_leiden_seed = 42
-        brain.config.graph_rag_community_use_lcc = False
         # _run_hierarchical_community_detection builds graph internally
         G = nx.path_graph(4)
         brain._build_networkx_graph = MagicMock(return_value=G)
@@ -7955,8 +7889,6 @@ class TestMapReduceDedicatedPool:
         cfg.graph_rag_map_use_dedicated_pool = map_workers > 0
 
         cfg.graph_rag_map_auto_workers = map_workers
-
-        cfg.graph_rag_community_level = 0
 
         cfg.graph_rag_global_top_communities = 0
 
@@ -8171,8 +8103,6 @@ class TestLLMLinguaCompression:
         cfg = MagicMock()
 
         cfg.graph_rag_map_workers = 0
-
-        cfg.graph_rag_community_level = 0
 
         cfg.graph_rag_global_top_communities = 0
 
@@ -13862,8 +13792,9 @@ class TestGraphRagCommunityRebuild:
 
         brain.close()
 
-    def test_community_rebuild_async_submits_to_executor(self, tmp_path):
+    def test_community_rebuild_async_submits_to_executor(self, tmp_path, monkeypatch):
         """graph_rag_community_async=True submits rebuild to executor (line 2221-2233)."""
+        monkeypatch.setattr(_gd, "COMMUNITY_REBUILD_DEBOUNCE_S", 0)
 
         from concurrent.futures import ThreadPoolExecutor
 
@@ -13873,7 +13804,6 @@ class TestGraphRagCommunityRebuild:
             graph_rag_community=True,
             graph_rag_community_defer=False,
             graph_rag_community_async=True,
-            graph_rag_community_rebuild_debounce_s=0,
             graph_rag_relations=False,
         )
 

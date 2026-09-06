@@ -241,38 +241,38 @@ class TestP4QueryGuidedLazySummarization:
         _bare_graphrag_engine(brain)._generate_community_summaries(query_hint="kafka lag")
         brain._save_community_summaries.assert_called_once()
 
-    def test_query_hint_tightens_max_total_to_top_communities(self):
+    def test_query_hint_tightens_max_total_to_top_communities(self, monkeypatch):
         """When query_hint is set and top_communities>0, effective cap = min(max_total, top_communities)."""
+        from axon import graph_defaults as _gd
         from axon.main import AxonConfig
 
-        cfg = AxonConfig(
-            graph_rag_global_top_communities=5,
-            graph_rag_community_llm_max_total=200,
-        )
+        monkeypatch.setattr(_gd, "COMMUNITY_LLM_MAX_TOTAL", 200)
+        cfg = AxonConfig(graph_rag_global_top_communities=5)
         lazy_cap = cfg.graph_rag_global_top_communities
-        max_total = cfg.graph_rag_community_llm_max_total
+        max_total = _gd.COMMUNITY_LLM_MAX_TOTAL
         effective = min(max_total, lazy_cap) if lazy_cap > 0 else max_total
         assert effective == 5
 
-    def test_zero_top_communities_does_not_cap_to_zero(self):
+    def test_zero_top_communities_does_not_cap_to_zero(self, monkeypatch):
         """graph_rag_global_top_communities=0 disables the lazy cap (full max_total applies)."""
+        from axon import graph_defaults as _gd
         from axon.main import AxonConfig
 
-        cfg = AxonConfig(
-            graph_rag_global_top_communities=0,
-            graph_rag_community_llm_max_total=200,
-        )
+        monkeypatch.setattr(_gd, "COMMUNITY_LLM_MAX_TOTAL", 200)
+        cfg = AxonConfig(graph_rag_global_top_communities=0)
         lazy_cap = cfg.graph_rag_global_top_communities
-        max_total = cfg.graph_rag_community_llm_max_total
+        max_total = _gd.COMMUNITY_LLM_MAX_TOTAL
         effective = min(max_total, lazy_cap) if lazy_cap > 0 else max_total
         assert effective == 200
 
-    def test_no_query_hint_does_not_alter_cap(self, tmp_path):
+    def test_no_query_hint_does_not_alter_cap(self, tmp_path, monkeypatch):
         """Without query_hint, standard cap is used (no tightening)."""
+        from axon import graph_defaults as _gd
+
+        monkeypatch.setattr(_gd, "COMMUNITY_LLM_MAX_TOTAL", 200)
         brain = _make_brain(
             tmp_path,
             graph_rag_global_top_communities=5,
-            graph_rag_community_llm_max_total=200,
         )
         brain._community_levels = {0: {"a": 0, "b": 0}}
         brain._community_summaries = {}

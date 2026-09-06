@@ -346,6 +346,25 @@ _DEMOTED_GRAPH_TUNING: tuple[str, ...] = (
     "graph_rag_local_early_cutoff_factor",
     "graph_rag_local_entity_degree_fast",
     "graph_rag_local_relation_support_fast",
+    # Community detection and summarisation, demoted in 0.5.0. The knobs an
+    # operator actually reaches for are deliberately NOT here — graph_rag,
+    # _community, _community_async, _community_backend, _community_defer,
+    # _community_lazy and _community_levels stay real config fields, because
+    # docs/TROUBLESHOOTING.md names several of them as fixes and _backend is an
+    # install choice (leidenalg vs louvain). What follows is the shape of the
+    # clustering itself, which nothing outside this codebase referenced.
+    "graph_rag_community_max_cluster_size",
+    "graph_rag_community_use_lcc",
+    "graph_rag_leiden_seed",
+    "graph_rag_community_min_size",
+    "graph_rag_community_llm_top_n_per_level",
+    "graph_rag_community_llm_max_total",
+    "graph_rag_community_max_context_tokens",
+    "graph_rag_community_include_claims",
+    "graph_rag_community_level",
+    "graph_rag_index_community_reports",
+    "graph_rag_community_summary_compact_persist",
+    "graph_rag_community_rebuild_debounce_s",
 )
 
 _REMOVED_FIELDS.update(
@@ -364,7 +383,11 @@ _REMOVED_FIELDS.update(
 _REMOVED_FIELDS.update(
     {
         _f: f"'{_f}' was removed in 0.5.0. It was never read by any code path."
-        for _f in ("graph_rag_local_community_prop", "graph_rag_local_text_unit_prop")
+        for _f in (
+            "graph_rag_local_community_prop",
+            "graph_rag_local_text_unit_prop",
+            "graph_rag_community_top_k",
+        )
     }
 )
 
@@ -857,19 +880,16 @@ class AxonConfig:
     # Run community detection in the background (non-blocking) after ingest.
     graph_rag_community_async: bool = True
     # Number of top community summaries to inject into the prompt during global search.
-    graph_rag_community_top_k: int = 5
     # GraphRAG query mode: "local" (entity/relation context), "global" (community summaries),
     # or "hybrid" (both).
     graph_rag_mode: str = "local"  # "local" | "global" | "hybrid"
     # Global search map-reduce parameters
-    graph_rag_community_level: int = 0  # which hierarchy level for global search
     # Hierarchical community detection
     graph_rag_community_levels: int = 2  # number of hierarchy levels
     # Entity embedding matching at query time
     graph_rag_entity_embedding_match: bool = True
     graph_rag_entity_match_threshold: float = 0.5
     # Community report vector store indexing
-    graph_rag_index_community_reports: bool = True
     # Entity description canonicalization
     graph_rag_canonicalize: bool = False
     graph_rag_canonicalize_min_occurrences: int = 2  # GAP 8: was 3
@@ -877,24 +897,14 @@ class AxonConfig:
     graph_rag_claims: bool = False
     # GAP 1: Global search reduce phase
     # GAP 2: Hierarchical community detection parameters
-    graph_rag_community_max_cluster_size: int = 10
-    graph_rag_community_use_lcc: bool = False
-    graph_rag_leiden_seed: int = 42
     # GAP 3a: Community summarization context budget
-    graph_rag_community_max_context_tokens: int = 4000
     # GAP 3b: Relation description canonicalization
     graph_rag_canonicalize_relations: bool = False
     graph_rag_canonicalize_relations_min_occurrences: int = 2
     # GAP 3c: Include claims in community reports
-    graph_rag_community_include_claims: bool = False
     # GAP 4: Local search token budget and ranking controls
     # Unified candidate ranking weights
     # Runtime cost reduction --' community triage
-    graph_rag_community_min_size: int = 3  # communities smaller than this â†' template only
-    graph_rag_community_llm_top_n_per_level: int = 15  # max LLM-summarized per level (0=unlimited)
-    graph_rag_community_llm_max_total: int = (
-        30  # hard cap on LLM calls across all levels (0=unlimited)
-    )
     # Lazy community generation --' skip summarization at finalize; generate on first global query
     graph_rag_community_lazy: bool = True
     # Global search pre-filter --' cap communities entering map-reduce (0=no cap)
@@ -915,7 +925,6 @@ class AxonConfig:
     # False (default) = current behavior.
     source_policy_enabled: bool = False
     # GAP 6: Async rebuild debounce
-    graph_rag_community_rebuild_debounce_s: float = 2.0
     # Exact-token entity boost in local search
     graph_rag_exact_entity_boost: float = 3.0
     # Deferred community rebuild (batch ingest mode)
@@ -1050,7 +1059,6 @@ class AxonConfig:
     graph_rag_relation_shard_selective_rewrite: bool = True
     graph_rag_relation_shard_signature_workers: int = 4
     graph_rag_relation_shard_write_workers: int = 4
-    graph_rag_community_summary_compact_persist: bool = True
     # LLM request timeout in seconds (applied where the provider client supports it).
     # Kept at 60 for cloud providers so a stalled request fails fast. Locally served
     # models are far slower — see DEFAULT_LOCAL_LLM_TIMEOUT in this module for the

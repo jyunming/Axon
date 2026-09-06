@@ -1686,7 +1686,7 @@ class GraphRagMixin:
 
         path = pathlib.Path(self.config.bm25_path) / ".community_summaries.json"
         try:
-            if bool(getattr(self.config, "graph_rag_community_summary_compact_persist", True)):
+            if bool(_gd.COMMUNITY_SUMMARY_COMPACT_PERSIST):
                 compact = {}
                 for cid, item in self._community_summaries.items():
                     if not isinstance(cid, str) or not isinstance(item, dict):
@@ -1879,9 +1879,9 @@ class GraphRagMixin:
         if len(nodes) < 2:
             return {0: dict.fromkeys(nodes, 0)}, {0: None}, {0: []}
         n_levels = max(1, getattr(self.config, "graph_rag_community_levels", 2))
-        max_cluster_size = getattr(self.config, "graph_rag_community_max_cluster_size", 10)
-        seed = getattr(self.config, "graph_rag_leiden_seed", 42)
-        use_lcc = getattr(self.config, "graph_rag_community_use_lcc", True)
+        max_cluster_size = _gd.COMMUNITY_MAX_CLUSTER_SIZE
+        seed = _gd.LEIDEN_SEED
+        use_lcc = _gd.COMMUNITY_USE_LCC
         working_nodes = list(nodes)
         working_edges = list(edges)
         components = self._graph_connected_components(working_nodes, working_edges)
@@ -2153,7 +2153,7 @@ class GraphRagMixin:
                         )
                     else:
                         self._generate_community_summaries()
-                        if getattr(self.config, "graph_rag_index_community_reports", True):
+                        if _gd.INDEX_COMMUNITY_REPORTS:
                             self._index_community_reports_in_vector_store()
             if bool(getattr(self.config, "graph_rag_rebuild_skip_if_unchanged", True)):
                 self._gr_last_community_rebuild_sig = (
@@ -2322,7 +2322,7 @@ class GraphRagMixin:
         When *query_hint* is provided (lazy mode), communities are ranked by relevance to
         the query first so the most useful ones get LLM treatment before the budget cap.
         The LLM cap is tightened to ``graph_rag_global_top_communities`` in lazy mode,
-        replacing the full ``graph_rag_community_llm_max_total`` limit.
+        replacing the full ``graph_defaults.COMMUNITY_LLM_MAX_TOTAL`` limit.
         """
         if not self._community_levels:
             return
@@ -2338,9 +2338,9 @@ class GraphRagMixin:
 
         summaries = {}
         total_communities = sum(len(set(m.values())) for m in self._community_levels.values())
-        _min_size = getattr(self.config, "graph_rag_community_min_size", 3)
-        _top_n_per_level = getattr(self.config, "graph_rag_community_llm_top_n_per_level", 15)
-        _max_total = getattr(self.config, "graph_rag_community_llm_max_total", 30)
+        _min_size = _gd.COMMUNITY_MIN_SIZE
+        _top_n_per_level = _gd.COMMUNITY_LLM_TOP_N_PER_LEVEL
+        _max_total = _gd.COMMUNITY_LLM_MAX_TOTAL
         # Lazy mode: tighten cap to graph_rag_global_top_communities so only the most
         # query-relevant communities receive LLM treatment on the first global query.
         _lazy_cap = getattr(self.config, "graph_rag_global_top_communities", 0)
@@ -2429,7 +2429,7 @@ class GraphRagMixin:
                         )
                         rel_parts.append(f"- {rel_desc}")
             # GAP 3a: token-budget check — substitute sub-community reports when too large
-            max_ctx_tokens = getattr(self.config, "graph_rag_community_max_context_tokens", 4000)
+            max_ctx_tokens = _gd.COMMUNITY_MAX_CONTEXT_TOKENS
             entity_rel_text = "\n".join(ent_parts + rel_parts)
             if len(entity_rel_text) // 4 > max_ctx_tokens:
                 # Children keys are level-qualified strings (e.g. "1_3") — look up directly
@@ -2454,7 +2454,7 @@ class GraphRagMixin:
                 if rel_parts:
                     entity_rel_text += "\n\nKey relationships:\n" + "\n".join(rel_parts[:20])
             # GAP 3c: Include claims in community context — auto-enabled if claims extraction is on
-            include_claims = getattr(self.config, "graph_rag_community_include_claims", False)
+            include_claims = _gd.COMMUNITY_INCLUDE_CLAIMS
             if not include_claims and getattr(self.config, "graph_rag_claims", False):
                 include_claims = True
             claim_parts = []
@@ -2645,7 +2645,7 @@ class GraphRagMixin:
         min_score = _gd.GLOBAL_MIN_SCORE
         top_points = _gd.GLOBAL_TOP_POINTS
         # Filter summaries to the target level
-        target_level = getattr(cfg, "graph_rag_community_level", 0)
+        target_level = _gd.COMMUNITY_LEVEL
         target_level_prefix = f"{target_level}_"
         level_summaries = {
             k: v for k, v in self._community_summaries.items() if k.startswith(target_level_prefix)

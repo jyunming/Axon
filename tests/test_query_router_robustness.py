@@ -1445,7 +1445,6 @@ class TestQueryGraphRAGCommunityContext:
         stub.config.graph_rag = True
         stub.config.graph_rag_mode = "global"
         stub.config.graph_rag_community_lazy = True
-        stub.config.graph_rag_index_community_reports = True
         stub._community_summaries = {}
         stub._community_levels = {"level0": []}
         stub._generate_community_summaries = MagicMock()
@@ -1571,7 +1570,6 @@ class TestQueryStream:
         stub.config.graph_rag = True
         stub.config.graph_rag_mode = "global"
         stub.config.graph_rag_community_lazy = True
-        stub.config.graph_rag_index_community_reports = True
         stub._community_summaries = {}
         stub._community_levels = {"level0": []}
         stub._generate_community_summaries = MagicMock()

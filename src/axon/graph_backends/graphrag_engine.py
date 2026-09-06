@@ -31,6 +31,8 @@ from axon.graph_rag import GraphRagMixin
 if TYPE_CHECKING:
     from axon.main import AxonBrain
 
+from axon import graph_defaults as _gd
+
 logger = logging.getLogger("Axon")
 
 
@@ -750,7 +752,7 @@ class GraphRagEngine(GraphRagMixin):
 
                             self._community_build_in_progress = True
                             try:
-                                _time.sleep(self.config.graph_rag_community_rebuild_debounce_s)
+                                _time.sleep(_gd.COMMUNITY_REBUILD_DEBOUNCE_S)
                                 self._rebuild_communities()
                             finally:
                                 self._community_build_in_progress = False
