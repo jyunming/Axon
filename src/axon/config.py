@@ -312,6 +312,62 @@ _REMOVED_FIELDS: dict[str, str] = {
     "sparse_weight": "Removed in 0.5.0 with SPLADE learned sparse retrieval.",
 }
 
+# GraphRAG local/global context-assembly tuning, demoted in 0.5.0 to constants
+# in axon/graph_defaults.py. None of these shipped in the default config.yaml or
+# was reachable from /config/get; most were rejected by validate() as unknown
+# keys even though load() accepted them, so setting one produced a working
+# override *and* a warning telling you to rename it. The values are unchanged.
+_DEMOTED_GRAPH_TUNING: tuple[str, ...] = (
+    "graph_rag_global_min_score",
+    "graph_rag_global_top_points",
+    "graph_rag_global_reduce_max_tokens",
+    "graph_rag_global_map_max_length",
+    "graph_rag_global_reduce_max_length",
+    "graph_rag_global_allow_general_knowledge",
+    "graph_rag_global_max_map_chunks",
+    "graph_rag_global_reduce_skip_if_top_points_le",
+    "graph_rag_global_reduce_skip_if_top_score_gte",
+    "graph_rag_global_answer_cache",
+    "graph_rag_global_answer_cache_size",
+    "graph_rag_global_map_cache",
+    "graph_rag_global_map_cache_size",
+    "graph_rag_local_max_context_tokens",
+    "graph_rag_local_top_k_entities",
+    "graph_rag_local_top_k_relationships",
+    "graph_rag_local_include_relationship_weight",
+    "graph_rag_local_entity_weight",
+    "graph_rag_local_relation_weight",
+    "graph_rag_local_community_weight",
+    "graph_rag_local_text_unit_weight",
+    "graph_rag_local_batch_fetch",
+    "graph_rag_local_cached_incoming",
+    "graph_rag_local_cached_incoming_counts",
+    "graph_rag_local_early_cutoff",
+    "graph_rag_local_early_cutoff_factor",
+    "graph_rag_local_entity_degree_fast",
+    "graph_rag_local_relation_support_fast",
+)
+
+_REMOVED_FIELDS.update(
+    {
+        _f: (
+            f"'{_f}' was removed in 0.5.0. GraphRAG context-assembly tuning is "
+            "now fixed internally (axon/graph_defaults.py) rather than exposed "
+            "as config. The behaviour is unchanged; delete this key to silence "
+            "this message, and open an issue if you were relying on tuning it."
+        )
+        for _f in _DEMOTED_GRAPH_TUNING
+    }
+)
+
+# Read by nothing, at any version — deleted outright rather than demoted.
+_REMOVED_FIELDS.update(
+    {
+        _f: f"'{_f}' was removed in 0.5.0. It was never read by any code path."
+        for _f in ("graph_rag_local_community_prop", "graph_rag_local_text_unit_prop")
+    }
+)
+
 
 _KNOWN_YAML_KEYS: dict[str, set[str]] = {
     "llm": {
@@ -381,9 +437,9 @@ _KNOWN_YAML_KEYS: dict[str, set[str]] = {
         "graph_rag_relations",
         "graph_rag_community",
         "graph_rag_community_backend",
+        "graph_rag_global_top_communities",
         "graph_rag_relation_budget",
         "graph_rag_entity_min_frequency",
-        "graph_rag_global_top_communities",
         "raptor_max_levels",
         "raptor_min_source_size_mb",
         "truth_grounding",
@@ -806,8 +862,6 @@ class AxonConfig:
     # or "hybrid" (both).
     graph_rag_mode: str = "local"  # "local" | "global" | "hybrid"
     # Global search map-reduce parameters
-    graph_rag_global_min_score: int = 20  # minimum map-phase score to include
-    graph_rag_global_top_points: int = 50  # max points assembled in reduce phase
     graph_rag_community_level: int = 0  # which hierarchy level for global search
     # Hierarchical community detection
     graph_rag_community_levels: int = 2  # number of hierarchy levels
@@ -822,10 +876,6 @@ class AxonConfig:
     # Claim / covariate extraction (off by default)
     graph_rag_claims: bool = False
     # GAP 1: Global search reduce phase
-    graph_rag_global_reduce_max_tokens: int = 8000
-    graph_rag_global_map_max_length: int = 1000
-    graph_rag_global_reduce_max_length: int = 2000
-    graph_rag_global_allow_general_knowledge: bool = False
     # GAP 2: Hierarchical community detection parameters
     graph_rag_community_max_cluster_size: int = 10
     graph_rag_community_use_lcc: bool = False
@@ -838,17 +888,7 @@ class AxonConfig:
     # GAP 3c: Include claims in community reports
     graph_rag_community_include_claims: bool = False
     # GAP 4: Local search token budget and ranking controls
-    graph_rag_local_max_context_tokens: int = 8000
-    graph_rag_local_community_prop: float = 0.25
-    graph_rag_local_text_unit_prop: float = 0.5
-    graph_rag_local_top_k_entities: int = 10
-    graph_rag_local_top_k_relationships: int = 10
-    graph_rag_local_include_relationship_weight: bool = False
     # Unified candidate ranking weights
-    graph_rag_local_entity_weight: float = 3.0
-    graph_rag_local_relation_weight: float = 2.0
-    graph_rag_local_community_weight: float = 1.5
-    graph_rag_local_text_unit_weight: float = 1.0
     # Runtime cost reduction --' community triage
     graph_rag_community_min_size: int = 3  # communities smaller than this â†' template only
     graph_rag_community_llm_top_n_per_level: int = 15  # max LLM-summarized per level (0=unlimited)
@@ -992,22 +1032,8 @@ class AxonConfig:
     graph_rag_profile: bool = False
     graph_rag_extraction_cache: bool = True
     graph_rag_extraction_cache_size: int = 5000
-    graph_rag_global_answer_cache: bool = True
-    graph_rag_global_answer_cache_size: int = 500
-    graph_rag_global_map_cache: bool = True
-    graph_rag_global_map_cache_size: int = 2000
-    graph_rag_global_max_map_chunks: int = 200
-    graph_rag_global_reduce_skip_if_top_points_le: int = 0
-    graph_rag_global_reduce_skip_if_top_score_gte: int = 0
     graph_rag_llm_cache: bool = True
     graph_rag_llm_cache_size: int = 2000
-    graph_rag_local_batch_fetch: bool = True
-    graph_rag_local_cached_incoming: bool = True
-    graph_rag_local_cached_incoming_counts: bool = True
-    graph_rag_local_early_cutoff: bool = True
-    graph_rag_local_early_cutoff_factor: float = 1.5
-    graph_rag_local_entity_degree_fast: bool = True
-    graph_rag_local_relation_support_fast: bool = True
     graph_rag_map_auto_workers: bool = True
     graph_rag_map_use_dedicated_pool: bool = False
     graph_rag_rebuild_skip_if_unchanged: bool = True

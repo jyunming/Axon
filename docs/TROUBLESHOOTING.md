@@ -526,7 +526,7 @@ once per community — this can be 50–200+ calls on large corpora.
 1. **Limit community summaries at query time** (pre-filters before LLM calls):
    ```yaml
    rag:
-     graph_rag_global_top_communities: 10   # default is 20
+     graph_rag_global_top_communities: 10   # default is 0, meaning no cap
    ```
 
 2. **Reduce community depth** (fewer clusters = fewer summaries):

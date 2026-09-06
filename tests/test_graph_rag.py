@@ -12,6 +12,8 @@ import tempfile
 import threading
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from axon.code_graph import CodeGraphMixin
 from axon.config import AxonConfig
 from axon.graph_rag import GraphRagMixin
@@ -1142,10 +1144,11 @@ class TestGlobalSearchMapReduce:
         result = brain._global_search_map_reduce("what are the themes?", cfg)
         assert result == ""
 
-    def test_returns_no_data_answer_when_all_points_below_threshold(self, tmp_path):
-        cfg = AxonConfig(
-            bm25_path=str(tmp_path), vector_store_path=str(tmp_path), graph_rag_global_min_score=80
-        )
+    def test_returns_no_data_answer_when_all_points_below_threshold(self, tmp_path, monkeypatch):
+        from axon import graph_defaults as _gd
+
+        monkeypatch.setattr(_gd, "GLOBAL_MIN_SCORE", 80)
+        cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
         brain = _make_brain(config=cfg)
         brain._community_summaries = {
             "0_0": {
@@ -1163,12 +1166,12 @@ class TestGlobalSearchMapReduce:
 
         assert result == _GRAPHRAG_NO_DATA_ANSWER
 
-    def test_reduces_valid_points(self, tmp_path):
+    def test_reduces_valid_points(self, tmp_path, monkeypatch):
         """Lines 1184-1193: reduce phase calls LLM and returns response."""
-        cfg = AxonConfig(
-            graph_rag_global_min_score=0,
-            graph_rag_map_batch_size=1,
-        )
+        from axon import graph_defaults as _gd
+
+        monkeypatch.setattr(_gd, "GLOBAL_MIN_SCORE", 0)
+        cfg = AxonConfig(graph_rag_map_batch_size=1)
         brain = _make_brain(config=cfg)
         brain._community_summaries = {
             "0_0": {
@@ -1187,13 +1190,15 @@ class TestGlobalSearchMapReduce:
         result = brain._global_search_map_reduce("who works together?", cfg)
         assert "Alice" in result or "collaborate" in result
 
-    def test_level_filtering(self, tmp_path):
+    def test_level_filtering(self, tmp_path, monkeypatch):
         """Lines 1018-1025: only summaries matching target level are used."""
+        from axon import graph_defaults as _gd
+
+        monkeypatch.setattr(_gd, "GLOBAL_MIN_SCORE", 0)
         cfg = AxonConfig(
             bm25_path=str(tmp_path),
             vector_store_path=str(tmp_path),
             graph_rag_community_level=1,
-            graph_rag_global_min_score=0,
         )
         brain = _make_brain(config=cfg)
         brain._community_summaries = {
@@ -1217,12 +1222,12 @@ class TestGlobalSearchMapReduce:
         # Only 1 level-1 community → llm called once for map phase (then reduce)
         assert brain.llm.complete.call_count >= 1
 
-    def test_reduce_exception_returns_fallback(self, tmp_path):
+    def test_reduce_exception_returns_fallback(self, tmp_path, monkeypatch):
         """Lines 1190-1193: reduce exception returns fallback text."""
-        cfg = AxonConfig(
-            graph_rag_global_min_score=0,
-            graph_rag_map_batch_size=1,
-        )
+        from axon import graph_defaults as _gd
+
+        monkeypatch.setattr(_gd, "GLOBAL_MIN_SCORE", 0)
+        cfg = AxonConfig(graph_rag_map_batch_size=1)
         brain = _make_brain(config=cfg)
         brain._community_summaries = {
             "0_0": {
@@ -3103,10 +3108,11 @@ class TestGlobalSearchMapReduceV2:
         result = brain._global_search_map_reduce("what are the themes?", cfg)
         assert result == ""
 
-    def test_returns_no_data_answer_when_all_points_below_threshold(self, tmp_path):
-        cfg = AxonConfig(
-            bm25_path=str(tmp_path), vector_store_path=str(tmp_path), graph_rag_global_min_score=80
-        )
+    def test_returns_no_data_answer_when_all_points_below_threshold(self, tmp_path, monkeypatch):
+        from axon import graph_defaults as _gd
+
+        monkeypatch.setattr(_gd, "GLOBAL_MIN_SCORE", 80)
+        cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
         brain = _make_brain(config=cfg)
         brain._community_summaries = {
             "0_0": {
@@ -3124,12 +3130,12 @@ class TestGlobalSearchMapReduceV2:
 
         assert result == _GRAPHRAG_NO_DATA_ANSWER
 
-    def test_reduces_valid_points(self, tmp_path):
+    def test_reduces_valid_points(self, tmp_path, monkeypatch):
         """Lines 1184-1193: reduce phase calls LLM and returns response."""
-        cfg = AxonConfig(
-            graph_rag_global_min_score=0,
-            graph_rag_map_batch_size=1,
-        )
+        from axon import graph_defaults as _gd
+
+        monkeypatch.setattr(_gd, "GLOBAL_MIN_SCORE", 0)
+        cfg = AxonConfig(graph_rag_map_batch_size=1)
         brain = _make_brain(config=cfg)
         brain._community_summaries = {
             "0_0": {
@@ -3148,13 +3154,15 @@ class TestGlobalSearchMapReduceV2:
         result = brain._global_search_map_reduce("who works together?", cfg)
         assert "Alice" in result or "collaborate" in result
 
-    def test_level_filtering(self, tmp_path):
+    def test_level_filtering(self, tmp_path, monkeypatch):
         """Lines 1018-1025: only summaries matching target level are used."""
+        from axon import graph_defaults as _gd
+
+        monkeypatch.setattr(_gd, "GLOBAL_MIN_SCORE", 0)
         cfg = AxonConfig(
             bm25_path=str(tmp_path),
             vector_store_path=str(tmp_path),
             graph_rag_community_level=1,
-            graph_rag_global_min_score=0,
         )
         brain = _make_brain(config=cfg)
         brain._community_summaries = {
@@ -3178,12 +3186,12 @@ class TestGlobalSearchMapReduceV2:
         # Only 1 level-1 community → llm called once for map phase (then reduce)
         assert brain.llm.complete.call_count >= 1
 
-    def test_reduce_exception_returns_fallback(self, tmp_path):
+    def test_reduce_exception_returns_fallback(self, tmp_path, monkeypatch):
         """Lines 1190-1193: reduce exception returns fallback text."""
-        cfg = AxonConfig(
-            graph_rag_global_min_score=0,
-            graph_rag_map_batch_size=1,
-        )
+        from axon import graph_defaults as _gd
+
+        monkeypatch.setattr(_gd, "GLOBAL_MIN_SCORE", 0)
+        cfg = AxonConfig(graph_rag_map_batch_size=1)
         brain = _make_brain(config=cfg)
         brain._community_summaries = {
             "0_0": {
@@ -4124,6 +4132,14 @@ class TestIncomingRelationIndexPersistence:
 
 
 class TestMapCommunityBatch:
+    @pytest.fixture(autouse=True)
+    def _wide_open_map_reduce(self, monkeypatch):
+        """Let every point through, so these tests measure batching, not scoring."""
+        from axon import graph_defaults as _gd
+
+        monkeypatch.setattr(_gd, "GLOBAL_MIN_SCORE", 0)
+        monkeypatch.setattr(_gd, "GLOBAL_TOP_POINTS", 100)
+
     def _make_brain_with_summaries(self, tmp_path, n_summaries):
         from axon.config import AxonConfig
 
@@ -4132,8 +4148,6 @@ class TestMapCommunityBatch:
             vector_store_path=str(tmp_path),
             graph_rag_map_batch_size=5,
             graph_rag_map_workers=0,
-            graph_rag_global_min_score=0,
-            graph_rag_global_top_points=100,
         )
         brain = _make_brain(config=cfg)
         brain._community_summaries = {

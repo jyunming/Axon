@@ -8,6 +8,8 @@ import os
 import threading
 from typing import TYPE_CHECKING
 
+from axon import graph_defaults as _gd
+
 if TYPE_CHECKING:
     pass
 
@@ -387,9 +389,9 @@ class GraphRagMixin:
 
     def _gr_trim_bucket(self, bucket: str, bucket_map: dict) -> None:
         if bucket == "global_answer":
-            cap = int(getattr(self.config, "graph_rag_global_answer_cache_size", 500))
+            cap = int(_gd.GLOBAL_ANSWER_CACHE_SIZE)
         elif bucket == "global_map":
-            cap = int(getattr(self.config, "graph_rag_global_map_cache_size", 2000))
+            cap = int(_gd.GLOBAL_MAP_CACHE_SIZE)
         elif bucket.startswith("llm:"):
             cap = int(getattr(self.config, "graph_rag_llm_cache_size", 2000))
         else:
@@ -505,15 +507,15 @@ class GraphRagMixin:
 
     def _gr_cache_put(self, bucket: str, key: str, value) -> None:
         if bucket == "global_answer":
-            if not getattr(self.config, "graph_rag_global_answer_cache", True):
+            if not _gd.GLOBAL_ANSWER_CACHE:
                 return
-            cap = int(getattr(self.config, "graph_rag_global_answer_cache_size", 500))
+            cap = int(_gd.GLOBAL_ANSWER_CACHE_SIZE)
             if cap <= 0:
                 return
         elif bucket == "global_map":
-            if not getattr(self.config, "graph_rag_global_map_cache", True):
+            if not _gd.GLOBAL_MAP_CACHE:
                 return
-            cap = int(getattr(self.config, "graph_rag_global_map_cache_size", 2000))
+            cap = int(_gd.GLOBAL_MAP_CACHE_SIZE)
             if cap <= 0:
                 return
         else:
@@ -905,7 +907,7 @@ class GraphRagMixin:
         return _json.loads(raw.decode("utf-8"))
 
     def _get_incoming_relation_index(self) -> dict[str, list]:
-        if not getattr(self.config, "graph_rag_local_cached_incoming", True):
+        if not _gd.LOCAL_CACHED_INCOMING:
             return {}
         # Fast path: if the relation graph hasn't been mutated since the last
         # rebuild, skip the O(N*M) signature scan entirely.  ``_save_relation_graph``
@@ -967,7 +969,7 @@ class GraphRagMixin:
 
     def _get_incoming_relation_count_map(self) -> dict[str, int]:
         """Return cached incoming edge counts per entity keyed to relation-graph signature."""
-        if not bool(getattr(self.config, "graph_rag_local_cached_incoming_counts", True)):
+        if not bool(_gd.LOCAL_CACHED_INCOMING_COUNTS):
             return {}
         idx = self._get_incoming_relation_index()
         if not idx:
@@ -2640,8 +2642,8 @@ class GraphRagMixin:
         _t0_total = _time.perf_counter()
         if not self._community_summaries:
             return ""
-        min_score = getattr(cfg, "graph_rag_global_min_score", 20)
-        top_points = getattr(cfg, "graph_rag_global_top_points", 50)
+        min_score = _gd.GLOBAL_MIN_SCORE
+        top_points = _gd.GLOBAL_TOP_POINTS
         # Filter summaries to the target level
         target_level = getattr(cfg, "graph_rag_community_level", 0)
         target_level_prefix = f"{target_level}_"
@@ -2669,7 +2671,7 @@ class GraphRagMixin:
             level_summaries = dict(top_summaries)
             logger.debug("GraphRAG global: pre-filtered to top %d communities.", _top_n_communities)
         # Global answer cache: short-circuit repeated query+graph-signature requests.
-        if bool(getattr(cfg, "graph_rag_global_answer_cache", True)):
+        if bool(_gd.GLOBAL_ANSWER_CACHE):
             _sig_parts = []
             for _k, _cs in sorted(level_summaries.items(), key=lambda kv: kv[0]):
                 _sig_parts.append(
@@ -2687,7 +2689,7 @@ class GraphRagMixin:
         else:
             _ans_key = None
         # Chunk reports so large reports don't get hard-truncated and later sections aren't lost
-        _MAP_CHUNK_CHARS = int(getattr(cfg, "graph_rag_global_map_max_length", 500) or 500) * 4
+        _MAP_CHUNK_CHARS = int(_gd.GLOBAL_MAP_MAX_LENGTH or 500) * 4
 
         def _chunk_report(cid: str, cs: dict) -> list[tuple[str, str]]:
             """Split a community report into bounded chunks. Returns [(cid_chunk_id, text)]."""
@@ -2706,7 +2708,7 @@ class GraphRagMixin:
         all_chunks: list[tuple[str, str]] = []
         for cid, cs in level_summaries.items():
             all_chunks.extend(_chunk_report(cid, cs))
-        _max_map_chunks = int(getattr(cfg, "graph_rag_global_max_map_chunks", 0) or 0)
+        _max_map_chunks = int(_gd.GLOBAL_MAX_MAP_CHUNKS or 0)
         if _max_map_chunks > 0 and len(all_chunks) > _max_map_chunks:
             all_chunks = all_chunks[:_max_map_chunks]
         rng = _random.Random(42)
@@ -2939,12 +2941,8 @@ class GraphRagMixin:
         top = _heapq.nlargest(top_points, top_heap, key=lambda x: x[0])
         if not top:
             return _GRAPHRAG_NO_DATA_ANSWER
-        _skip_reduce_points_le = int(
-            getattr(cfg, "graph_rag_global_reduce_skip_if_top_points_le", 1) or 0
-        )
-        _skip_reduce_score_gte = float(
-            getattr(cfg, "graph_rag_global_reduce_skip_if_top_score_gte", 95.0) or 95.0
-        )
+        _skip_reduce_points_le = int(_gd.GLOBAL_REDUCE_SKIP_IF_TOP_POINTS_LE or 0)
+        _skip_reduce_score_gte = float(_gd.GLOBAL_REDUCE_SKIP_IF_TOP_SCORE_GTE or 95.0)
         if (
             _skip_reduce_points_le > 0
             and len(top) <= _skip_reduce_points_le
@@ -2962,7 +2960,7 @@ class GraphRagMixin:
             return out
         # --- REDUCE PHASE: token-budget assembly ---
         _t0_reduce = _time.perf_counter()
-        reduce_max_tokens = getattr(cfg, "graph_rag_global_reduce_max_tokens", 8000)
+        reduce_max_tokens = _gd.GLOBAL_REDUCE_MAX_TOKENS
         analyst_lines = []
         token_estimate = 0
         for idx, (score, point) in enumerate(top):
@@ -2975,7 +2973,7 @@ class GraphRagMixin:
         if not analyst_lines:
             return _GRAPHRAG_NO_DATA_ANSWER
         reduce_context = "\n\n".join(analyst_lines)
-        reduce_max_length = getattr(cfg, "graph_rag_global_reduce_max_length", 500)
+        reduce_max_length = _gd.GLOBAL_REDUCE_MAX_LENGTH
         reduce_prompt = (
             f"The following analytic reports have been generated for the query:\n\n"
             f"Query: {query}\n\n"
@@ -2984,7 +2982,7 @@ class GraphRagMixin:
             f"\nRespond in at most {reduce_max_length} tokens."
         )
         reduce_system_prompt = _GRAPHRAG_REDUCE_SYSTEM_PROMPT
-        if getattr(cfg, "graph_rag_global_allow_general_knowledge", False):
+        if _gd.GLOBAL_ALLOW_GENERAL_KNOWLEDGE:
             reduce_system_prompt = (
                 reduce_system_prompt
                 + " You may supplement the provided reports with your own general knowledge"
@@ -3056,17 +3054,17 @@ class GraphRagMixin:
 
         # --- Phase 1: Setup ---
         _t0_setup = _time.perf_counter()
-        total_budget = getattr(cfg, "graph_rag_local_max_context_tokens", 8000)
-        top_k_entities = getattr(cfg, "graph_rag_local_top_k_entities", 10)
-        top_k_relationships = getattr(cfg, "graph_rag_local_top_k_relationships", 10)
-        include_weight = getattr(cfg, "graph_rag_local_include_relationship_weight", False)
-        entity_weight = getattr(cfg, "graph_rag_local_entity_weight", 3.0)
-        relation_weight = getattr(cfg, "graph_rag_local_relation_weight", 2.0)
-        community_weight = getattr(cfg, "graph_rag_local_community_weight", 1.5)
-        text_unit_weight = getattr(cfg, "graph_rag_local_text_unit_weight", 1.0)
+        total_budget = _gd.LOCAL_MAX_CONTEXT_TOKENS
+        top_k_entities = _gd.LOCAL_TOP_K_ENTITIES
+        top_k_relationships = _gd.LOCAL_TOP_K_RELATIONSHIPS
+        include_weight = _gd.LOCAL_INCLUDE_RELATIONSHIP_WEIGHT
+        entity_weight = _gd.LOCAL_ENTITY_WEIGHT
+        relation_weight = _gd.LOCAL_RELATION_WEIGHT
+        community_weight = _gd.LOCAL_COMMUNITY_WEIGHT
+        text_unit_weight = _gd.LOCAL_TEXT_UNIT_WEIGHT
         _query_tokens = set(query.lower().split()) | set(_re.split(r"[\s\W_]+", query.lower()))
         _boost = getattr(self.config, "graph_rag_exact_entity_boost", 3.0)
-        _fast_degree = bool(getattr(cfg, "graph_rag_local_entity_degree_fast", True))
+        _fast_degree = bool(_gd.LOCAL_ENTITY_DEGREE_FAST)
         _incoming_count_map: dict[str, int] = {}
         if _fast_degree:
             _incoming_count_map = self._get_incoming_relation_count_map()
@@ -3103,7 +3101,7 @@ class GraphRagMixin:
             line = f"  - {ent} [{ent_type}]: {desc}" if ent_type else f"  - {ent}: {desc}"
             candidates.append((entity_weight * (raw / max_raw), len(line) // 4 + 1, "entity", line))
         # Relations — collect outgoing (top 3/entity) + incoming (top 2/entity)
-        _use_fast_rel_support = bool(getattr(cfg, "graph_rag_local_relation_support_fast", True))
+        _use_fast_rel_support = bool(_gd.LOCAL_RELATION_SUPPORT_FAST)
         if _use_fast_rel_support:
             target_support_count: dict[str, int] = {}
             for ee in ranked_entities:
@@ -3206,12 +3204,8 @@ class GraphRagMixin:
         # Early cut-off: if current highest-scored candidates already fill budget and
         # all selected scores are strictly above max text-unit score, skip text-unit fetch.
         _skip_text_units = False
-        if (
-            bool(getattr(cfg, "graph_rag_local_early_cutoff", True))
-            and candidates
-            and total_budget > 0
-        ):
-            _factor = float(getattr(cfg, "graph_rag_local_early_cutoff_factor", 0.2))
+        if bool(_gd.LOCAL_EARLY_CUTOFF) and candidates and total_budget > 0:
+            _factor = float(_gd.LOCAL_EARLY_CUTOFF_FACTOR)
             if _factor < 0.0:
                 _factor = 0.0
             _ordered = sorted(candidates, key=lambda c: c[0], reverse=True)
@@ -3252,7 +3246,7 @@ class GraphRagMixin:
             max_rel = max((_tu_rel_count(c) for c in text_unit_ids_all), default=0)
             if text_unit_ids_all:
                 try:
-                    _batch_fetch = bool(getattr(cfg, "graph_rag_local_batch_fetch", True))
+                    _batch_fetch = bool(_gd.LOCAL_BATCH_FETCH)
                     if _batch_fetch:
                         docs_all = self.vector_store.get_by_ids(text_unit_ids_all)
                         doc_map = {}
