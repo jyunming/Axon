@@ -39,7 +39,29 @@ never reaches. Nothing a default install can do was removed.
   the tool schema that `mcp_server.py` and `agent.py` already define. The
   `examples/agent_orchestration.py` sample now reads `axon.agent.REPL_TOOLS`.
 
+- **30 GraphRAG context-assembly config keys are removed**, the
+  `rag.graph_rag_local_*` and `rag.graph_rag_global_*` families. 28 became
+  constants in the new `axon/graph_defaults.py`; 2 (`graph_rag_local_community_prop`,
+  `graph_rag_local_text_unit_prop`) were deleted outright, having never been read
+  by any code path. Values are unchanged — retrieval behaves exactly as before.
+  A config that still sets one keeps loading and now says the key was removed,
+  rather than reporting it as a typo. `graph_rag_global_top_communities` is
+  deliberately **not** in this list: it stays a real config key, because
+  `docs/TROUBLESHOOTING.md` names it as the mitigation when community generation
+  hangs on a first global query. (Its documented default was wrong in two docs —
+  `0`, meaning no cap, not `20`.)
+
 ### 🐛 Fixes
+
+- **`validate()` reported working config keys as typos, and misnamed the fix.**
+  `load()` accepted any `AxonConfig` dataclass field, but `validate()` only knew
+  the 14 graph keys listed in `_KNOWN_YAML_KEYS`. Setting
+  `rag.graph_rag_local_entity_weight: 9.5` therefore took effect *and* produced
+  "Unknown key … Did you mean `graph_federation_weights`?" — following that
+  advice would have replaced a working setting with an unrelated one. The keys
+  in question are now removed (above) and report themselves as removed. The same
+  divergence still exists for a handful of graph keys not yet collapsed; those
+  follow in the next slices.
 
 - **Two shipped features had never executed once.** `query_router.py` called
   `self.llm.generate()` — a method `OpenLLM` has never defined — inside

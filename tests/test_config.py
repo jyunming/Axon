@@ -1364,6 +1364,88 @@ class TestRemovedFields:
         assert match and "Did you mean" in (match[0].suggestion or "")
 
 
+class TestDemotedGraphTuning:
+    """GraphRAG context-assembly knobs demoted to constants in 0.5.0.
+
+    Regression: before the demotion these were dataclass fields that ``load()``
+    accepted but ``_KNOWN_YAML_KEYS`` did not list, so ``validate()`` called a
+    *working* key unknown and offered a difflib suggestion naming a different
+    real field — e.g. ``graph_rag_local_entity_weight`` (which took effect) was
+    reported as "Did you mean 'graph_federation_weights'?". Following that
+    advice would have turned a working config into a broken one.
+    """
+
+    def _cfg(self, tmp_path, body: str) -> str:
+        p = tmp_path / "config.yaml"
+        p.write_text(body, encoding="utf-8")
+        return str(p)
+
+    def test_every_demoted_key_is_registered_as_removed(self):
+        """No demoted field may fall through to the typo branch."""
+        from axon.config import _DEMOTED_GRAPH_TUNING, _REMOVED_FIELDS
+
+        missing = [f for f in _DEMOTED_GRAPH_TUNING if f not in _REMOVED_FIELDS]
+        assert not missing, f"demoted but not registered as removed: {missing}"
+
+    def test_no_demoted_key_is_still_a_dataclass_field(self):
+        """A field left on AxonConfig would silently shadow its constant."""
+        from axon.config import _DEMOTED_GRAPH_TUNING, AxonConfig
+
+        still = [f for f in _DEMOTED_GRAPH_TUNING if f in AxonConfig.__dataclass_fields__]
+        assert not still, f"demoted but still a dataclass field: {still}"
+
+    def test_demoted_key_reports_removal_not_a_typo(self, tmp_path):
+        path = self._cfg(tmp_path, "rag:\n  graph_rag_local_entity_weight: 9.5\n")
+        match = [i for i in AxonConfig.validate(path) if i.field == "graph_rag_local_entity_weight"]
+        assert match, "demoted key produced no issue"
+        assert "no longer a valid key" in match[0].message
+        assert "Did you mean" not in (match[0].suggestion or "")
+        assert "graph_defaults" in (match[0].suggestion or "")
+
+    def test_demoted_key_does_not_break_load(self, tmp_path):
+        """An upgraded config carrying a demoted key must still load."""
+        path = self._cfg(tmp_path, "rag:\n  graph_rag_local_entity_weight: 9.5\n  top_k: 7\n")
+        cfg = AxonConfig.load(path)
+        assert cfg.top_k == 7
+        assert not hasattr(cfg, "graph_rag_local_entity_weight")
+
+    def test_constants_match_the_defaults_they_replaced(self):
+        """The demotion was a move, not a retune."""
+        from axon import graph_defaults as _gd
+
+        assert _gd.GLOBAL_MIN_SCORE == 20
+        assert _gd.GLOBAL_TOP_POINTS == 50
+        assert _gd.GLOBAL_REDUCE_MAX_TOKENS == 8000
+        assert _gd.LOCAL_MAX_CONTEXT_TOKENS == 8000
+        assert _gd.LOCAL_ENTITY_WEIGHT == 3.0
+        assert _gd.LOCAL_RELATION_WEIGHT == 2.0
+        assert _gd.LOCAL_COMMUNITY_WEIGHT == 1.5
+        assert _gd.LOCAL_TEXT_UNIT_WEIGHT == 1.0
+        assert _gd.LOCAL_EARLY_CUTOFF_FACTOR == 1.5
+
+    def test_graph_rag_no_longer_reaches_demoted_fields_via_getattr(self):
+        """A stale getattr would resurrect the old fallback, which often differed.
+
+        Six of the fields moved to graph_defaults.py had a pre-0.5.0 getattr
+        fallback that disagreed with the dataclass default it shadowed; across
+        the wider graph_rag_* surface the same audit found 24 among 143 call
+        sites, some inverting a boolean. Every one was dead only because the
+        field always existed, so deleting a field without deleting its getattr
+        would make that stale fallback live.
+        """
+        import re
+        from pathlib import Path
+
+        import axon.graph_rag
+        from axon.config import _DEMOTED_GRAPH_TUNING
+
+        # Resolve via the imported module, not the cwd — pytest may run from
+        # anywhere, and on some runners the package is installed, not in-tree.
+        src = Path(axon.graph_rag.__file__).read_text(encoding="utf-8", errors="replace")
+        stale = [f for f in _DEMOTED_GRAPH_TUNING if re.search(rf'getattr\([^)]*"{f}"', src)]
+        assert not stale, f"getattr still reaching demoted fields: {stale}"
+
+
 class TestPostInit:
     """Tests for __post_init__ environment-variable handling."""
 
