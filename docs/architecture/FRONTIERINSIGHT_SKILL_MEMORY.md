@@ -51,8 +51,14 @@ than deciding it unilaterally.
 
 **This is the only requirement that looks like it needs API surface.**
 
-Today `search_knowledge` and `query_knowledge` take `project: str | None`, i.e.
-one project or the active one (`src/axon/mcp_server.py:188`, `:216`). Mounts
+Today `search_knowledge` and `query_knowledge` take `project: str | None`, and
+it is worth being precise about what that parameter does, because it is weaker
+than it looks: it is a *guard*, not a selector. It asserts which project the
+caller believes is active, and the call returns 409 if that does not match the
+brain's actual active project (`src/axon/mcp_server.py:188`, `:216`). It cannot
+target a different project — you must `switch_project` first, which mutates
+shared server state. So the gap is not "cross-project retrieval isn't batched";
+it is that a single call can only ever see one project, the active one. Mounts
 (`docs/AXON_STORE.md`) solve a different problem — read-only cross-*user*
 sharing — not "query N of my own projects together".
 
