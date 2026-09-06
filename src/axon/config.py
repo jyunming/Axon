@@ -170,7 +170,7 @@ def _unsaved_field_names() -> list[str]:
     ]
 
 
-# XDG-style user config dir --' consistent across Linux / macOS / Windows
+# XDG-style user config dir — consistent across Linux / macOS / Windows
 
 
 _USER_CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".config", "axon", "config.yaml")
@@ -746,22 +746,22 @@ class AxonConfig:
     # Cosine semantic chunking (only active when chunk_strategy="cosine_semantic")
     cosine_semantic_threshold: float = 0.7
     cosine_semantic_max_size: int = 500
-    # MMR deduplication --' reorders and removes near-duplicate retrieved chunks
+    # MMR deduplication — reorders and removes near-duplicate retrieved chunks
     mmr: bool = False
     mmr_lambda: float = 0.5  # 1.0 = pure relevance, 0.0 = pure diversity
     # Sentence-Window Retrieval (Epic 1)
     # Indexes prose chunks at sentence granularity; retrieves by sentence but
-    # expands each hit to Â+/-sentence_window_size surrounding sentences for LLM
+    # expands each hit to ±sentence_window_size surrounding sentences for LLM
     # context.  Only non-code, non-RAPTOR-summary leaf chunks are eligible.
     # Disabled by default; enable via config.yaml (rag.sentence_window: true).
     sentence_window: bool = False
-    sentence_window_size: int = 3  # Â+/-N sentences around each sentence hit
+    sentence_window_size: int = 3  # ±N sentences around each sentence hit
     # CRAG-Lite Retrieval Correction (Epic 2)
     # Evaluates retrieval confidence before deciding whether to trust local
     # results or escalate to web fallback.  Operates without LLM calls.
     # Disabled by default; enable via config.yaml (rag.crag_lite: true).
     crag_lite: bool = False
-    crag_lite_confidence_threshold: float = 0.4  # below â†' low-confidence fallback
+    crag_lite_confidence_threshold: float = 0.4  # below → low-confidence fallback
     # Re-ranking
     rerank: bool = False
     reranker_provider: Literal["cross-encoder", "llm"] = "cross-encoder"
@@ -785,12 +785,12 @@ class AxonConfig:
         True  # combine multi_query+step_back+decompose+hyde into 1 LLM call
     )
     discussion_fallback: bool = True
-    # Context Compression (Epic 3, Stories 3.1--'3.3)
+    # Context Compression (Epic 3, Stories 3.1–3.3)
     # compress_context: master on/off switch (backward-compatible).
     # compression_strategy selects the algorithm when compress_context is True:
-    #   "sentence"   --' LLM-based sentence extraction (default, existing behaviour)
-    #   "llmlingua"  --' LLMLingua-2 token compression (pip install axon[llmlingua])
-    #   "none"       --' disabled (same as compress_context=False)
+    #   "sentence"   — LLM-based sentence extraction (default, existing behaviour)
+    #   "llmlingua"  — LLMLingua-2 token compression (pip install axon[llmlingua])
+    #   "none"       — disabled (same as compress_context=False)
     # compression_token_budget: target output tokens for llmlingua (0 = use model default ratio).
     compress_context: bool = False
     compression_strategy: str = "sentence"  # "none" | "sentence" | "llmlingua"
@@ -864,7 +864,7 @@ class AxonConfig:
     raptor_graphrag_leaf_skip_threshold: int = 3  # skip GraphRAG on sources >= N leaf chunks
     # GraphRAG Entity-Centric Retrieval
     # During ingest, named entities are extracted from each chunk via the LLM and
-    # stored in an entityâ†'doc_id map.  At retrieval time, entities found in the
+    # stored in an entity→doc_id map.  At retrieval time, entities found in the
     # query are used to expand the result set with graph-connected documents.
     graph_rag: bool = True
     # Maximum number of graph-expanded (entity-linked) documents to inject beyond
@@ -904,16 +904,16 @@ class AxonConfig:
     # GAP 3c: Include claims in community reports
     # GAP 4: Local search token budget and ranking controls
     # Unified candidate ranking weights
-    # Runtime cost reduction --' community triage
-    # Lazy community generation --' skip summarization at finalize; generate on first global query
+    # Runtime cost reduction — community triage
+    # Lazy community generation — skip summarization at finalize; generate on first global query
     graph_rag_community_lazy: bool = True
-    # Global search pre-filter --' cap communities entering map-reduce (0=no cap)
+    # Global search pre-filter — cap communities entering map-reduce (0=no cap)
     graph_rag_global_top_communities: int = 0
     # RAPTOR source-size guard — skip RAPTOR for sources smaller than this MB (0=no filter)
     raptor_min_source_size_mb: float = 5.0
-    # Deferred batch saves --' suppress per-call disk writes during batch ingest.
+    # Deferred batch saves — suppress per-call disk writes during batch ingest.
     # When True: BM25, entity graph, and relation graph saves deferred to finalize_ingest().
-    # Reduces O(NÂ²) disk writes to O(1) per session.
+    # Reduces O(N²) disk writes to O(1) per session.
     # Crash recovery: in-memory state only; re-ingest affected sources on restart.
     ingest_batch_mode: bool = False
     # Per-source chunk count cap after splitting.
@@ -947,14 +947,14 @@ class AxonConfig:
     graph_rag_distance_weighted: bool = True
     graph_rag_large_graph_threshold: int = 50000
     # Community detection backend preference.
-    # "louvain"   = networkx Louvain only (default --' safe on all environments, fast for <10k nodes)
+    # "louvain"   = networkx Louvain only (default — safe on all environments, fast for <10k nodes)
     # "leidenalg" = leidenalg/igraph multi-resolution Leiden (recommended when available)
-    # "auto"      = graspologic â†' leidenalg â†' louvain fallback chain (legacy; unsafe on Python 3.13
+    # "auto"      = graspologic → leidenalg → louvain fallback chain (legacy; unsafe on Python 3.13
     #               because graspologic's import can hang; use only when graspologic is verified safe)
     graph_rag_community_backend: str = "louvain"
     # Structural code graph.
     # Builds File/Symbol nodes and CONTAINS/IMPORTS edges from codebase chunk metadata.
-    # code_graph_bridge: scans prose chunks for code symbol mentions â†' MENTIONED_IN edges.
+    # code_graph_bridge: scans prose chunks for code symbol mentions → MENTIONED_IN edges.
     # Query time: traverses the code graph to expand retrieval results.
     code_graph: bool = False  # build + query structural code graph
     code_graph_bridge: bool = False  # link code symbols to prose chunks
@@ -963,7 +963,7 @@ class AxonConfig:
     code_top_k_multiplier: int = 2  # extra fetch_k factor when code query detected
     code_max_chunks_per_file: int = 3  # per-file cap in final top_k (diversity)
     # Code query mode tuning (active when code_lexical_boost=True and code query detected).
-    # code_bm25_weight only affects weighted fusion mode --' silently ignored in RRF (default).
+    # code_bm25_weight only affects weighted fusion mode — silently ignored in RRF (default).
     code_bm25_weight: float = 0.7  # BM25 weight override for code queries (weighted mode only)
     code_top_k: int = 6  # top-K override when code mode active (0 = use top_k)
     # Retrieval dry-run: skip LLM, return ranked candidates + diagnostics only.
@@ -971,7 +971,7 @@ class AxonConfig:
     # Minimum entity appearance frequency to include in community detection graph.
     # Entities appearing in fewer than this many chunks are pruned before building the graph.
     # 1 = no pruning (include all entities). 2 = prune singletons (recommended for non-trivial
-    # corpora --' reduces noisy one-off entities; qualification studies used 2 for papers corpus).
+    # corpora — reduces noisy one-off entities; qualification studies used 2 for papers corpus).
     graph_rag_entity_min_frequency: int = 2
     # Dedicated thread pool size for map-reduce phase (0 = use max_workers).
     # When set, _global_search_map_reduce creates an isolated pool, preventing map-reduce
@@ -995,7 +995,7 @@ class AxonConfig:
     # Token-level compression of community reports before map-reduce LLM calls.
     # Uses LLMLingua-2. pip install axon[llmlingua]
     graph_rag_report_compress: bool = False
-    graph_rag_report_compress_ratio: float = 0.5  # target compression (0.0--'1.0)
+    graph_rag_report_compress_ratio: float = 0.5  # target compression (0.0–1.0)
     # Auto-route queries based on complexity.
     # "heuristic": keyword-based, zero latency. "llm": one classifier LLM call.
     # "off" (default): use graph_rag_mode as configured.
@@ -1005,20 +1005,20 @@ class AxonConfig:
     # "llm": one LLM call per query to classify route
     # "off": skip router, use graph_rag_auto_route legacy behaviour
     query_router: str = "heuristic"
-    # Contextual retrieval --' prepend LLM-generated situating context to each chunk at ingest time.
+    # Contextual retrieval — prepend LLM-generated situating context to each chunk at ingest time.
     # Based on Anthropic's contextual retrieval technique.
     contextual_retrieval: bool = False
-    # Semantic entity alias resolution --' merge near-duplicate entity names (e.g.
+    # Semantic entity alias resolution — merge near-duplicate entity names (e.g.
     # "Apple" / "Apple Inc." / "Apple Corporation") into a single canonical node before
     # community detection.  Uses cosine similarity on entity-name embeddings.
-    # pip install axon[graphrag]  (no extra deps --' uses the already-loaded embedding model)
+    # pip install axon[graphrag]  (no extra deps — uses the already-loaded embedding model)
     graph_rag_entity_resolve: bool = False
     # Alias-resolution backend. "rust" avoids materializing the full NxN similarity
     # matrix in Python and computes grouping in the Rust module when available.
     graph_rag_entity_resolve_backend: Literal["numpy", "rust"] = "rust"
     graph_rag_rust_build_edges: bool = False
     graph_rag_rust_merge_entities: bool = False
-    graph_rag_entity_resolve_threshold: float = 0.92  # cosine similarity threshold (0--'1)
+    graph_rag_entity_resolve_threshold: float = 0.92  # cosine similarity threshold (0–1)
     graph_rag_entity_resolve_max: int = 5000  # skip if entity count exceeds this (perf guard)
     # Alternative relation extraction backend using REBEL (Babelscape/rebel-large).
     # "rebel" skips the LLM for relation extraction; produces structured (subject, relation,
@@ -1179,9 +1179,9 @@ class AxonConfig:
                     cfg_path = Path(path)
                     cfg_path.parent.mkdir(parents=True, exist_ok=True)
                     write_text_if_changed(cfg_path, _DEFAULT_CONFIG_YAML, {})
-                    logger.info("Created default config at %s --' edit it to customise Axon.", path)
+                    logger.info("Created default config at %s — edit it to customise Axon.", path)
                     # Fall through so the newly-written file is parsed; do NOT return cls()
-                    # here --' that would silently use the dataclass defaults (raptor=True etc.)
+                    # here — that would silently use the dataclass defaults (raptor=True etc.)
                     # instead of the file values (raptor=false etc.).
                 except (OSError, PermissionError) as exc:
                     logger.warning(
@@ -1303,7 +1303,7 @@ class AxonConfig:
         # Map some specific names if they don't match exactly
         if "ollama_base_url" not in config_dict and "llm_base_url" in config_dict:
             config_dict["ollama_base_url"] = config_dict["llm_base_url"]
-        # llm.models_dir â†' ollama_models_dir
+        # llm.models_dir → ollama_models_dir
         if "llm_models_dir" in config_dict and "ollama_models_dir" not in config_dict:
             config_dict["ollama_models_dir"] = config_dict.pop("llm_models_dir")
         if "api_key" not in config_dict and "llm_api_key" in config_dict:
@@ -1403,7 +1403,7 @@ class AxonConfig:
                         "Larger values would emit files the reader rejects."
                     )
                 config_dict["seal_padding_bytes"] = _spb
-        # Environment Variable Overrides (High Priority --' wins over config.yaml)
+        # Environment Variable Overrides (High Priority — wins over config.yaml)
         env_ollama_host = os.getenv("OLLAMA_HOST") or os.getenv("OLLAMA_BASE_URL")
         if env_ollama_host:
             config_dict["ollama_base_url"] = env_ollama_host
