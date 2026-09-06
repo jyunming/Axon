@@ -304,8 +304,9 @@ offline:
 # behaviour) or validate() guessing it was a typo.
 _REMOVED_FIELDS: dict[str, str] = {
     "sparse_retrieval": (
-        "SPLADE learned sparse retrieval was removed in 0.5.0. Retrieval now uses "
-        "dense + BM25 hybrid; delete this key to silence this message."
+        "SPLADE learned sparse retrieval was removed in 0.5.0. Retrieval is now "
+        "dense-only, or dense + BM25 when rag.hybrid_search is true; delete this "
+        "key to silence this message."
     ),
     "sparse_model": "Removed in 0.5.0 with SPLADE learned sparse retrieval.",
     "sparse_weight": "Removed in 0.5.0 with SPLADE learned sparse retrieval.",
