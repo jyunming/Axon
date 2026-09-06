@@ -1438,43 +1438,44 @@ class TestDemotedGraphTuning:
         field's read can live anywhere, and group B's did move beyond
         graph_rag.py into query_router.py and graph_backends/.
         """
-        import re
-        from pathlib import Path
-
-        import axon
-        from axon.config import _DEMOTED_GRAPH_TUNING
-
-        # Resolve via the imported package, not the cwd — pytest may run from
-        # anywhere, and on some runners the package is installed, not in-tree.
-        root = Path(axon.__file__).parent
-        stale = []
-        for path in sorted(root.rglob("*.py")):
-            if path.name == "config.py":
-                continue  # holds the _DEMOTED_GRAPH_TUNING names by definition
-            src = path.read_text(encoding="utf-8", errors="replace")
-            for f in _DEMOTED_GRAPH_TUNING:
-                if re.search(rf'getattr\([^)]*"{f}"', src):
-                    stale.append(f"{path.name}:{f}")
-        assert not stale, f"getattr still reaching demoted fields: {stale}"
+        hits = self._scan_package(lambda f: rf"getattr\([^)]*['\"]{f}['\"]")
+        assert not hits, f"getattr still reaching demoted fields: {hits}"
 
     def test_no_module_reads_a_demoted_field_as_an_attribute(self):
         """`cfg.graph_rag_community_min_size` would now raise AttributeError."""
+        hits = self._scan_package(lambda f: rf"\.{f}\b")
+        assert not hits, f"attribute reads of demoted fields: {hits}"
+
+    @staticmethod
+    def _scan_package(pattern_for):
+        """Search every module in the installed `axon` package for a pattern.
+
+        Resolves through the imported package rather than the cwd, so the scan
+        works from any working directory and against an installed copy. Reports
+        package-relative path plus line number — bare filenames are ambiguous
+        in a tree with several `__init__.py`.
+        """
         import re
         from pathlib import Path
 
         import axon
+        import axon.config
         from axon.config import _DEMOTED_GRAPH_TUNING
 
         root = Path(axon.__file__).parent
-        stale = []
+        # config.py itself holds every demoted name, by definition.
+        skip = Path(axon.config.__file__).resolve()
+        hits = []
         for path in sorted(root.rglob("*.py")):
-            if path.name == "config.py":
+            if path.resolve() == skip:
                 continue
             src = path.read_text(encoding="utf-8", errors="replace")
-            for f in _DEMOTED_GRAPH_TUNING:
-                if re.search(rf"\.{f}\b", src):
-                    stale.append(f"{path.name}:{f}")
-        assert not stale, f"attribute reads of demoted fields: {stale}"
+            for field in _DEMOTED_GRAPH_TUNING:
+                for m in re.finditer(pattern_for(field), src):
+                    line = src[: m.start()].count("\n") + 1
+                    rel = path.relative_to(root).as_posix()
+                    hits.append(f"{rel}:{line}:{field}")
+        return hits
 
 
 class TestPostInit:
