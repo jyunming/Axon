@@ -128,18 +128,25 @@ bound to the same store — not the request shape.
 
 ---
 
-## 3. The `default`-prefix residual — reachable, and the path is narrower than stated
+## 3. The `default`-prefix residual — reachable, and not only via `default`
 
-FI classified this as "narrow, and it does not affect FI." Both halves hold, but
-the hazard is **reachable rather than theoretical**, and the reachable path is
-worth naming precisely because it is not the one either side assumed.
+FI classified this as "narrow, and it does not affect FI." Both halves hold. But
+the hazard is **reachable rather than theoretical**, and the widest path does not
+run through the `default` exemption at all — which makes the item slightly
+mis-named, and worth setting out precisely.
 
 Verified live during the `/add_text` test above. A document ingested into
 `default` receives the id `fi_addtext_probe_20260906_p0_chunk_0` — no prefix —
 against FI's observed `proj_51d42033…::file_98c8ff97…_p5_chunk_2` from a named
 project. The exemption at `main.py:2466` is doing exactly what its comment says.
 
-The reachable path is `@store` scope, at `src/axon/main.py:828-830`:
+Namespaced ids cannot collide with each other — `proj_A::X` and `proj_B::X`
+differ. A collision needs two **un-prefixed** id spaces sharing one fan-out. Two
+things produce un-prefixed ids: the `default` exemption, and any row ingested
+into a named project *before* namespacing landed. Any multi-project scope can
+then put two of them together.
+
+`@store` scope does it explicitly, at `src/axon/main.py:828-830`:
 
 ```python
 if scope == "@store":
@@ -147,16 +154,22 @@ if scope == "@store":
     project_paths.insert(0, (self._base_vector_store_path, self._base_bm25_path))
 ```
 
-Under `@store`, `default` is placed in the *same* `MultiVectorStore` as every
-named project. Namespaced ids cannot collide with each other — `proj_A::X` and
-`proj_B::X` differ. The collision can only occur between two **un-prefixed** id
-spaces sharing one fan-out, which `@store` creates. Two such pairings exist:
+which places `default` in the same `MultiVectorStore` as every named project.
+Three pairings are reachable:
 
 1. **`default` ↔ a mount whose content was ingested into the owner's own
-   `default`.** Both sides raw, both in the fan-out, ids can coincide.
-2. **`default` ↔ documents ingested into a named project *before* namespacing
-   landed.** Legacy rows are raw too. This is the likelier of the two, since it
-   needs no mount at all — only a store old enough.
+   `default`.** Both raw, both in the fan-out, ids can coincide. `@store` only.
+2. **`default` ↔ legacy pre-namespacing rows in a named project.** `@store`
+   only, but needs no mount — just a store old enough.
+3. **Legacy rows in project A ↔ legacy rows in project B.** No `default`
+   involved at all, so this one fires under plain **`@projects`** scope
+   (`main.py:819-827`, which fans out every authoritative project). Any store
+   with two or more projects predating namespacing is exposed.
+
+So the trigger is a multi-project scope, not `@store` specifically: `@store`
+always, `@projects` whenever at least two projects carry legacy rows. Pairing 3
+is the one worth remembering, because it is reachable on the most ordinary scope
+and the `default` exemption is not what causes it.
 
 Consequence is a silent dedup drop, not corruption or a wrong answer: one of the
 two documents disappears from results.
@@ -164,14 +177,17 @@ two documents disappears from results.
 **Axon's decision: fix it, but not as a namespacing change.** Prefixing `default`
 retroactively would orphan every existing raw id in every `default` store — the
 exemption's stated reason ("existing single-project deployments are unaffected")
-is sound and stays. The defect is that `@store` merges two id spaces with
-different rules, so the fix belongs at the fan-out: dedup under `@store` should
-key on `(store_index, id)` rather than `id` alone, which costs nothing and is
-correct regardless of how any individual store names its rows.
+is sound and stays. Nor would prefixing help pairing 3, which involves no
+`default` at all. The defect is that a fan-out merges id spaces obeying
+different naming rules, so the fix belongs at the fan-out: `MultiVectorStore` /
+`MultiBM25Retriever` dedup should key on `(store_index, id)` rather than `id`
+alone. That costs nothing, covers all three pairings, and stays correct however
+any individual store names its rows.
 
-Scheduled against the 0.5.0 slim-down, not as a hotfix — it is narrow, it is
-silent, and it needs `@store` scope to trigger. **It does not affect FI**, which
-uses neither `default` nor `@store`.
+Scheduled against the 0.5.0 slim-down, not as a hotfix — it is silent, it needs
+a multi-project scope, and pairing 3 additionally needs a store old enough to
+hold pre-namespacing rows in two projects. **It does not affect FI**, which pins
+a single project (`core/knowledge.py:189`) and so never fans out at all.
 
 ---
 
