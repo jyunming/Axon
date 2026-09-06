@@ -9,3 +9,4 @@ For user-facing guides, see the [docs/](../) directory.
 - [FRONTIERINSIGHT_SKILL_MEMORY.md](FRONTIERINSIGHT_SKILL_MEMORY.md) — what FrontierInsight expects to need from Axon as it moves to accumulated skills; proposal for discussion, nothing agreed
 - [FRONTIERINSIGHT_SKILL_MEMORY_RESPONSE.md](FRONTIERINSIGHT_SKILL_MEMORY_RESPONSE.md) — Axon-side assessment of that proposal: what each requirement would actually cost here, and why the order should change
 - [FRONTIERINSIGHT_SKILL_MEMORY_FOLLOWUP.md](FRONTIERINSIGHT_SKILL_MEMORY_FOLLOWUP.md) — FI's verification of that response: two answers confirmed, the cross-project merge defect found already fixed, and FI's own many-project requirement withdrawn
+- [FRONTIERINSIGHT_SKILL_MEMORY_THREAD.md](FRONTIERINSIGHT_SKILL_MEMORY_THREAD.md) — index and status for the FI/Axon exchange above; start here to see which reply is where
