@@ -1423,27 +1423,59 @@ class TestDemotedGraphTuning:
         assert _gd.LOCAL_TEXT_UNIT_WEIGHT == 1.0
         assert _gd.LOCAL_EARLY_CUTOFF_FACTOR == 1.5
 
-    def test_graph_rag_no_longer_reaches_demoted_fields_via_getattr(self):
+    def test_no_module_reaches_demoted_fields_via_getattr(self):
         """A stale getattr would resurrect the old fallback, which often differed.
 
-        Six of the fields moved to graph_defaults.py had a pre-0.5.0 getattr
-        fallback that disagreed with the dataclass default it shadowed; across
-        the wider graph_rag_* surface the same audit found 24 among 143 call
-        sites, some inverting a boolean. Every one was dead only because the
-        field always existed, so deleting a field without deleting its getattr
-        would make that stale fallback live.
+        Several fields moved to graph_defaults.py had a pre-0.5.0 getattr
+        fallback that disagreed with the dataclass default it shadowed —
+        ``graph_rag_community_use_lcc``'s said True where the field said False.
+        Across the wider graph_rag_* surface the audit found 24 such drifts
+        among 143 call sites. Every one was dead only because the field always
+        existed, so deleting a field without deleting its getattr would make
+        that stale fallback live.
+
+        Scans every module in the package rather than a fixed list: a demoted
+        field's read can live anywhere, and group B's did move beyond
+        graph_rag.py into query_router.py and graph_backends/.
+        """
+        hits = self._scan_package(lambda f: rf"getattr\([^)]*['\"]{f}['\"]")
+        assert not hits, f"getattr still reaching demoted fields: {hits}"
+
+    def test_no_module_reads_a_demoted_field_as_an_attribute(self):
+        """`cfg.graph_rag_community_min_size` would now raise AttributeError."""
+        hits = self._scan_package(lambda f: rf"\.{f}\b")
+        assert not hits, f"attribute reads of demoted fields: {hits}"
+
+    @staticmethod
+    def _scan_package(pattern_for):
+        """Search every module in the installed `axon` package for a pattern.
+
+        Resolves through the imported package rather than the cwd, so the scan
+        works from any working directory and against an installed copy. Reports
+        package-relative path plus line number — bare filenames are ambiguous
+        in a tree with several `__init__.py`.
         """
         import re
         from pathlib import Path
 
-        import axon.graph_rag
+        import axon
+        import axon.config
         from axon.config import _DEMOTED_GRAPH_TUNING
 
-        # Resolve via the imported module, not the cwd — pytest may run from
-        # anywhere, and on some runners the package is installed, not in-tree.
-        src = Path(axon.graph_rag.__file__).read_text(encoding="utf-8", errors="replace")
-        stale = [f for f in _DEMOTED_GRAPH_TUNING if re.search(rf'getattr\([^)]*"{f}"', src)]
-        assert not stale, f"getattr still reaching demoted fields: {stale}"
+        root = Path(axon.__file__).parent
+        # config.py itself holds every demoted name, by definition.
+        skip = Path(axon.config.__file__).resolve()
+        hits = []
+        for path in sorted(root.rglob("*.py")):
+            if path.resolve() == skip:
+                continue
+            src = path.read_text(encoding="utf-8", errors="replace")
+            for field in _DEMOTED_GRAPH_TUNING:
+                for m in re.finditer(pattern_for(field), src):
+                    line = src[: m.start()].count("\n") + 1
+                    rel = path.relative_to(root).as_posix()
+                    hits.append(f"{rel}:{line}:{field}")
+        return hits
 
 
 class TestPostInit:

@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from axon import graph_defaults as _gd
 from axon.code_graph import CodeGraphMixin
 from axon.config import AxonConfig
 from axon.graph_rag import GraphRagMixin
@@ -893,12 +894,12 @@ class TestGenerateCommunitySummaries:
         brain._generate_community_summaries()
         brain.llm.complete.assert_not_called()
 
-    def test_generates_template_for_small_community(self, tmp_path):
+    def test_generates_template_for_small_community(self, tmp_path, monkeypatch):
         """Lines 547-618: communities below min_size get template summaries."""
+        monkeypatch.setattr(_gd, "COMMUNITY_MIN_SIZE", 5)
         cfg = AxonConfig(
             bm25_path=str(tmp_path),
             vector_store_path=str(tmp_path),
-            graph_rag_community_min_size=5,  # communities with <5 members get template
         )
         brain = _make_brain(config=cfg)
         brain._community_levels = {0: {"alice": 0, "bob": 0}}
@@ -910,12 +911,12 @@ class TestGenerateCommunitySummaries:
         brain.llm.complete.assert_not_called()
         assert "0_0" in brain._community_summaries
 
-    def test_generates_llm_summary_for_large_community(self, tmp_path):
+    def test_generates_llm_summary_for_large_community(self, tmp_path, monkeypatch):
         """Lines 654-656: large community gets LLM summary."""
+        monkeypatch.setattr(_gd, "COMMUNITY_MIN_SIZE", 2)
         cfg = AxonConfig(
             bm25_path=str(tmp_path),
             vector_store_path=str(tmp_path),
-            graph_rag_community_min_size=2,
         )
         brain = _make_brain(config=cfg)
         # Build 4 entities in one community
@@ -950,9 +951,7 @@ class TestGenerateCommunitySummaries:
         """Lines 772-776: cached summary with same member_hash is reused."""
         import hashlib
 
-        cfg = AxonConfig(
-            bm25_path=str(tmp_path), vector_store_path=str(tmp_path), graph_rag_community_min_size=1
-        )
+        cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
         brain = _make_brain(config=cfg)
         members = ["alice", "bob"]
         raw = f"0|{'|'.join(sorted(members))}"
@@ -976,12 +975,12 @@ class TestGenerateCommunitySummaries:
         # LLM should not be called because cache hit
         brain.llm.complete.assert_not_called()
 
-    def test_lazy_mode_tightens_cap(self, tmp_path):
+    def test_lazy_mode_tightens_cap(self, tmp_path, monkeypatch):
         """Lines 713-720: query_hint + lazy_cap tightens max_total."""
+        monkeypatch.setattr(_gd, "COMMUNITY_MIN_SIZE", 1)
         cfg = AxonConfig(
             bm25_path=str(tmp_path),
             vector_store_path=str(tmp_path),
-            graph_rag_community_min_size=1,
             graph_rag_global_top_communities=2,
         )
         brain = _make_brain(config=cfg)
@@ -999,12 +998,12 @@ class TestGenerateCommunitySummaries:
         # Should have been called (communities above min_size)
         assert len(brain._community_summaries) > 0
 
-    def test_llm_returns_invalid_json_falls_back(self, tmp_path):
+    def test_llm_returns_invalid_json_falls_back(self, tmp_path, monkeypatch):
         """Lines 871-875: invalid JSON from LLM falls back to raw text."""
+        monkeypatch.setattr(_gd, "COMMUNITY_MIN_SIZE", 1)
         cfg = AxonConfig(
             bm25_path=str(tmp_path),
             vector_store_path=str(tmp_path),
-            graph_rag_community_min_size=1,
         )
         brain = _make_brain(config=cfg)
         brain._community_levels = {0: {"alice": 0, "bob": 0, "carol": 0}}
@@ -1023,12 +1022,12 @@ class TestGenerateCommunitySummaries:
         # Fallback: summary is the raw text
         assert brain._community_summaries[key]["summary"] == "Plain text, not JSON"
 
-    def test_llm_exception_returns_empty_summary(self, tmp_path):
+    def test_llm_exception_returns_empty_summary(self, tmp_path, monkeypatch):
         """Lines 895-897: LLM exception produces empty summary entry."""
+        monkeypatch.setattr(_gd, "COMMUNITY_MIN_SIZE", 1)
         cfg = AxonConfig(
             bm25_path=str(tmp_path),
             vector_store_path=str(tmp_path),
-            graph_rag_community_min_size=1,
         )
         brain = _make_brain(config=cfg)
         brain._community_levels = {0: {"alice": 0, "bob": 0, "carol": 0}}
@@ -1145,8 +1144,6 @@ class TestGlobalSearchMapReduce:
         assert result == ""
 
     def test_returns_no_data_answer_when_all_points_below_threshold(self, tmp_path, monkeypatch):
-        from axon import graph_defaults as _gd
-
         monkeypatch.setattr(_gd, "GLOBAL_MIN_SCORE", 80)
         cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
         brain = _make_brain(config=cfg)
@@ -1168,7 +1165,6 @@ class TestGlobalSearchMapReduce:
 
     def test_reduces_valid_points(self, tmp_path, monkeypatch):
         """Lines 1184-1193: reduce phase calls LLM and returns response."""
-        from axon import graph_defaults as _gd
 
         monkeypatch.setattr(_gd, "GLOBAL_MIN_SCORE", 0)
         cfg = AxonConfig(graph_rag_map_batch_size=1)
@@ -1192,13 +1188,12 @@ class TestGlobalSearchMapReduce:
 
     def test_level_filtering(self, tmp_path, monkeypatch):
         """Lines 1018-1025: only summaries matching target level are used."""
-        from axon import graph_defaults as _gd
+        monkeypatch.setattr(_gd, "COMMUNITY_LEVEL", 1)
 
         monkeypatch.setattr(_gd, "GLOBAL_MIN_SCORE", 0)
         cfg = AxonConfig(
             bm25_path=str(tmp_path),
             vector_store_path=str(tmp_path),
-            graph_rag_community_level=1,
         )
         brain = _make_brain(config=cfg)
         brain._community_summaries = {
@@ -1224,7 +1219,6 @@ class TestGlobalSearchMapReduce:
 
     def test_reduce_exception_returns_fallback(self, tmp_path, monkeypatch):
         """Lines 1190-1193: reduce exception returns fallback text."""
-        from axon import graph_defaults as _gd
 
         monkeypatch.setattr(_gd, "GLOBAL_MIN_SCORE", 0)
         cfg = AxonConfig(graph_rag_map_batch_size=1)
@@ -2857,12 +2851,12 @@ class TestGenerateCommunitySummariesV2:
         brain._generate_community_summaries()
         brain.llm.complete.assert_not_called()
 
-    def test_generates_template_for_small_community(self, tmp_path):
+    def test_generates_template_for_small_community(self, tmp_path, monkeypatch):
         """Lines 547-618: communities below min_size get template summaries."""
+        monkeypatch.setattr(_gd, "COMMUNITY_MIN_SIZE", 5)
         cfg = AxonConfig(
             bm25_path=str(tmp_path),
             vector_store_path=str(tmp_path),
-            graph_rag_community_min_size=5,  # communities with <5 members get template
         )
         brain = _make_brain(config=cfg)
         brain._community_levels = {0: {"alice": 0, "bob": 0}}
@@ -2874,12 +2868,12 @@ class TestGenerateCommunitySummariesV2:
         brain.llm.complete.assert_not_called()
         assert "0_0" in brain._community_summaries
 
-    def test_generates_llm_summary_for_large_community(self, tmp_path):
+    def test_generates_llm_summary_for_large_community(self, tmp_path, monkeypatch):
         """Lines 654-656: large community gets LLM summary."""
+        monkeypatch.setattr(_gd, "COMMUNITY_MIN_SIZE", 2)
         cfg = AxonConfig(
             bm25_path=str(tmp_path),
             vector_store_path=str(tmp_path),
-            graph_rag_community_min_size=2,
         )
         brain = _make_brain(config=cfg)
         # Build 4 entities in one community
@@ -2914,9 +2908,7 @@ class TestGenerateCommunitySummariesV2:
         """Lines 772-776: cached summary with same member_hash is reused."""
         import hashlib
 
-        cfg = AxonConfig(
-            bm25_path=str(tmp_path), vector_store_path=str(tmp_path), graph_rag_community_min_size=1
-        )
+        cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
         brain = _make_brain(config=cfg)
         members = ["alice", "bob"]
         raw = f"0|{'|'.join(sorted(members))}"
@@ -2940,12 +2932,12 @@ class TestGenerateCommunitySummariesV2:
         # LLM should not be called because cache hit
         brain.llm.complete.assert_not_called()
 
-    def test_lazy_mode_tightens_cap(self, tmp_path):
+    def test_lazy_mode_tightens_cap(self, tmp_path, monkeypatch):
         """Lines 713-720: query_hint + lazy_cap tightens max_total."""
+        monkeypatch.setattr(_gd, "COMMUNITY_MIN_SIZE", 1)
         cfg = AxonConfig(
             bm25_path=str(tmp_path),
             vector_store_path=str(tmp_path),
-            graph_rag_community_min_size=1,
             graph_rag_global_top_communities=2,
         )
         brain = _make_brain(config=cfg)
@@ -2963,12 +2955,12 @@ class TestGenerateCommunitySummariesV2:
         # Should have been called (communities above min_size)
         assert len(brain._community_summaries) > 0
 
-    def test_llm_returns_invalid_json_falls_back(self, tmp_path):
+    def test_llm_returns_invalid_json_falls_back(self, tmp_path, monkeypatch):
         """Lines 871-875: invalid JSON from LLM falls back to raw text."""
+        monkeypatch.setattr(_gd, "COMMUNITY_MIN_SIZE", 1)
         cfg = AxonConfig(
             bm25_path=str(tmp_path),
             vector_store_path=str(tmp_path),
-            graph_rag_community_min_size=1,
         )
         brain = _make_brain(config=cfg)
         brain._community_levels = {0: {"alice": 0, "bob": 0, "carol": 0}}
@@ -2987,12 +2979,12 @@ class TestGenerateCommunitySummariesV2:
         # Fallback: summary is the raw text
         assert brain._community_summaries[key]["summary"] == "Plain text, not JSON"
 
-    def test_llm_exception_returns_empty_summary(self, tmp_path):
+    def test_llm_exception_returns_empty_summary(self, tmp_path, monkeypatch):
         """Lines 895-897: LLM exception produces empty summary entry."""
+        monkeypatch.setattr(_gd, "COMMUNITY_MIN_SIZE", 1)
         cfg = AxonConfig(
             bm25_path=str(tmp_path),
             vector_store_path=str(tmp_path),
-            graph_rag_community_min_size=1,
         )
         brain = _make_brain(config=cfg)
         brain._community_levels = {0: {"alice": 0, "bob": 0, "carol": 0}}
@@ -3109,8 +3101,6 @@ class TestGlobalSearchMapReduceV2:
         assert result == ""
 
     def test_returns_no_data_answer_when_all_points_below_threshold(self, tmp_path, monkeypatch):
-        from axon import graph_defaults as _gd
-
         monkeypatch.setattr(_gd, "GLOBAL_MIN_SCORE", 80)
         cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
         brain = _make_brain(config=cfg)
@@ -3132,7 +3122,6 @@ class TestGlobalSearchMapReduceV2:
 
     def test_reduces_valid_points(self, tmp_path, monkeypatch):
         """Lines 1184-1193: reduce phase calls LLM and returns response."""
-        from axon import graph_defaults as _gd
 
         monkeypatch.setattr(_gd, "GLOBAL_MIN_SCORE", 0)
         cfg = AxonConfig(graph_rag_map_batch_size=1)
@@ -3156,13 +3145,12 @@ class TestGlobalSearchMapReduceV2:
 
     def test_level_filtering(self, tmp_path, monkeypatch):
         """Lines 1018-1025: only summaries matching target level are used."""
-        from axon import graph_defaults as _gd
+        monkeypatch.setattr(_gd, "COMMUNITY_LEVEL", 1)
 
         monkeypatch.setattr(_gd, "GLOBAL_MIN_SCORE", 0)
         cfg = AxonConfig(
             bm25_path=str(tmp_path),
             vector_store_path=str(tmp_path),
-            graph_rag_community_level=1,
         )
         brain = _make_brain(config=cfg)
         brain._community_summaries = {
@@ -3188,7 +3176,6 @@ class TestGlobalSearchMapReduceV2:
 
     def test_reduce_exception_returns_fallback(self, tmp_path, monkeypatch):
         """Lines 1190-1193: reduce exception returns fallback text."""
-        from axon import graph_defaults as _gd
 
         monkeypatch.setattr(_gd, "GLOBAL_MIN_SCORE", 0)
         cfg = AxonConfig(graph_rag_map_batch_size=1)
@@ -4135,7 +4122,6 @@ class TestMapCommunityBatch:
     @pytest.fixture(autouse=True)
     def _wide_open_map_reduce(self, monkeypatch):
         """Let every point through, so these tests measure batching, not scoring."""
-        from axon import graph_defaults as _gd
 
         monkeypatch.setattr(_gd, "GLOBAL_MIN_SCORE", 0)
         monkeypatch.setattr(_gd, "GLOBAL_TOP_POINTS", 100)

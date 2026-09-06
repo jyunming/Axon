@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from axon.config import AxonConfig
 
+from axon import graph_defaults as _gd
 from axon._lru_ttl_cache import lru_ttl_get, lru_ttl_put  # noqa: E402
 from axon.code_retrieval import (  # noqa: E402
     CodeRetrievalDiagnostics,
@@ -1636,9 +1637,7 @@ class QueryRouterMixin:
             and getattr(cfg, "graph_rag_community_lazy", False)
             and hasattr(self._graph_backend, "ensure_community_summaries")
         ):
-            self._graph_backend.ensure_community_summaries(
-                query, getattr(cfg, "graph_rag_index_community_reports", True)
-            )
+            self._graph_backend.ensure_community_summaries(query, _gd.INDEX_COMMUNITY_REPORTS)
         if (
             cfg.graph_rag
             and graph_mode in ("global", "hybrid")
@@ -1829,9 +1828,7 @@ class QueryRouterMixin:
             and getattr(cfg, "graph_rag_community_lazy", False)
             and hasattr(self._graph_backend, "ensure_community_summaries")
         ):
-            self._graph_backend.ensure_community_summaries(
-                query, getattr(cfg, "graph_rag_index_community_reports", True)
-            )
+            self._graph_backend.ensure_community_summaries(query, _gd.INDEX_COMMUNITY_REPORTS)
         if (
             cfg.graph_rag
             and graph_mode in ("global", "hybrid")

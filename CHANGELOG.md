@@ -51,6 +51,22 @@ never reaches. Nothing a default install can do was removed.
   hangs on a first global query. (Its documented default was wrong in two docs —
   `0`, meaning no cap, not `20`.)
 
+- **13 more GraphRAG community-clustering config keys are removed** — the shape
+  of the clustering itself (`graph_rag_community_max_cluster_size`,
+  `_use_lcc`, `graph_rag_leiden_seed`, `_min_size`, `_llm_top_n_per_level`,
+  `_llm_max_total`, `_max_context_tokens`, `_include_claims`,
+  `graph_rag_community_level`, `graph_rag_index_community_reports`,
+  `_summary_compact_persist`, `_rebuild_debounce_s`), plus
+  `graph_rag_community_top_k`, which no code path ever read. None appeared in
+  `_KNOWN_YAML_KEYS`, in `/config/get`, or in any doc.
+
+  The knobs an operator actually reaches for are deliberately kept:
+  `graph_rag_community` (on/off), `_async`, `_backend` (`louvain` vs
+  `leidenalg` — an install choice on Python 3.13), `_defer` and `_lazy` (when
+  the LLM work happens) and `_levels`. `docs/TROUBLESHOOTING.md` names several
+  of them as fixes; removing them would take away the way out of a problem
+  rather than making the tool lighter.
+
 ### 🐛 Fixes
 
 - **`validate()` reported working config keys as typos, and misnamed the fix.**
