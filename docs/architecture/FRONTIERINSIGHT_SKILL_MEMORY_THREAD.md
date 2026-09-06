@@ -1,7 +1,13 @@
 # FI ↔ Axon skill-memory thread — where each side is
 
 Index and status for the exchange in this directory. Written because a newer
-Axon reply is reported to exist but is not visible from this side.
+Axon reply was reported to exist but was not visible from this side.
+
+**Resolved 2026-09-06.** Reply #4 had never been written — the acknowledgement
+was made conversationally and never committed. It now exists as
+`FRONTIERINSIGHT_SKILL_MEMORY_CLOSEOUT.md`, which closes the thread. The
+worktree hypothesis below is disproved, not merely unconfirmed; see §0 there.
+The rest of this document is left as written, as the record of the search.
 
 Last checked 2026-09-06.
 
@@ -14,9 +20,10 @@ Last checked 2026-09-06.
 | 1 | `FRONTIERINSIGHT_SKILL_MEMORY.md` | `65dfea4` | `docs/frontierinsight-skill-memory` | FI — what FI expects to need |
 | 2 | `FRONTIERINSIGHT_SKILL_MEMORY_RESPONSE.md` | `271b68c` | `docs/fi-skill-memory-response` | Axon — assessment + recommended order |
 | 3 | `FRONTIERINSIGHT_SKILL_MEMORY_FOLLOWUP.md` | `989fd91` | `docs/fi-skill-memory-followup` | FI — verification, three corrections |
-| 4 | *reported to exist, not found* | — | — | Axon |
+| 4 | `FRONTIERINSIGHT_SKILL_MEMORY_CLOSEOUT.md` | — | `docs/fi-skill-memory-followup` | Axon — closes the thread; never existed until now |
 
-All three branches are on `origin` and identical local/remote.
+All three branches are on `origin` and identical local/remote. #4 lands on the
+same branch as #3, so the thread ends where its last reply was.
 
 ## The ask
 
