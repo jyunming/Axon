@@ -201,3 +201,111 @@ class TestRebuildVectorStore:
         assert r["chunks"] == 2
         assert r["duplicate_ids"] == 1
         assert r["rows_dropped_as_duplicates"] == 1
+
+
+class TestPanicExceptionIsCaught:
+    """A Rust panic reaches Python as PyO3's PanicException, which inherits
+    BaseException — so `except Exception` would miss the very failure the
+    degradation guard exists for, while appearing to handle it. That is how
+    the #165 failure presented on tqdb builds that panicked instead of
+    returning an error.
+    """
+
+    def _open_raising(self, tmp_path, monkeypatch, exc):
+        import json
+        import sys
+        import types
+
+        from axon.config import AxonConfig
+        from axon.vector_store import OpenVectorStore
+
+        (tmp_path / "manifest.json").write_text(
+            json.dumps({"version": 2, "d": 384, "b": 4, "seed": 42}), encoding="utf-8"
+        )
+
+        class _Boom:
+            @staticmethod
+            def open(*a, **k):
+                raise exc
+
+        fake = types.ModuleType("tqdb")
+        fake.Database = _Boom
+        monkeypatch.setitem(sys.modules, "tqdb", fake)
+        cfg = AxonConfig(vector_store_path=str(tmp_path), bm25_path=str(tmp_path))
+        return OpenVectorStore(cfg)
+
+    def test_a_baseexception_failure_still_degrades(self, tmp_path, monkeypatch):
+        class _PanicLike(BaseException):
+            """Stands in for pyo3_runtime.PanicException."""
+
+        vs = self._open_raising(
+            tmp_path, monkeypatch, _PanicLike("panicked at 'range end index out of range'")
+        )
+        assert vs.is_unreadable
+        assert "range end index" in vs.unreadable_reason
+
+    def test_keyboard_interrupt_is_not_swallowed(self, tmp_path, monkeypatch):
+        """Widening to BaseException must not eat Ctrl+C."""
+        import pytest
+
+        with pytest.raises(KeyboardInterrupt):
+            self._open_raising(tmp_path, monkeypatch, KeyboardInterrupt())
+
+    def test_system_exit_is_not_swallowed(self, tmp_path, monkeypatch):
+        import pytest
+
+        with pytest.raises(SystemExit):
+            self._open_raising(tmp_path, monkeypatch, SystemExit(1))
+
+
+class TestSearchPanicDoesNotKillTheCaller:
+    """A store can open cleanly and fail on the first query.
+
+    That is how a truncated live-codes file behaved before tqdb 0.8.5, and it
+    arrived as a PanicException — so an unguarded `client.search` took the
+    request handler or worker thread down with it.
+    """
+
+    def _store_that_opens_but_fails_on_search(self, tmp_path, monkeypatch, exc):
+        import json
+        import sys
+        import types
+        from unittest.mock import MagicMock
+
+        from axon.config import AxonConfig
+        from axon.vector_store import OpenVectorStore
+
+        (tmp_path / "manifest.json").write_text(
+            json.dumps({"version": 2, "d": 4, "b": 4, "seed": 42}), encoding="utf-8"
+        )
+        db = MagicMock()
+        db.search.side_effect = exc
+
+        class _DB:
+            @staticmethod
+            def open(*a, **k):
+                return db
+
+        fake = types.ModuleType("tqdb")
+        fake.Database = _DB
+        monkeypatch.setitem(sys.modules, "tqdb", fake)
+        cfg = AxonConfig(vector_store_path=str(tmp_path), bm25_path=str(tmp_path))
+        return OpenVectorStore(cfg)
+
+    def test_a_panic_on_search_degrades(self, tmp_path, monkeypatch):
+        class _PanicLike(BaseException):
+            pass
+
+        vs = self._store_that_opens_but_fails_on_search(
+            tmp_path, monkeypatch, _PanicLike("panicked at 'range end index out of range'")
+        )
+        assert vs.is_unreadable is False, "must open cleanly first"
+        assert vs.search([0.1] * 4, top_k=3) == []
+        assert vs.is_unreadable, "a failed search should mark the store"
+
+    def test_keyboard_interrupt_during_search_is_not_swallowed(self, tmp_path, monkeypatch):
+        import pytest
+
+        vs = self._store_that_opens_but_fails_on_search(tmp_path, monkeypatch, KeyboardInterrupt())
+        with pytest.raises(KeyboardInterrupt):
+            vs.search([0.1] * 4, top_k=3)

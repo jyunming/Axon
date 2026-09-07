@@ -174,7 +174,11 @@ class OpenVectorStore:
                         fast_mode=getattr(self.config, "tqdb_fast_mode", False),
                         rerank_precision=getattr(self.config, "tqdb_rerank_precision", None),
                     )
-                except Exception as exc:
+                except (KeyboardInterrupt, SystemExit, GeneratorExit):
+                    # Control-flow exceptions are not store failures; let them
+                    # travel so Ctrl+C and interpreter shutdown still work.
+                    raise
+                except BaseException as exc:
                     # An unopenable store is recoverable for most callers: the
                     # chunk text lives separately in bm25_index/, so the vectors
                     # can be rebuilt without re-reading the source files.
@@ -182,6 +186,14 @@ class OpenVectorStore:
                     # AxonBrain.__init__ builds the vector store, so an
                     # embedding application could not start at all, even for
                     # work that never touches retrieval.
+                    #
+                    # BaseException, not Exception, and this is the whole point:
+                    # a Rust-side panic reaches Python as PyO3's
+                    # PanicException, which inherits BaseException. That is
+                    # exactly how the failure behind #165 presented on the tqdb
+                    # builds that panicked rather than returning an error — so
+                    # catching Exception here would have missed the case this
+                    # guard exists for, while looking like it handled it.
                     self.client = None
                     self.unreadable_reason = f"{type(exc).__name__}: {exc}"
                     logger.error(
@@ -688,7 +700,28 @@ class OpenVectorStore:
                     "rrf_k": 60,
                     "oversample": 2,
                 }
-            results = self.client.search(q, **search_kwargs)
+            try:
+                results = self.client.search(q, **search_kwargs)
+            except (KeyboardInterrupt, SystemExit, GeneratorExit):
+                raise
+            except BaseException as exc:
+                # A store can open cleanly and still fail on the first query —
+                # that is how a truncated live-codes file behaved before tqdb
+                # 0.8.5, and it arrived as a PyO3 PanicException, which
+                # inherits BaseException. Unguarded here it killed the request
+                # handler or worker thread that ran the query. A failed search
+                # degrades to no results, like an unreadable store, and marks
+                # the store so the next caller is told rather than left to
+                # rediscover it.
+                self.unreadable_reason = f"{type(exc).__name__}: {exc}"
+                logger.error(
+                    "Vector search failed on the store at %s: %s\n"
+                    "  Treating the store as unreadable. Rebuild it with "
+                    "`axon --rebuild-vector-store`.",
+                    self.config.vector_store_path,
+                    self.unreadable_reason,
+                )
+                return []
             return [
                 {
                     "id": r["id"],
