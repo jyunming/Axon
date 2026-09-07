@@ -68,7 +68,24 @@ dependencies = [
     # lancedb moved to the [lancedb] extra in 0.5.0 — the default vector store is
     # turboquantdb (tqdb), and lancedb is only imported inside the
     # `provider == "lancedb"` branch. Matches how chroma/qdrant are already handled.
-    "tqdb>=0.7.0",
+    #
+    # 0.8.5 carries the close()-mmap-leak fix (tqdb#102). It also carries a
+    # quantizer.bin format change that landed in 0.8.4: dense-mode stores
+    # written by 0.8.3 or earlier cannot be read, and the failure surfaces as
+    # "io error: unexpected end of file" rather than a version mismatch. Axon
+    # detects an unopenable store, degrades instead of failing construction,
+    # and offers `axon --rebuild-vector-store` to re-embed from the chunk text
+    # in bm25_index/.
+    #
+    # The ceiling is the lesson from that episode — `tqdb>=0.7.0` accepted any
+    # future release of the library that owns our on-disk format, so a
+    # breaking change in a patch version reached users with nothing in the
+    # way. It sits at the major boundary, not at 0.9: 0.9 was checked against
+    # the ten Database methods this file calls and against `Database.open`'s
+    # signature, and is compatible. Its BM25 analyzer change migrates itself
+    # on open and does not reach us anyway — tqdb_hybrid defaults to False and
+    # Axon runs its own BM25 out of bm25_index/.
+    "tqdb>=0.8.5,<1.0.0",
     "prometheus-client>=0.20",
 ]
 

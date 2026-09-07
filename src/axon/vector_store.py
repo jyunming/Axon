@@ -56,7 +56,38 @@ class OpenVectorStore:
         self.client: Any = None
         self.collection: Any = None
         self._async_client: Any = None  # tqdb.aio.AsyncDatabase — lazy, tqdb-only
+        # Set when an existing store is present but cannot be opened — a format
+        # the installed backend no longer reads, or genuine damage. Distinct
+        # from ``client is None``, which for tqdb means "no store yet, create
+        # one on first add()". Conflating the two would let an ingest silently
+        # write a fresh store over one that is merely unreadable.
+        self.unreadable_reason: str | None = None
         self._init_store()
+
+    @property
+    def is_unreadable(self) -> bool:
+        """True when a store exists on disk that this process cannot open.
+
+        Read through ``getattr``: tests build instances via ``__new__`` to
+        avoid touching a real backend, so the attribute set in ``__init__``
+        need not exist. A store nobody could mark unreadable is readable.
+        """
+        return getattr(self, "unreadable_reason", None) is not None
+
+    def _warn_unreadable(self, operation: str) -> None:
+        """Say why a read came back empty.
+
+        Every degraded read returns an empty result, which is indistinguishable
+        from a genuine miss — so each one has to announce itself, or a broken
+        store looks exactly like an empty knowledge base.
+        """
+        logger.warning(
+            "%s skipped: the vector store at %s is unreadable (%s). "
+            "Run `axon --rebuild-vector-store` to restore retrieval.",
+            operation,
+            self.config.vector_store_path,
+            self.unreadable_reason,
+        )
 
     def _init_store(self):
         if self.provider == "chroma":
@@ -132,16 +163,52 @@ class OpenVectorStore:
                     f"Initializing TurboQuantDB: {self.config.vector_store_path} "
                     f"(dim={dim}, bits={bits})"
                 )
-                self.client = tqdb.Database.open(
-                    self.config.vector_store_path,
-                    dimension=dim,
-                    bits=bits,
-                    metric="ip",
-                    normalize=True,  # engine normalises internally; IP ≡ cosine
-                    rerank=getattr(self.config, "tqdb_rerank", True),
-                    fast_mode=getattr(self.config, "tqdb_fast_mode", False),
-                    rerank_precision=getattr(self.config, "tqdb_rerank_precision", None),
-                )
+                try:
+                    self.client = tqdb.Database.open(
+                        self.config.vector_store_path,
+                        dimension=dim,
+                        bits=bits,
+                        metric="ip",
+                        normalize=True,  # engine normalises internally; IP ≡ cosine
+                        rerank=getattr(self.config, "tqdb_rerank", True),
+                        fast_mode=getattr(self.config, "tqdb_fast_mode", False),
+                        rerank_precision=getattr(self.config, "tqdb_rerank_precision", None),
+                    )
+                except (KeyboardInterrupt, SystemExit, GeneratorExit):
+                    # Control-flow exceptions are not store failures; let them
+                    # travel so Ctrl+C and interpreter shutdown still work.
+                    raise
+                except BaseException as exc:
+                    # An unopenable store is recoverable for most callers: the
+                    # chunk text lives separately in bm25_index/, so the vectors
+                    # can be rebuilt without re-reading the source files.
+                    # Raising here took down every consumer at construction —
+                    # AxonBrain.__init__ builds the vector store, so an
+                    # embedding application could not start at all, even for
+                    # work that never touches retrieval.
+                    #
+                    # BaseException, not Exception, and this is the whole point:
+                    # a Rust-side panic reaches Python as PyO3's
+                    # PanicException, which inherits BaseException. That is
+                    # exactly how the failure behind #165 presented on the tqdb
+                    # builds that panicked rather than returning an error — so
+                    # catching Exception here would have missed the case this
+                    # guard exists for, while looking like it handled it.
+                    self.client = None
+                    self.unreadable_reason = f"{type(exc).__name__}: {exc}"
+                    logger.error(
+                        "Vector store at %s exists but could not be opened: %s\n"
+                        "  Retrieval is unavailable for this project. Ingest is refused "
+                        "rather than silently starting a new store over these files.\n"
+                        "  The chunk text is held in bm25_index/, so the vectors can be "
+                        "rebuilt without re-reading your sources:  axon --rebuild-vector-store\n"
+                        "  A store written by a different TurboQuantDB build surfaces here as "
+                        "an I/O or end-of-file error rather than a version mismatch — compare "
+                        '`python -c "import tqdb; print(tqdb.__version__)"` with the version '
+                        "that wrote it.",
+                        self.config.vector_store_path,
+                        self.unreadable_reason,
+                    )
             else:
                 self.client = None  # opened lazily on first add()
 
@@ -324,6 +391,18 @@ class OpenVectorStore:
             raise ValueError(
                 f"metadatas length mismatch: metadatas={len(metadatas)} vs ids={n_ids}"
             )
+        if self.is_unreadable:
+            # `client is None` otherwise means "no store yet, create on first
+            # add". Writing here would start a fresh store on top of files we
+            # simply could not read, turning a recoverable state into real data
+            # loss. Refuse loudly and name the way out.
+            raise RuntimeError(
+                f"Refusing to write: the vector store at {self.config.vector_store_path} "
+                f"exists but could not be opened ({self.unreadable_reason}). Adding now "
+                f"would create a new store over it. Rebuild it first with "
+                f"`axon --rebuild-vector-store`, which re-embeds the chunk text already "
+                f"held in bm25_index/."
+            )
         if self.provider == "chroma":
             # Chroma enforces a hard per-call limit (~5461 rows). Slice into safe batches
             # so that large post-split payloads (e.g. long-contract corpora) do not crash.
@@ -494,6 +573,9 @@ class OpenVectorStore:
                 - chunks (int): Number of chunks stored for that source.
                 - doc_ids (List[str]): All chunk IDs belonging to this source.
         """
+        if self.is_unreadable:
+            self._warn_unreadable("list_documents")
+            return []
         if self.provider == "chroma":
             result = self.collection.get(include=["metadatas"])
             sources: dict[str, dict[str, Any]] = {}
@@ -552,6 +634,9 @@ class OpenVectorStore:
         filter_dict: dict | None = None,
         query_text: str | None = None,
     ) -> list[dict]:
+        if self.is_unreadable:
+            self._warn_unreadable("Vector search")
+            return []
         if self.provider == "chroma":
             results = self.collection.query(
                 query_embeddings=[query_embedding],
@@ -615,7 +700,28 @@ class OpenVectorStore:
                     "rrf_k": 60,
                     "oversample": 2,
                 }
-            results = self.client.search(q, **search_kwargs)
+            try:
+                results = self.client.search(q, **search_kwargs)
+            except (KeyboardInterrupt, SystemExit, GeneratorExit):
+                raise
+            except BaseException as exc:
+                # A store can open cleanly and still fail on the first query —
+                # that is how a truncated live-codes file behaved before tqdb
+                # 0.8.5, and it arrived as a PyO3 PanicException, which
+                # inherits BaseException. Unguarded here it killed the request
+                # handler or worker thread that ran the query. A failed search
+                # degrades to no results, like an unreadable store, and marks
+                # the store so the next caller is told rather than left to
+                # rediscover it.
+                self.unreadable_reason = f"{type(exc).__name__}: {exc}"
+                logger.error(
+                    "Vector search failed on the store at %s: %s\n"
+                    "  Treating the store as unreadable. Rebuild it with "
+                    "`axon --rebuild-vector-store`.",
+                    self.config.vector_store_path,
+                    self.unreadable_reason,
+                )
+                return []
             return [
                 {
                     "id": r["id"],
@@ -686,6 +792,9 @@ class OpenVectorStore:
         since these docs are fetched by exact ID (not scored).
         """
         if not ids:
+            return []
+        if self.is_unreadable:
+            self._warn_unreadable("get_by_ids")
             return []
         if self.provider == "chroma":
             result = self.collection.get(ids=ids, include=["documents", "metadatas"])
@@ -806,6 +915,15 @@ class OpenVectorStore:
         elif self.provider == "qdrant":
             return "Qdrant manages its HNSW index automatically — no action needed."
         elif self.provider == "turboquantdb":
+            if self.is_unreadable:
+                # Distinct from "no store yet": telling someone to ingest when
+                # they already have data they cannot read sends them the wrong
+                # way entirely.
+                return (
+                    f"TurboQuantDB: the store exists but could not be opened "
+                    f"({self.unreadable_reason}). Rebuild it with "
+                    f"`axon --rebuild-vector-store` before indexing."
+                )
             if self.client is None:
                 return "TurboQuantDB: no database open yet — ingest some documents first."
             n = len(self.client)
@@ -825,6 +943,19 @@ class OpenVectorStore:
         """Delete documents by ID from the vector store."""
         if not ids:
             return
+        if self.is_unreadable:
+            # Returning quietly here reads as "deleted" to every caller.
+            # POST /delete then falls through to its BM25 expansion branch and
+            # removes the chunks from keyword search while these bytes keep
+            # them — the two halves of the index disagree and the response
+            # still says success. Refuse instead, so the caller learns the
+            # store needs rebuilding first.
+            raise RuntimeError(
+                f"Cannot delete from the vector store at {self.config.vector_store_path}: "
+                f"it exists but could not be opened ({self.unreadable_reason}). Deleting "
+                f"elsewhere while these rows survive would leave the indexes disagreeing. "
+                f"Rebuild first with `axon --rebuild-vector-store`."
+            )
         if self.provider == "chroma":
             self.collection.delete(ids=ids)
         elif self.provider == "qdrant":

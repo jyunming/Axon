@@ -23,7 +23,10 @@ tiktoken>=0.7.0
 # turboquantdb (tqdb) is the default. chroma/qdrant/lancedb are pyproject extras,
 # listed here so `pip-audit --requirement requirements.txt` (security.yml) keeps
 # reporting CVEs for every backend we ship, not just the default one.
-tqdb>=0.7.0
+# 0.8.5 is the first release with tqdb#102 (close() leaked the mmap, and the
+# truncated live-codes slab then panicked uncatchably on read). Correctness
+# floor — see the note in pyproject.toml.
+tqdb>=0.8.5,<1.0.0
 chromadb>=0.4.0
 qdrant-client>=1.7.0
 lancedb>=0.8.0

@@ -21,6 +21,54 @@ Common issues and fixes for Axon.
 
 ---
 
+## TurboQuantDB: queries crash the process, or `[Errno 22] Invalid argument` on ingest
+
+**Symptoms:** any of these, on a store that used to work —
+
+```
+pyo3_runtime.PanicException: ...            # kills the process outright
+{"detail": "[Errno 22] Invalid argument"}   # POST /add_text, POST /ingest
+OSError: [WinError 1224] The requested operation cannot be performed
+                         on a file with a user-mapped section open
+```
+
+**Cause:** a bug in TurboQuantDB before **0.8.5** ([tqdb#102](https://github.com/jyunming/TurboQuantDB/issues/102)). `close()` did not release the memory mapping, so the next resize of the codes file failed — on Windows a mapped file accepts in-place writes but refuses to grow or truncate. That left `live_codes.bin` truncated, and later reads panicked from Rust. The panic surfaces as PyO3's `PanicException`, which inherits `BaseException` rather than `Exception`, so ordinary `except Exception:` handlers do not catch it and the process dies instead of degrading.
+
+It is much likelier to bite when **two processes share one store** — for example an `axon-api` left running on the old default port 8000 alongside a newer one on 8420. Two live mappings of one file is exactly the condition the leak needs.
+
+**Fix:**
+
+```bash
+pip install -U "tqdb>=0.8.5"
+```
+
+Axon 0.5.0 requires that floor, so a fresh install cannot land on an affected version. If you upgraded Axon in place, check what you actually have:
+
+```bash
+python -c "import tqdb; print(tqdb.__version__)"
+```
+
+**If a store cannot be opened**, upgrading alone does not fix it — whether the file is genuinely damaged or simply written in a format this build no longer reads. Rebuild it:
+
+```bash
+axon --rebuild-vector-store --rebuild-dry-run   # what would be re-embedded
+axon --rebuild-vector-store                      # do it
+axon --project myproj --rebuild-vector-store     # a specific project
+```
+
+This re-embeds the chunk text from `bm25_index/`, which holds it with ids and metadata — so no source files are re-read, no LLM extraction re-runs, and the entity/relation graph is untouched. The old `vector_store_data/` is renamed with a timestamp rather than deleted, and if the rebuild fails part-way it is put back automatically.
+
+Until you rebuild, Axon keeps working: it starts normally, retrieval returns nothing and says why, and ingest is refused rather than silently starting a fresh store over files it merely could not read.
+
+Two things the rebuild will tell you:
+
+- **Chunks sharing an id** are indexed once and the rest reported. Ids are the store's primary key, so duplicates cannot all be indexed; the extras stay searchable by keyword. Colliding ids are worth fixing wherever they are generated.
+- **`os error 1224`** ("file with a user-mapped section open") means another process — usually a running `axon-api` — holds the store. That is the single-instance protection, not damage. Stop it first.
+
+**Prevention:** run one server per store. `axon-api` writes a single-instance lock for this reason; the failure mode above is what happens when a second process predates the lock or points at the store by a different path.
+
+---
+
 ## ChromaDB: `InvalidDimensionException`
 
 **Error:**

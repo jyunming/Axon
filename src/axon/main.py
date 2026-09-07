@@ -626,6 +626,161 @@ Your primary goal is to help the user by answering questions based on the provid
             logger.debug("Sealed-cache orphan cleanup raised: %s", _orphan_exc)
         self._log_startup_summary()
 
+    def rebuild_vector_store(self, *, dry_run: bool = False) -> dict:
+        """Re-embed the active project's chunk text into a fresh vector store.
+
+        Recovery path for a store that exists but cannot be opened — a format
+        the installed TurboQuantDB no longer reads, or genuine damage. The
+        chunk text is not in the vector store: it lives in ``bm25_index/``
+        alongside its ids and metadata, so the vectors can be regenerated
+        locally without re-reading the original documents, re-running LLM
+        extraction, or touching the entity/relation graph.
+
+        The old directory is renamed rather than deleted, so a rebuild that
+        turns out worse than the original is reversible.
+
+        Returns a summary dict; raises if there is no chunk text to rebuild
+        from, since an empty rebuild would replace an unreadable store with an
+        empty one and call that success.
+        """
+        import shutil
+        import time as _time
+
+        vs_path = Path(self.config.vector_store_path)
+        docs = list(getattr(self.bm25, "corpus", None) or [])
+        if not docs:
+            raise RuntimeError(
+                f"Nothing to rebuild from: no chunk text found in {self.config.bm25_path}. "
+                "The vector store cannot be regenerated without it — re-ingest the "
+                "original sources instead."
+            )
+
+        # Ids are the store's primary key, so a corpus carrying the same id
+        # twice cannot be replayed verbatim — the backend rejects the second
+        # row and the whole rebuild aborts. Keep the first occurrence and
+        # report the rest rather than inventing suffixed ids that nothing
+        # else (BM25, the entity graph) would recognise. The dropped rows are
+        # still reachable by keyword search, which is where their text lives.
+        ids, texts, metadatas, seen = [], [], [], set()
+        duplicate_ids: dict[str, int] = {}
+        for d in docs:
+            doc_id = d["id"]
+            if doc_id in seen:
+                duplicate_ids[doc_id] = duplicate_ids.get(doc_id, 1) + 1
+                continue
+            seen.add(doc_id)
+            ids.append(doc_id)
+            texts.append(d.get("text", ""))
+            metadatas.append(d.get("metadata", {}) or {})
+        summary = {
+            "project": self._active_project,
+            "chunks": len(ids),
+            "vector_store_path": str(vs_path),
+            "dry_run": dry_run,
+        }
+        if duplicate_ids:
+            dropped = sum(n - 1 for n in duplicate_ids.values())
+            summary["duplicate_ids"] = len(duplicate_ids)
+            summary["rows_dropped_as_duplicates"] = dropped
+            logger.warning(
+                "%d chunk(s) share %d already-used id(s) and were not indexed for vector "
+                "search; their text remains searchable by keyword. Worth fixing upstream — "
+                "colliding ids mean whatever generated them is not producing unique keys. "
+                "First few: %s",
+                dropped,
+                len(duplicate_ids),
+                ", ".join(list(duplicate_ids)[:3]),
+            )
+        if dry_run:
+            logger.info("Rebuild (dry run): %d chunks would be re-embedded", len(ids))
+            return summary
+
+        backup = None
+        if vs_path.exists():
+            backup = vs_path.with_name(f"{vs_path.name}.old-{_time.strftime('%Y%m%d_%H%M%S')}")
+            # close() first: on Windows a mapped file cannot be renamed while a
+            # handle is open, which is the same constraint that produced the
+            # corruption this method exists to recover from.
+            try:
+                self.vector_store.close()
+            except Exception:
+                pass
+            shutil.move(str(vs_path), str(backup))
+            summary["previous_store_moved_to"] = str(backup)
+            logger.info("Existing store moved aside: %s", backup)
+
+        # Everything from here until the reopen check must either finish or put
+        # the old store back. Re-embedding thousands of chunks is long enough
+        # that a provider timeout or a Ctrl+C in the middle is the expected
+        # case, not the exotic one — and leaving a fresh *empty* directory at
+        # vs_path would be the worst outcome available: an empty store is not
+        # `is_unreadable`, so the next construction treats it as "never
+        # ingested", search returns nothing without complaint, and the next
+        # ingest writes into it. That converts a loudly-broken store into a
+        # silently-empty one, which is the failure this method exists to
+        # prevent. BaseException, not Exception, because KeyboardInterrupt is
+        # the likeliest interruption of all.
+        try:
+            vs_path.mkdir(parents=True, exist_ok=True)
+            self.vector_store = OpenVectorStore(self.config)
+            logger.info("Re-embedding %d chunks...", len(ids))
+            embeddings = self.embedding.embed(texts)
+            self.vector_store.add(ids=ids, texts=texts, embeddings=embeddings, metadatas=metadatas)
+            try:
+                self.vector_store.close()
+            except Exception:
+                pass
+            self.vector_store = OpenVectorStore(self.config)
+            if self.vector_store.is_unreadable:
+                raise RuntimeError(
+                    f"the rebuilt store could not be reopened "
+                    f"({self.vector_store.unreadable_reason})"
+                )
+        except BaseException as exc:
+            restored = self._restore_store_backup(vs_path, backup)
+            self.vector_store = OpenVectorStore(self.config)
+            if restored:
+                raise RuntimeError(
+                    f"Rebuild failed ({exc}). The original store has been put back at "
+                    f"{vs_path} — nothing was lost."
+                ) from exc
+            raise RuntimeError(
+                f"Rebuild failed ({exc}), and the original store could not be put back "
+                f"automatically. It is intact at {backup}; move that directory to "
+                f"{vs_path} to restore it."
+            ) from exc
+
+        summary["rebuilt"] = True
+        logger.info("Rebuild complete: %d chunks re-embedded into %s", len(ids), vs_path)
+        return summary
+
+    @staticmethod
+    def _restore_store_backup(vs_path: Path, backup: Path | None) -> bool:
+        """Put a moved-aside store back. Returns False if it could not be done.
+
+        Best-effort by design: this runs while another failure is already
+        propagating, so it must not raise one of its own and mask it.
+        """
+        import shutil
+
+        if backup is None or not backup.exists():
+            return False
+        try:
+            if vs_path.exists():
+                shutil.rmtree(vs_path)  # only ever the partial directory we just made
+            shutil.move(str(backup), str(vs_path))
+            logger.info("Original store restored from %s", backup)
+            return True
+        except Exception as restore_exc:  # pragma: no cover - filesystem-dependent
+            logger.error(
+                "Could not restore the original store from %s: %s. "
+                "It is intact there; move it to %s by hand.",
+                backup,
+                restore_exc,
+                vs_path,
+            )
+            return False
+
     def __enter__(self):
         return self
 
