@@ -444,7 +444,10 @@ def _derived_yaml_keys(cls, section: str) -> set[str]:
     several of its keys (``llm.base_url`` -> ``ollama_base_url``) and those
     have no field of their own to derive from.
     """
-    fields = {f.name for f in cls.__dataclass_fields__.values()}
+    # Leading underscore marks internal bookkeeping (`_loaded_path`); it is a
+    # dataclass field, but it is not a setting and must not become a key
+    # `validate()` blesses.
+    fields = {f.name for f in cls.__dataclass_fields__.values() if not f.name.startswith("_")}
     if section == "rag":
         # `load()` does `config_dict.update(data["rag"])` — verbatim field
         # names — and `save()` parks every field lacking a bespoke section
