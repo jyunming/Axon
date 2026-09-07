@@ -1674,6 +1674,18 @@ class AxonConfig:
             known = _KNOWN_YAML_KEYS.get(section, set())
             if not known:
                 continue
+            if section == "rag":
+                # `load()` does `config_dict.update(data["rag"])`, so any
+                # dataclass field name is a legitimate key here — and `save()`
+                # deliberately parks every field without a bespoke section
+                # mapping under `rag:`. Deriving the accepted set from the
+                # dataclass is what keeps the two in step; the hand-written
+                # entry above had drifted far enough that a config Axon wrote
+                # itself failed its own validation on 69 keys.
+                # Same expression `load()` filters on, deliberately — if the
+                # two ever diverge again it should be because someone changed
+                # this line, not because a hand-written list fell behind.
+                known = known | {f.name for f in cls.__dataclass_fields__.values()}
             for key in keys:
                 if key not in known:
                     if key in _REMOVED_FIELDS:
