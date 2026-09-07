@@ -106,6 +106,30 @@ never reaches. Nothing a default install can do was removed.
   the symptoms, including that an already-corrupt store needs rebuilding —
   upgrading alone does not repair a truncated file.
 
+- **An unreadable vector store no longer takes the host application down**
+  ([#165](https://github.com/jyunming/Axon/issues/165)). `tqdb.Database.open`
+  raised out of `OpenVectorStore._init_store`, which `AxonBrain.__init__`
+  calls, so an application embedding Axon could not start at all — even for
+  work that never touches retrieval. Axon now records the failure, starts
+  normally, and returns nothing from retrieval while saying why on every call.
+
+  Writes are refused rather than degraded. For TurboQuantDB `client is None`
+  already means "no store yet, create one on first `add()`", so degrading
+  without a distinct state would let the next ingest start a fresh store *over*
+  files that were merely unreadable — turning a recoverable situation into real
+  loss. `add()` and `delete_by_ids()` raise instead; a delete that silently
+  did nothing would leave keyword and vector search disagreeing while reporting
+  success.
+
+- **`axon --rebuild-vector-store` recovers a store without re-ingesting.** The
+  chunk text does not live in the vector store — `bm25_index/` holds it with
+  ids and metadata — so a rebuild re-embeds locally: no source files re-read,
+  no LLM extraction re-run, entity and relation graphs untouched.
+  `--rebuild-dry-run` reports what would happen; `--project` picks the project.
+  The old directory is renamed, not deleted, and is put back automatically if
+  the rebuild fails part-way, including on Ctrl+C. Chunks sharing an id are
+  indexed once and the rest reported, since ids are the store's primary key.
+
 - **`validate()` reported working config keys as typos, and misnamed the fix.**
   `load()` accepted any `AxonConfig` dataclass field, but `validate()` only knew
   the 14 graph keys listed in `_KNOWN_YAML_KEYS`. Setting

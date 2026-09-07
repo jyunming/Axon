@@ -74,6 +74,21 @@ class OpenVectorStore:
         """
         return getattr(self, "unreadable_reason", None) is not None
 
+    def _warn_unreadable(self, operation: str) -> None:
+        """Say why a read came back empty.
+
+        Every degraded read returns an empty result, which is indistinguishable
+        from a genuine miss — so each one has to announce itself, or a broken
+        store looks exactly like an empty knowledge base.
+        """
+        logger.warning(
+            "%s skipped: the vector store at %s is unreadable (%s). "
+            "Run `axon --rebuild-vector-store` to restore retrieval.",
+            operation,
+            self.config.vector_store_path,
+            self.unreadable_reason,
+        )
+
     def _init_store(self):
         if self.provider == "chroma":
             import chromadb
@@ -546,6 +561,9 @@ class OpenVectorStore:
                 - chunks (int): Number of chunks stored for that source.
                 - doc_ids (List[str]): All chunk IDs belonging to this source.
         """
+        if self.is_unreadable:
+            self._warn_unreadable("list_documents")
+            return []
         if self.provider == "chroma":
             result = self.collection.get(include=["metadatas"])
             sources: dict[str, dict[str, Any]] = {}
@@ -605,16 +623,7 @@ class OpenVectorStore:
         query_text: str | None = None,
     ) -> list[dict]:
         if self.is_unreadable:
-            # Degrade rather than crash, but say so every time: an empty result
-            # set is indistinguishable from "nothing matched", and a caller
-            # silently getting no retrieval is exactly how a broken store goes
-            # unnoticed.
-            logger.warning(
-                "Vector search skipped: store at %s is unreadable (%s). "
-                "Run `axon --rebuild-vector-store` to restore retrieval.",
-                self.config.vector_store_path,
-                self.unreadable_reason,
-            )
+            self._warn_unreadable("Vector search")
             return []
         if self.provider == "chroma":
             results = self.collection.query(
@@ -751,6 +760,9 @@ class OpenVectorStore:
         """
         if not ids:
             return []
+        if self.is_unreadable:
+            self._warn_unreadable("get_by_ids")
+            return []
         if self.provider == "chroma":
             result = self.collection.get(ids=ids, include=["documents", "metadatas"])
             result_ids = result.get("ids") or []
@@ -870,6 +882,15 @@ class OpenVectorStore:
         elif self.provider == "qdrant":
             return "Qdrant manages its HNSW index automatically — no action needed."
         elif self.provider == "turboquantdb":
+            if self.is_unreadable:
+                # Distinct from "no store yet": telling someone to ingest when
+                # they already have data they cannot read sends them the wrong
+                # way entirely.
+                return (
+                    f"TurboQuantDB: the store exists but could not be opened "
+                    f"({self.unreadable_reason}). Rebuild it with "
+                    f"`axon --rebuild-vector-store` before indexing."
+                )
             if self.client is None:
                 return "TurboQuantDB: no database open yet — ingest some documents first."
             n = len(self.client)
@@ -889,6 +910,19 @@ class OpenVectorStore:
         """Delete documents by ID from the vector store."""
         if not ids:
             return
+        if self.is_unreadable:
+            # Returning quietly here reads as "deleted" to every caller.
+            # POST /delete then falls through to its BM25 expansion branch and
+            # removes the chunks from keyword search while these bytes keep
+            # them — the two halves of the index disagree and the response
+            # still says success. Refuse instead, so the caller learns the
+            # store needs rebuilding first.
+            raise RuntimeError(
+                f"Cannot delete from the vector store at {self.config.vector_store_path}: "
+                f"it exists but could not be opened ({self.unreadable_reason}). Deleting "
+                f"elsewhere while these rows survive would leave the indexes disagreeing. "
+                f"Rebuild first with `axon --rebuild-vector-store`."
+            )
         if self.provider == "chroma":
             self.collection.delete(ids=ids)
         elif self.provider == "qdrant":

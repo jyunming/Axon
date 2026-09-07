@@ -1118,21 +1118,50 @@ def main():
 
         _cfg = _AxonConfig.load(args.config or None)
         brain = _AxonBrain(_cfg)
+        # This block runs before the shared --project handling further down, so
+        # honour it here. Without this the flag silently rebuilt "default" —
+        # destructive on the wrong project, and leaving the broken one untouched.
+        _proj = getattr(args, "project", None)
+        if _proj:
+            try:
+                brain.switch_project(_proj)
+            except Exception as exc:
+                print(f"Cannot switch to project '{_proj}': {exc}")
+                sys.exit(1)
         dry = getattr(args, "rebuild_dry_run", False)
+        if not brain.vector_store.is_unreadable and not dry:
+            # Rebuilding a healthy store is destructive for no reason. Say so
+            # and require the dry run first rather than moving it aside.
+            print(
+                f"Project '{brain._active_project}' has a readable vector store — "
+                f"nothing to recover. Rebuild anyway only if you mean to re-embed "
+                f"everything; run with --rebuild-dry-run to see what that would cover."
+            )
+            sys.exit(0)
         try:
             result = brain.rebuild_vector_store(dry_run=dry)
         except Exception as exc:
             print(f"Rebuild failed: {exc}")
             sys.exit(1)
+        _dropped = result.get("rows_dropped_as_duplicates")
         if dry:
             print(
                 f"Dry run — {result['chunks']} chunk(s) of project "
                 f"'{result['project']}' would be re-embedded into {result['vector_store_path']}."
             )
         else:
-            print(f"Rebuilt {result['chunks']} chunk(s) into {result['vector_store_path']}.")
+            print(
+                f"Rebuilt {result['chunks']} chunk(s) of project '{result['project']}' "
+                f"into {result['vector_store_path']}."
+            )
             if result.get("previous_store_moved_to"):
                 print(f"Previous store kept at {result['previous_store_moved_to']}.")
+        if _dropped:
+            print(
+                f"{_dropped} chunk(s) shared {result['duplicate_ids']} already-used id(s) and "
+                f"were left out of vector search; their text is still searchable by keyword. "
+                f"Colliding ids are worth fixing wherever they are generated."
+            )
         sys.exit(0)
     if getattr(args, "wipe_sealed_cache", False):
         # v0.4.0 Item 3 — orphan sweep. Note: this is a fresh process,

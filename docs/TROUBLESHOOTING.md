@@ -48,7 +48,22 @@ Axon 0.5.0 requires that floor, so a fresh install cannot land on an affected ve
 python -c "import tqdb; print(tqdb.__version__)"
 ```
 
-**If a store is already corrupt**, upgrading does not repair it — the truncated file stays truncated. Confirm only one `axon-api` is running against the store, then move the affected project's `vector_store_data/` aside and re-ingest. Keep the directory rather than deleting it until you have confirmed the rebuild is good.
+**If a store cannot be opened**, upgrading alone does not fix it — whether the file is genuinely damaged or simply written in a format this build no longer reads. Rebuild it:
+
+```bash
+axon --rebuild-vector-store --rebuild-dry-run   # what would be re-embedded
+axon --rebuild-vector-store                      # do it
+axon --project myproj --rebuild-vector-store     # a specific project
+```
+
+This re-embeds the chunk text from `bm25_index/`, which holds it with ids and metadata — so no source files are re-read, no LLM extraction re-runs, and the entity/relation graph is untouched. The old `vector_store_data/` is renamed with a timestamp rather than deleted, and if the rebuild fails part-way it is put back automatically.
+
+Until you rebuild, Axon keeps working: it starts normally, retrieval returns nothing and says why, and ingest is refused rather than silently starting a fresh store over files it merely could not read.
+
+Two things the rebuild will tell you:
+
+- **Chunks sharing an id** are indexed once and the rest reported. Ids are the store's primary key, so duplicates cannot all be indexed; the extras stay searchable by keyword. Colliding ids are worth fixing wherever they are generated.
+- **`os error 1224`** ("file with a user-mapped section open") means another process — usually a running `axon-api` — holds the store. That is the single-instance protection, not damage. Stop it first.
 
 **Prevention:** run one server per store. `axon-api` writes a single-instance lock for this reason; the failure mode above is what happens when a second process predates the lock or points at the store by a different path.
 
