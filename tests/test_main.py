@@ -3895,8 +3895,9 @@ class TestGraphRAGCommunity:
 
         assert result == "" or result == _GRAPHRAG_NO_DATA_ANSWER
 
-    def test_global_map_reduce_returns_top_points(self):
+    def test_global_map_reduce_returns_top_points(self, monkeypatch):
         """_global_search_map_reduce includes high-score points in output."""
+        monkeypatch.setattr(_gd, "MAP_BATCH_SIZE", 1)
         brain = self._make_brain()
         brain._community_summaries = {
             "0_0": {
@@ -3914,7 +3915,8 @@ class TestGraphRAGCommunity:
         brain._executor = SyncExecutor()
 
         class _Cfg:
-            graph_rag_map_batch_size = 1  # use single-chunk mode so mock JSON format matches
+            # every field this stub carried is now a graph_defaults constant
+            pass
 
         result = brain._global_search_map_reduce("AI trends", _Cfg())
 
@@ -4173,8 +4175,9 @@ class TestGraphRAGRealImplementation:
 
         return brain
 
-    def test_global_search_reduce_calls_llm(self):
+    def test_global_search_reduce_calls_llm(self, monkeypatch):
         """_global_search_map_reduce makes a second (reduce) LLM call with Analyst-formatted text."""
+        monkeypatch.setattr(_gd, "MAP_BATCH_SIZE", 1)
         brain = self._make_brain()
         brain._community_summaries = {
             "0_0": {
@@ -4207,7 +4210,8 @@ class TestGraphRAGRealImplementation:
         brain._executor = SyncExecutor()
 
         class _Cfg:
-            graph_rag_map_batch_size = 1  # use single-chunk mode so mock JSON format matches
+            # every field this stub carried is now a graph_defaults constant
+            pass
 
         result = brain._global_search_map_reduce("test query", _Cfg())
 
@@ -4534,6 +4538,7 @@ class TestGraphRAGAuditFixes:
         monkeypatch.setattr(_gd, "GLOBAL_MAX_MAP_CHUNKS", 0)
         monkeypatch.setattr(_gd, "COMMUNITY_LLM_TOP_N_PER_LEVEL", 50)
         monkeypatch.setattr(_gd, "COMMUNITY_LLM_MAX_TOTAL", 200)
+        monkeypatch.setattr(_gd, "MAP_AUTO_WORKERS", 0)
 
     def _make_brain(self):
         from axon.main import AxonBrain
@@ -4553,12 +4558,6 @@ class TestGraphRAGAuditFixes:
         brain.config.raptor_min_source_size_mb = 0.0
 
         brain.config.graph_rag_map_workers = 0
-
-        brain.config.graph_rag_map_use_dedicated_pool = False
-
-        brain.config.graph_rag_map_auto_workers = 0
-
-        brain.config.graph_rag_large_graph_threshold = 50000
 
         brain._entity_graph = {}
 
@@ -4821,6 +4820,10 @@ class TestGraphRAGAuditFixes:
         window rather than the 2000 the report length was chosen for. Pinning
         the constant makes the window the one the test claims to exercise.
         """
+        # One map call per chunk: this test counts them. Batching is
+        # otherwise on (MAP_BATCH_SIZE=5) and would fold them into one.
+        # Before 0.5.0 the same value came from int(MagicMock()) == 1.
+        monkeypatch.setattr(_gd, "MAP_BATCH_SIZE", 1)
         monkeypatch.setattr(_gd, "GLOBAL_MIN_SCORE", 0)
         monkeypatch.setattr(_gd, "GLOBAL_MAP_MAX_LENGTH", 500)  # 500 * 4 = 2000 chars
         b = self._make_brain()
@@ -4928,6 +4931,7 @@ class TestGraphRAGTask6Fixes:
         monkeypatch.setattr(_gd, "GLOBAL_MAX_MAP_CHUNKS", 0)
         monkeypatch.setattr(_gd, "COMMUNITY_LLM_TOP_N_PER_LEVEL", 50)
         monkeypatch.setattr(_gd, "COMMUNITY_LLM_MAX_TOTAL", 200)
+        monkeypatch.setattr(_gd, "MAP_AUTO_WORKERS", 0)
 
     def _make_brain(self):
         from axon.main import AxonBrain
@@ -4979,10 +4983,6 @@ class TestGraphRAGTask6Fixes:
         brain._save_community_hierarchy = MagicMock()
 
         brain.config.graph_rag_map_workers = 0
-
-        brain.config.graph_rag_map_use_dedicated_pool = False
-
-        brain.config.graph_rag_map_auto_workers = 0
 
         brain._executor = SyncExecutor()
 
@@ -5268,13 +5268,17 @@ class TestGraphRAGTask6Fixes:
 
     def test_global_search_map_length_config_respected(self, monkeypatch):
         """GLOBAL_MAP_MAX_LENGTH=100 must produce chunk size of ~400 chars."""
+        # One map call per chunk: this test counts them. Batching is
+        # otherwise on (MAP_BATCH_SIZE=5) and would fold them into one.
+        # Before 0.5.0 the same value came from int(MagicMock()) == 1.
+        monkeypatch.setattr(_gd, "MAP_BATCH_SIZE", 1)
+        monkeypatch.setattr(_gd, "LLM_CACHE", False)
 
         monkeypatch.setattr(_gd, "GLOBAL_MAP_MAX_LENGTH", 100)  # 100 * 4 = 400 chars per chunk
         b = self._make_brain()
         # Disable LLM cache so each chunk (even with identical text) triggers a real llm.complete
         # call — otherwise the second and third identical "A"*400 chunks get a cache hit and
         # llm.complete is only called once, making the map-call count check unreliable.
-        b.config.graph_rag_llm_cache = False
         # Build a report of 1200 chars — should produce 3 chunks with 400-char windows
         long_report = "A" * 1200
         b._community_summaries = {
@@ -7873,16 +7877,16 @@ class TestMapReduceDedicatedPool:
         monkeypatch.setattr(_gd, "GLOBAL_TOP_POINTS", 10)
         monkeypatch.setattr(_gd, "GLOBAL_REDUCE_MAX_LENGTH", 500)
 
-    def _make_cfg(self, map_workers=0):
+    def _make_cfg(self, monkeypatch, map_workers=0):
+        # These two used to be config fields the helper set per call.
+        monkeypatch.setattr(_gd, "MAP_USE_DEDICATED_POOL", map_workers > 0)
+        monkeypatch.setattr(_gd, "MAP_AUTO_WORKERS", map_workers)
         cfg = MagicMock()
 
         cfg.graph_rag_map_workers = map_workers
 
         # When map_workers=0 the test expects no dedicated pool; disable the
         # auto-pool path so unset MagicMock attributes don't silently enable it.
-        cfg.graph_rag_map_use_dedicated_pool = map_workers > 0
-
-        cfg.graph_rag_map_auto_workers = map_workers
 
         cfg.graph_rag_global_top_communities = 0
 
@@ -7913,12 +7917,12 @@ class TestMapReduceDedicatedPool:
 
         return brain
 
-    def test_dedicated_pool_created_when_map_workers_set(self):
+    def test_dedicated_pool_created_when_map_workers_set(self, monkeypatch):
         """When graph_rag_map_workers>0, a separate ThreadPoolExecutor must be created."""
         from concurrent.futures import ThreadPoolExecutor
 
         brain = self._make_brain()
-        cfg = self._make_cfg(map_workers=2)
+        cfg = self._make_cfg(monkeypatch, map_workers=2)
         pool_instances = []
         original_tpe = ThreadPoolExecutor
 
@@ -7937,12 +7941,12 @@ class TestMapReduceDedicatedPool:
 
         assert len(pool_instances) >= 1
 
-    def test_shared_pool_used_when_map_workers_zero(self):
+    def test_shared_pool_used_when_map_workers_zero(self, monkeypatch):
         """When graph_rag_map_workers==0, the shared _executor is used (no new TPE)."""
         from concurrent.futures import ThreadPoolExecutor
 
         brain = self._make_brain()
-        cfg = self._make_cfg(map_workers=0)
+        cfg = self._make_cfg(monkeypatch, map_workers=0)
         pool_instances = []
         original_tpe = ThreadPoolExecutor
 
@@ -8093,7 +8097,8 @@ class TestLLMLinguaCompression:
 
         return brain
 
-    def _make_cfg(self, compress=True, ratio=0.5):
+    def _make_cfg(self, monkeypatch, compress=True, ratio=0.5):
+        monkeypatch.setattr(_gd, "REPORT_COMPRESS_RATIO", ratio)
         cfg = MagicMock()
 
         cfg.graph_rag_map_workers = 0
@@ -8102,13 +8107,11 @@ class TestLLMLinguaCompression:
 
         cfg.graph_rag_report_compress = compress
 
-        cfg.graph_rag_report_compress_ratio = ratio
-
         return cfg
 
-    def test_compress_called_when_enabled(self):
+    def test_compress_called_when_enabled(self, monkeypatch):
         brain = self._make_brain()
-        cfg = self._make_cfg(compress=True)
+        cfg = self._make_cfg(monkeypatch, compress=True)
         mock_compressor = MagicMock()
         mock_compressor.compress_prompt = MagicMock(
             return_value={"compressed_prompt": "compressed"}
@@ -8121,9 +8124,9 @@ class TestLLMLinguaCompression:
             pass
         mock_compressor.compress_prompt.assert_called()
 
-    def test_compress_skipped_when_disabled(self):
+    def test_compress_skipped_when_disabled(self, monkeypatch):
         brain = self._make_brain()
-        cfg = self._make_cfg(compress=False)
+        cfg = self._make_cfg(monkeypatch, compress=False)
         mock_compressor = MagicMock()
         brain._ensure_llmlingua = MagicMock(return_value=mock_compressor)
         try:
@@ -8132,9 +8135,9 @@ class TestLLMLinguaCompression:
             pass
         mock_compressor.compress_prompt.assert_not_called()
 
-    def test_compress_falls_back_on_chunk_error(self):
+    def test_compress_falls_back_on_chunk_error(self, monkeypatch):
         brain = self._make_brain()
-        cfg = self._make_cfg(compress=True)
+        cfg = self._make_cfg(monkeypatch, compress=True)
         mock_compressor = MagicMock()
         mock_compressor.compress_prompt = MagicMock(side_effect=RuntimeError("compress fail"))
         brain._ensure_llmlingua = MagicMock(return_value=mock_compressor)
@@ -8244,8 +8247,10 @@ class TestTask14Config:
         assert cfg.graph_rag_map_workers == 0
         assert cfg.graph_rag_ner_backend == "llm"
         assert cfg.graph_rag_report_compress is False
-        assert cfg.graph_rag_report_compress_ratio == 0.5
         assert cfg.graph_rag_auto_route == "off"
+        # ratio became a graph_defaults constant in 0.5.0 — the toggle stays
+        # a setting, the degree of compression does not.
+        assert _gd.REPORT_COMPRESS_RATIO == 0.5
 
     def test_yaml_load_rag_flat_keys(self, tmp_path):
         """New TASK 14 keys can be set via rag: section in config.yaml."""
@@ -8258,7 +8263,6 @@ class TestTask14Config:
                 "graph_rag_map_workers": 4,
                 "graph_rag_ner_backend": "gliner",
                 "graph_rag_report_compress": True,
-                "graph_rag_report_compress_ratio": 0.3,
                 "graph_rag_auto_route": "heuristic",
             }
         }
@@ -8268,7 +8272,6 @@ class TestTask14Config:
         assert loaded.graph_rag_map_workers == 4
         assert loaded.graph_rag_ner_backend == "gliner"
         assert loaded.graph_rag_report_compress is True
-        assert loaded.graph_rag_report_compress_ratio == 0.3
         assert loaded.graph_rag_auto_route == "heuristic"
 
 

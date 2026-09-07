@@ -1436,6 +1436,23 @@ class TestDemotedGraphTuning:
         assert _gd.ENTITY_RESOLVE_MAX == 5000
         assert _gd.ENTITY_MATCH_THRESHOLD == 0.5
         assert _gd.RELATION_SHARD_COUNT == 16
+        # Group D — caches, parallelism, profiling. MAP_AUTO_WORKERS is the
+        # one to watch: the field it replaced was declared `bool = True` but
+        # read as `int(...)`, and int(True) is 1.
+        assert _gd.MAP_AUTO_WORKERS == 1
+        assert _gd.MAP_BATCH_SIZE == 5
+        assert _gd.MAP_USE_DEDICATED_POOL is False
+        assert _gd.EXTRACTION_CACHE is True
+        assert _gd.EXTRACTION_CACHE_SIZE == 5000
+        assert _gd.LLM_CACHE is True
+        assert _gd.LLM_CACHE_SIZE == 2000
+        assert _gd.LLM_FUSED_EXTRACTION is True
+        assert _gd.REBUILD_SKIP_IF_UNCHANGED is True
+        assert _gd.PROFILE is False
+        assert _gd.REPORT_COMPRESS_RATIO == 0.5
+        assert _gd.RUST_BUILD_EDGES is False
+        assert _gd.RUST_MERGE_ENTITIES is False
+        assert _gd.LARGE_GRAPH_THRESHOLD == 50000
 
     def test_no_module_reaches_demoted_fields_via_getattr(self):
         """A stale getattr would resurrect the old fallback, which often differed.
@@ -1456,9 +1473,34 @@ class TestDemotedGraphTuning:
         assert not hits, f"getattr still reaching demoted fields: {hits}"
 
     def test_no_module_reads_a_demoted_field_as_an_attribute(self):
-        """`cfg.graph_rag_community_min_size` would now raise AttributeError."""
-        hits = self._scan_package(lambda f: rf"\.{f}\b")
+        """`cfg.graph_rag_community_min_size` would now raise AttributeError.
+
+        The lookbehind keeps this to real attribute access. Without it the
+        on-disk cache filenames — `".graph_rag_extraction_cache.msgpack"` —
+        match too, and those are persisted artefact names, not config reads;
+        renaming them to satisfy a test would orphan every existing cache.
+
+        Excluding a preceding quote rather than requiring a preceding word
+        character is deliberate: `[\\w)]` would also miss `configs[0].field`
+        and a dot broken onto its own line, both of which are ordinary
+        attribute reads.
+        """
+        hits = self._scan_package(lambda f: rf"(?<!['\"])\.{f}\b")
         assert not hits, f"attribute reads of demoted fields: {hits}"
+
+    def test_no_module_names_a_demoted_field_as_a_string(self):
+        """Config can also be reached by name through a helper, not just getattr.
+
+        `graphrag_engine.py` defines a local ``_cfg_get(name, default)`` that
+        closes over the config, so a field is read as a plain string literal.
+        The two scans above look for ``getattr(...)`` and ``.field`` and would
+        both miss it — which is how `graph_rag_large_graph_threshold` was
+        briefly misread as dead during the 0.5.0 collapse. Any string literal
+        naming a demoted field is suspect, whether it is an accessor argument
+        or a message that tells the user to set a key that no longer exists.
+        """
+        hits = self._scan_package(lambda f: rf"['\"]{f}['\"]")
+        assert not hits, f"demoted field names appearing as string literals: {hits}"
 
     @staticmethod
     def _scan_package(pattern_for):

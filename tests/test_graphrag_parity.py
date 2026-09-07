@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from axon import graph_defaults as _gd
 from axon.graph_backends.base import GraphDataFilters, IngestResult
 from axon.graph_backends.graphrag_backend import GraphRagBackend
 from axon.main import AxonBrain, AxonConfig
@@ -348,7 +349,9 @@ def _canned_llm(canned: dict):
 
 class TestGraphRagParityFixtures:
     @pytest.fixture
-    def make_brain(self, tmp_path):
+    def make_brain(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(_gd, "LLM_FUSED_EXTRACTION", False)
+
         @contextmanager
         def _make(canned: dict):
             config = AxonConfig(
@@ -358,7 +361,6 @@ class TestGraphRagParityFixtures:
                 graph_rag=True,
                 graph_rag_relations=True,
                 graph_rag_min_entities_for_relations=0,
-                graph_rag_llm_fused_extraction=False,
                 graph_rag_community=True,
                 graph_rag_community_lazy=False,
                 raptor=False,
@@ -465,7 +467,8 @@ class TestCommunitySummarizationDoesNotDeadlock:
     a regression fails in 30s instead of hanging the test run / CI.
     """
 
-    def test_finalize_does_not_deadlock_on_graph_lock(self, tmp_path):
+    def test_finalize_does_not_deadlock_on_graph_lock(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(_gd, "LLM_FUSED_EXTRACTION", False)
         import threading
 
         fixture = _load_fixture("codebase")
@@ -476,7 +479,6 @@ class TestCommunitySummarizationDoesNotDeadlock:
             graph_rag=True,
             graph_rag_relations=True,
             graph_rag_min_entities_for_relations=0,
-            graph_rag_llm_fused_extraction=False,
             graph_rag_community=True,
             graph_rag_community_lazy=False,
             raptor=False,

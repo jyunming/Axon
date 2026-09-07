@@ -409,7 +409,7 @@ class GraphRagEngine(GraphRagMixin):
             _entity_graph_changed = False
             _use_rust_entity_merge = (
                 bool(results)
-                and bool(getattr(self.config, "graph_rag_rust_merge_entities", False))
+                and bool(_gd.RUST_MERGE_ENTITIES)
                 and _rust_bridge.can_merge_entities_into_graph()
             )
             for doc_id, entities in results:
@@ -856,7 +856,7 @@ class GraphRagEngine(GraphRagMixin):
             max_hops = _cfg_get("graph_rag_max_hops", 1)
             hop_decay = _cfg_get("graph_rag_hop_decay", 0.7)
             # Performance guard for large graphs (Epic 1/4)
-            large_threshold = _cfg_get("graph_rag_large_graph_threshold", 50000)
+            large_threshold = _gd.LARGE_GRAPH_THRESHOLD
             if len(self._entity_graph) > large_threshold and max_hops > 1:
                 logger.info(
                     f"   GraphRAG: large graph detected ({len(self._entity_graph)} nodes); "

@@ -365,7 +365,7 @@ class GraphRagMixin:
     _GR_CS_KEY_EXPAND = {v: k for k, v in _GR_CS_KEY_COMPACT.items()}
 
     def _gr_profile_enabled(self) -> bool:
-        return bool(getattr(self.config, "graph_rag_profile", False))
+        return bool(_gd.PROFILE)
 
     def _gr_log_profile(self, section: str, elapsed_s: float, **extra) -> None:
         if not self._gr_profile_enabled():
@@ -393,9 +393,9 @@ class GraphRagMixin:
         elif bucket == "global_map":
             cap = int(_gd.GLOBAL_MAP_CACHE_SIZE)
         elif bucket.startswith("llm:"):
-            cap = int(getattr(self.config, "graph_rag_llm_cache_size", 2000))
+            cap = int(_gd.LLM_CACHE_SIZE)
         else:
-            cap = int(getattr(self.config, "graph_rag_extraction_cache_size", 5000))
+            cap = int(_gd.EXTRACTION_CACHE_SIZE)
         if cap <= 0:
             bucket_map.clear()
             return
@@ -463,7 +463,7 @@ class GraphRagMixin:
 
         from axon.rust_bridge import get_rust_bridge
 
-        if not getattr(self.config, "graph_rag_extraction_cache", True):
+        if not _gd.EXTRACTION_CACHE:
             self._graph_rag_cache_dirty = False
             return
         with self._gr_cache_lock:
@@ -522,13 +522,13 @@ class GraphRagMixin:
             cap = 0
         _is_llm_bucket = bucket.startswith("llm:")
         if cap == 0 and _is_llm_bucket:
-            if not getattr(self.config, "graph_rag_llm_cache", True):
+            if not _gd.LLM_CACHE:
                 return
-            cap = int(getattr(self.config, "graph_rag_llm_cache_size", 2000))
+            cap = int(_gd.LLM_CACHE_SIZE)
         elif cap == 0:
-            if not getattr(self.config, "graph_rag_extraction_cache", True):
+            if not _gd.EXTRACTION_CACHE:
                 return
-            cap = int(getattr(self.config, "graph_rag_extraction_cache_size", 5000))
+            cap = int(_gd.EXTRACTION_CACHE_SIZE)
         if cap <= 0:
             return
         with self._gr_cache_lock:
@@ -578,10 +578,7 @@ class GraphRagMixin:
         raw_nodes = None
         raw_edges = None
         with self._graph_lock:
-            if (
-                bool(getattr(self.config, "graph_rag_rust_build_edges", False))
-                and bridge.can_build_graph_edges()
-            ):
+            if bool(_gd.RUST_BUILD_EDGES) and bridge.can_build_graph_edges():
                 built = bridge.build_graph_edges(self._entity_graph, self._relation_graph)
                 if built is not None and len(built) == 2:
                     raw_nodes, raw_edges = built
@@ -666,7 +663,7 @@ class GraphRagMixin:
     ) -> tuple[list[tuple[str, list[dict]]], list[tuple[str, list[dict]]], list[dict], bool]:
         if not chunks_to_process:
             return [], [], [], False
-        cache_enabled = bool(getattr(self.config, "graph_rag_extraction_cache", True))
+        cache_enabled = bool(_gd.EXTRACTION_CACHE)
         entity_by_doc: dict[str, list[dict]] = {}
         relation_by_doc: dict[str, list[dict]] = {}
         uncached_entity_docs: list[dict] = []
@@ -758,7 +755,7 @@ class GraphRagMixin:
         from concurrent.futures import as_completed
 
         use_fused_extraction = (
-            bool(getattr(self.config, "graph_rag_llm_fused_extraction", True))
+            bool(_gd.LLM_FUSED_EXTRACTION)
             and getattr(self.config, "graph_rag_depth", "standard") != "light"
             and getattr(self.config, "graph_rag_ner_backend", "llm") == "llm"
             and getattr(self.config, "graph_rag_relation_backend", "llm") == "llm"
@@ -810,7 +807,7 @@ class GraphRagMixin:
         **kwargs,
     ) -> str:
         """LLM completion with semantic response cache keyed by prompt+options."""
-        if not getattr(self.config, "graph_rag_llm_cache", True):
+        if not _gd.LLM_CACHE:
             return self.llm.complete(prompt, system_prompt=system_prompt, **kwargs)
         _llm_name = getattr(getattr(self, "llm", None), "__class__", type("x", (), {})).__name__
         _kwargs_key = "|".join(f"{k}={kwargs[k]}" for k in sorted(kwargs.keys()))
@@ -2084,7 +2081,7 @@ class GraphRagMixin:
     def _rebuild_communities(self) -> None:
         """Run community detection and generate summaries."""
         with self._community_rebuild_lock, self._graph_lock:
-            if bool(getattr(self.config, "graph_rag_rebuild_skip_if_unchanged", True)):
+            if bool(_gd.REBUILD_SKIP_IF_UNCHANGED):
                 _sig = (
                     len(self._entity_graph),
                     len(self._relation_graph),
@@ -2128,7 +2125,7 @@ class GraphRagMixin:
                         self._generate_community_summaries()
                         if _gd.INDEX_COMMUNITY_REPORTS:
                             self._index_community_reports_in_vector_store()
-            if bool(getattr(self.config, "graph_rag_rebuild_skip_if_unchanged", True)):
+            if bool(_gd.REBUILD_SKIP_IF_UNCHANGED):
                 self._gr_last_community_rebuild_sig = (
                     len(self._entity_graph),
                     len(self._relation_graph),
@@ -2691,7 +2688,7 @@ class GraphRagMixin:
         )
         # Token-level compression of community report chunks before LLM map phase
         if getattr(cfg, "graph_rag_report_compress", False) is True and all_chunks:
-            _ratio = getattr(cfg, "graph_rag_report_compress_ratio", 0.5)
+            _ratio = _gd.REPORT_COMPRESS_RATIO
             try:
                 _lingua = self._ensure_llmlingua()
                 _compressed_chunks = []
@@ -2854,8 +2851,8 @@ class GraphRagMixin:
                 _heapq.heapreplace(top_heap, (_score, _point))
 
         _map_workers_cfg = int(getattr(cfg, "graph_rag_map_workers", 0) or 0)
-        _map_auto_workers = int(getattr(cfg, "graph_rag_map_auto_workers", 4) or 0)
-        _map_use_dedicated_pool = bool(getattr(cfg, "graph_rag_map_use_dedicated_pool", True))
+        _map_auto_workers = int(_gd.MAP_AUTO_WORKERS or 0)
+        _map_use_dedicated_pool = bool(_gd.MAP_USE_DEDICATED_POOL)
         _map_workers_effective = 0
         if _map_workers_cfg > 0:
             _map_workers_effective = min(_map_workers_cfg, max(1, len(all_chunks)))
@@ -2864,7 +2861,7 @@ class GraphRagMixin:
 
             _cpu_cap = max(1, int(_os.cpu_count() or 4))
             _map_workers_effective = min(_map_auto_workers, _cpu_cap, max(1, len(all_chunks)))
-        _map_batch_size = int(getattr(cfg, "graph_rag_map_batch_size", 5) or 5)
+        _map_batch_size = int(_gd.MAP_BATCH_SIZE or 5)
         _t0_map = _time.perf_counter()
         try:
             if _map_batch_size > 1:
@@ -3808,7 +3805,7 @@ class GraphRagMixin:
         _depth = getattr(self.config, "graph_rag_depth", "standard")
         _ner_backend = getattr(self.config, "graph_rag_ner_backend", "llm")
         _rel_backend = getattr(self.config, "graph_rag_relation_backend", "llm")
-        _cache_enabled = bool(getattr(self.config, "graph_rag_extraction_cache", True))
+        _cache_enabled = bool(_gd.EXTRACTION_CACHE)
         _entity_key = self._graph_rag_entity_cache_key(text)
         _relation_key = self._graph_rag_relation_cache_key(text)
         _cached_entities = self._gr_cache_get("entities", _entity_key) if _cache_enabled else None
@@ -3899,7 +3896,7 @@ class GraphRagMixin:
         _depth = getattr(self.config, "graph_rag_depth", "standard")
         _ner_backend = getattr(self.config, "graph_rag_ner_backend", "llm")
         _cache_key = self._graph_rag_entity_cache_key(text)
-        if getattr(self.config, "graph_rag_extraction_cache", True):
+        if _gd.EXTRACTION_CACHE:
             _cached = self._gr_cache_get("entities", _cache_key)
             if _cached is not None:
                 self._gr_log_profile("extract_entities(cache_hit)", _time.perf_counter() - _t0)
@@ -3950,7 +3947,7 @@ class GraphRagMixin:
         _depth = getattr(self.config, "graph_rag_depth", "standard")
         _rel_backend = getattr(self.config, "graph_rag_relation_backend", "llm")
         _cache_key = self._graph_rag_relation_cache_key(text)
-        if getattr(self.config, "graph_rag_extraction_cache", True):
+        if _gd.EXTRACTION_CACHE:
             _cached = self._gr_cache_get("relations", _cache_key)
             if _cached is not None:
                 self._gr_log_profile("extract_relations(cache_hit)", _time.perf_counter() - _t0)
