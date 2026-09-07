@@ -365,6 +365,34 @@ _DEMOTED_GRAPH_TUNING: tuple[str, ...] = (
     "graph_rag_index_community_reports",
     "graph_rag_community_summary_compact_persist",
     "graph_rag_community_rebuild_debounce_s",
+    # Entity/relation extraction internals and relation-graph persistence,
+    # demoted in 0.5.0. The switches and backends stay real config fields —
+    # graph_rag_relations, _relation_backend, _ner_backend, _relation_budget,
+    # _entity_min_frequency, _canonicalize, _claims, _entity_resolve — as do
+    # the model ids, which offline mode rewrites in place with a resolved
+    # local path and so cannot become module constants.
+    "graph_rag_canonicalize_min_occurrences",
+    "graph_rag_canonicalize_relations_min_occurrences",
+    "graph_rag_entity_embedding_match",
+    "graph_rag_entity_match_threshold",
+    "graph_rag_entity_resolve_backend",
+    "graph_rag_entity_resolve_max",
+    "graph_rag_entity_resolve_threshold",
+    "graph_rag_exact_entity_boost",
+    "graph_rag_relation_compact_persist",
+    "graph_rag_relation_msgpack_persist",
+    "graph_rag_relation_pickle_cache",
+    "graph_rag_relation_pickle_cache_protocol",
+    "graph_rag_relation_shard_count",
+    "graph_rag_relation_shard_list_manifest",
+    "graph_rag_relation_shard_load_workers",
+    "graph_rag_relation_shard_parallel_load",
+    "graph_rag_relation_shard_parallel_signatures",
+    "graph_rag_relation_shard_parallel_writes",
+    "graph_rag_relation_shard_persist",
+    "graph_rag_relation_shard_selective_rewrite",
+    "graph_rag_relation_shard_signature_workers",
+    "graph_rag_relation_shard_write_workers",
 )
 
 _REMOVED_FIELDS.update(
@@ -887,12 +915,9 @@ class AxonConfig:
     # Hierarchical community detection
     graph_rag_community_levels: int = 2  # number of hierarchy levels
     # Entity embedding matching at query time
-    graph_rag_entity_embedding_match: bool = True
-    graph_rag_entity_match_threshold: float = 0.5
     # Community report vector store indexing
     # Entity description canonicalization
     graph_rag_canonicalize: bool = False
-    graph_rag_canonicalize_min_occurrences: int = 2  # GAP 8: was 3
     # Claim / covariate extraction (off by default)
     graph_rag_claims: bool = False
     # GAP 1: Global search reduce phase
@@ -900,7 +925,6 @@ class AxonConfig:
     # GAP 3a: Community summarization context budget
     # GAP 3b: Relation description canonicalization
     graph_rag_canonicalize_relations: bool = False
-    graph_rag_canonicalize_relations_min_occurrences: int = 2
     # GAP 3c: Include claims in community reports
     # GAP 4: Local search token budget and ranking controls
     # Unified candidate ranking weights
@@ -926,7 +950,6 @@ class AxonConfig:
     source_policy_enabled: bool = False
     # GAP 6: Async rebuild debounce
     # Exact-token entity boost in local search
-    graph_rag_exact_entity_boost: float = 3.0
     # Deferred community rebuild (batch ingest mode)
     graph_rag_community_defer: bool = True
     # Include RAPTOR level-1 summaries in GraphRAG entity extraction.
@@ -1015,11 +1038,8 @@ class AxonConfig:
     graph_rag_entity_resolve: bool = False
     # Alias-resolution backend. "rust" avoids materializing the full NxN similarity
     # matrix in Python and computes grouping in the Rust module when available.
-    graph_rag_entity_resolve_backend: Literal["numpy", "rust"] = "rust"
     graph_rag_rust_build_edges: bool = False
     graph_rag_rust_merge_entities: bool = False
-    graph_rag_entity_resolve_threshold: float = 0.92  # cosine similarity threshold (0–1)
-    graph_rag_entity_resolve_max: int = 5000  # skip if entity count exceeds this (perf guard)
     # Alternative relation extraction backend using REBEL (Babelscape/rebel-large).
     # "rebel" skips the LLM for relation extraction; produces structured (subject, relation,
     # object) triples directly from a fine-tuned seq2seq model.
@@ -1027,7 +1047,6 @@ class AxonConfig:
     graph_rag_relation_backend: Literal["llm", "rebel"] = "llm"
     # Persist relation graphs to a compact msgpack file when shard persistence is not
     # explicitly enabled. Falls back to JSON automatically when Rust support is missing.
-    graph_rag_relation_msgpack_persist: bool = False
     graph_rag_rebel_model: str = "Babelscape/rebel-large"
     graph_rag_gliner_model: str = "urchade/gliner_medium-v2.1"
     graph_rag_llmlingua_model: str = (
@@ -1046,19 +1065,6 @@ class AxonConfig:
     graph_rag_map_auto_workers: bool = True
     graph_rag_map_use_dedicated_pool: bool = False
     graph_rag_rebuild_skip_if_unchanged: bool = True
-    graph_rag_relation_compact_persist: bool = True
-    graph_rag_relation_pickle_cache: bool = False
-    graph_rag_relation_pickle_cache_protocol: int = 4
-    graph_rag_relation_shard_count: int = 16
-    graph_rag_relation_shard_list_manifest: bool = True
-    graph_rag_relation_shard_load_workers: int = 4
-    graph_rag_relation_shard_parallel_load: bool = True
-    graph_rag_relation_shard_parallel_signatures: bool = True
-    graph_rag_relation_shard_parallel_writes: bool = True
-    graph_rag_relation_shard_persist: bool = False
-    graph_rag_relation_shard_selective_rewrite: bool = True
-    graph_rag_relation_shard_signature_workers: int = 4
-    graph_rag_relation_shard_write_workers: int = 4
     # LLM request timeout in seconds (applied where the provider client supports it).
     # Kept at 60 for cloud providers so a stalled request fails fast. Locally served
     # models are far slower — see DEFAULT_LOCAL_LLM_TIMEOUT in this module for the

@@ -462,13 +462,12 @@ class TestRelationGraphPersistence:
 
 
 class TestRelationGraphMsgpackPersistence:
-    def test_save_load_roundtrip_with_msgpack_codec(self, tmp_path):
+    def test_save_load_roundtrip_with_msgpack_codec(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(_gd, "RELATION_MSGPACK_PERSIST", True)
         cfg = AxonConfig(
             bm25_path=str(tmp_path),
             vector_store_path=str(tmp_path),
-            graph_rag_relation_msgpack_persist=True,
         )
-        cfg.graph_rag_relation_shard_persist = False
         brain = _make_brain(config=cfg)
         brain._relation_graph = {
             "alice": [
@@ -1880,12 +1879,12 @@ class TestCanonicalizeEntityDescriptions:
         brain._canonicalize_entity_descriptions()
         brain.llm.complete.assert_not_called()
 
-    def test_skips_when_too_few_occurrences(self, tmp_path):
+    def test_skips_when_too_few_occurrences(self, tmp_path, monkeypatch):
         """Lines 2124-2128: below min_occurrences threshold skips."""
+        monkeypatch.setattr(_gd, "CANONICALIZE_MIN_OCCURRENCES", 3)
         cfg = AxonConfig(
             bm25_path=str(tmp_path),
             vector_store_path=str(tmp_path),
-            graph_rag_canonicalize_min_occurrences=3,
         )
         brain = _make_brain(config=cfg)
         brain._entity_description_buffer = {
@@ -1899,7 +1898,6 @@ class TestCanonicalizeEntityDescriptions:
         cfg = AxonConfig(
             bm25_path=str(tmp_path),
             vector_store_path=str(tmp_path),
-            graph_rag_canonicalize_min_occurrences=2,
         )
         brain = _make_brain(config=cfg)
         brain._entity_description_buffer = {
@@ -1924,7 +1922,6 @@ class TestCanonicalizeEntityDescriptions:
         cfg = AxonConfig(
             bm25_path=str(tmp_path),
             vector_store_path=str(tmp_path),
-            graph_rag_canonicalize_min_occurrences=2,
         )
         brain = _make_brain(config=cfg)
         brain._entity_description_buffer = {
@@ -1963,7 +1960,6 @@ class TestCanonicalizeRelationDescriptions:
             bm25_path=str(tmp_path),
             vector_store_path=str(tmp_path),
             graph_rag_canonicalize_relations=True,
-            graph_rag_canonicalize_relations_min_occurrences=2,
         )
         brain = _make_brain(config=cfg)
         brain._relation_description_buffer = {
@@ -2010,13 +2006,13 @@ class TestResolveEntityAliases:
         result = brain._resolve_entity_aliases()
         assert result == 0
 
-    def test_merges_similar_entities(self, tmp_path):
+    def test_merges_similar_entities(self, tmp_path, monkeypatch):
         """Lines 2060-2116: similar entities are merged."""
+        monkeypatch.setattr(_gd, "ENTITY_RESOLVE_THRESHOLD", 0.9)
 
         cfg = AxonConfig(
             bm25_path=str(tmp_path),
             vector_store_path=str(tmp_path),
-            graph_rag_entity_resolve_threshold=0.9,
         )
         brain = _make_brain(config=cfg)
         brain._entity_graph = {
@@ -2041,11 +2037,10 @@ class TestResolveEntityAliases:
         assert len(brain._entity_graph) == 1
         assert brain._community_graph_dirty is True
 
-    def test_warns_when_too_many_entities(self, tmp_path):
+    def test_warns_when_too_many_entities(self, tmp_path, monkeypatch):
         """Lines 2013-2020: exceeding max_entities logs warning and returns 0."""
-        cfg = AxonConfig(
-            bm25_path=str(tmp_path), vector_store_path=str(tmp_path), graph_rag_entity_resolve_max=2
-        )
+        monkeypatch.setattr(_gd, "ENTITY_RESOLVE_MAX", 2)
+        cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
         brain = _make_brain(config=cfg)
         brain._entity_graph = {
             f"e{i}": {"description": "d", "chunk_ids": [f"c{i}"]}
@@ -2056,12 +2051,12 @@ class TestResolveEntityAliases:
 
 
 class TestResolveEntityAliasesRustBackend:
-    def test_uses_rust_grouping_backend_when_enabled(self, tmp_path):
+    def test_uses_rust_grouping_backend_when_enabled(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(_gd, "ENTITY_RESOLVE_BACKEND", "rust")
+        monkeypatch.setattr(_gd, "ENTITY_RESOLVE_THRESHOLD", 0.9)
         cfg = AxonConfig(
             bm25_path=str(tmp_path),
             vector_store_path=str(tmp_path),
-            graph_rag_entity_resolve_backend="rust",
-            graph_rag_entity_resolve_threshold=0.9,
         )
         brain = _make_brain(config=cfg)
         brain._entity_graph = {
@@ -2160,12 +2155,12 @@ class TestMatchEntitiesByEmbedding:
         result = brain._match_entities_by_embedding("query")
         assert result == []
 
-    def test_returns_top_k_similar_entities(self, tmp_path):
+    def test_returns_top_k_similar_entities(self, tmp_path, monkeypatch):
         """Lines 1906-1931: cosine similarity matching returns matches."""
+        monkeypatch.setattr(_gd, "ENTITY_MATCH_THRESHOLD", 0.0)
         cfg = AxonConfig(
             bm25_path=str(tmp_path),
             vector_store_path=str(tmp_path),
-            graph_rag_entity_match_threshold=0.0,
         )
         brain = _make_brain(config=cfg)
         brain._entity_embeddings = {
@@ -3773,12 +3768,12 @@ class TestCanonicalizeEntityDescriptionsV2:
         brain._canonicalize_entity_descriptions()
         brain.llm.complete.assert_not_called()
 
-    def test_skips_when_too_few_occurrences(self, tmp_path):
+    def test_skips_when_too_few_occurrences(self, tmp_path, monkeypatch):
         """Lines 2124-2128: below min_occurrences threshold skips."""
+        monkeypatch.setattr(_gd, "CANONICALIZE_MIN_OCCURRENCES", 3)
         cfg = AxonConfig(
             bm25_path=str(tmp_path),
             vector_store_path=str(tmp_path),
-            graph_rag_canonicalize_min_occurrences=3,
         )
         brain = _make_brain(config=cfg)
         brain._entity_description_buffer = {
@@ -3792,7 +3787,6 @@ class TestCanonicalizeEntityDescriptionsV2:
         cfg = AxonConfig(
             bm25_path=str(tmp_path),
             vector_store_path=str(tmp_path),
-            graph_rag_canonicalize_min_occurrences=2,
         )
         brain = _make_brain(config=cfg)
         brain._entity_description_buffer = {
@@ -3817,7 +3811,6 @@ class TestCanonicalizeEntityDescriptionsV2:
         cfg = AxonConfig(
             bm25_path=str(tmp_path),
             vector_store_path=str(tmp_path),
-            graph_rag_canonicalize_min_occurrences=2,
         )
         brain = _make_brain(config=cfg)
         brain._entity_description_buffer = {
@@ -3856,7 +3849,6 @@ class TestCanonicalizeRelationDescriptionsV2:
             bm25_path=str(tmp_path),
             vector_store_path=str(tmp_path),
             graph_rag_canonicalize_relations=True,
-            graph_rag_canonicalize_relations_min_occurrences=2,
         )
         brain = _make_brain(config=cfg)
         brain._relation_description_buffer = {
@@ -3903,13 +3895,13 @@ class TestResolveEntityAliasesV2:
         result = brain._resolve_entity_aliases()
         assert result == 0
 
-    def test_merges_similar_entities(self, tmp_path):
+    def test_merges_similar_entities(self, tmp_path, monkeypatch):
         """Lines 2060-2116: similar entities are merged."""
+        monkeypatch.setattr(_gd, "ENTITY_RESOLVE_THRESHOLD", 0.9)
 
         cfg = AxonConfig(
             bm25_path=str(tmp_path),
             vector_store_path=str(tmp_path),
-            graph_rag_entity_resolve_threshold=0.9,
         )
         brain = _make_brain(config=cfg)
         brain._entity_graph = {
@@ -3934,11 +3926,10 @@ class TestResolveEntityAliasesV2:
         assert len(brain._entity_graph) == 1
         assert brain._community_graph_dirty is True
 
-    def test_warns_when_too_many_entities(self, tmp_path):
+    def test_warns_when_too_many_entities(self, tmp_path, monkeypatch):
         """Lines 2013-2020: exceeding max_entities logs warning and returns 0."""
-        cfg = AxonConfig(
-            bm25_path=str(tmp_path), vector_store_path=str(tmp_path), graph_rag_entity_resolve_max=2
-        )
+        monkeypatch.setattr(_gd, "ENTITY_RESOLVE_MAX", 2)
+        cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
         brain = _make_brain(config=cfg)
         brain._entity_graph = {
             f"e{i}": {"description": "d", "chunk_ids": [f"c{i}"]}
@@ -4011,12 +4002,12 @@ class TestMatchEntitiesByEmbeddingV2:
         result = brain._match_entities_by_embedding("query")
         assert result == []
 
-    def test_returns_top_k_similar_entities(self, tmp_path):
+    def test_returns_top_k_similar_entities(self, tmp_path, monkeypatch):
         """Lines 1906-1931: cosine similarity matching returns matches."""
+        monkeypatch.setattr(_gd, "ENTITY_MATCH_THRESHOLD", 0.0)
         cfg = AxonConfig(
             bm25_path=str(tmp_path),
             vector_store_path=str(tmp_path),
-            graph_rag_entity_match_threshold=0.0,
         )
         brain = _make_brain(config=cfg)
         brain._entity_embeddings = {

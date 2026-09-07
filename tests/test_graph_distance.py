@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import tempfile
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -120,8 +120,9 @@ class TestBuildNxGraph:
         mixin._save_entity_graph()
         assert mixin._nx_graph_dirty is True
 
-    def test_save_relation_graph_marks_dirty(self):
+    def test_save_relation_graph_marks_dirty(self, monkeypatch):
         """_save_relation_graph sets _nx_graph_dirty = True."""
+        monkeypatch.setattr(_gd, "RELATION_COMPACT_PERSIST", False)
         from axon.graph_rag import GraphRagMixin
 
         mixin = GraphRagMixin.__new__(GraphRagMixin)
@@ -133,12 +134,8 @@ class TestBuildNxGraph:
         mixin._gr_write_json_if_changed = MagicMock()
 
         # _save_relation_graph falls through to the non-shard path
-        with patch.object(
-            type(mixin.config), "graph_rag_relation_shard_persist", False, create=True
-        ):
-            mixin.config.graph_rag_relation_shard_persist = False
-            mixin.config.graph_rag_relation_compact_persist = False
-            mixin._save_relation_graph()
+        monkeypatch.setattr(_gd, "RELATION_SHARD_PERSIST", False)
+        mixin._save_relation_graph()
         assert mixin._nx_graph_dirty is True
 
 
@@ -208,9 +205,17 @@ class TestDijkstraDistanceMetric:
 
 import pytest
 
+from axon import graph_defaults as _gd
+
 
 class TestExpandWithEntityGraph:
     """Integration-level tests for the multi-hop expansion in query_router."""
+
+    @pytest.fixture(autouse=True)
+    def _graph_tuning(self, monkeypatch):
+        """Values this class used to set on config, before 0.5.0
+        demoted them to graph_defaults constants."""
+        monkeypatch.setattr(_gd, "ENTITY_EMBEDDING_MATCH", False)
 
     def _make_router(self, entity_graph, relation_graph, config_overrides=None):
         from types import SimpleNamespace
@@ -220,7 +225,6 @@ class TestExpandWithEntityGraph:
         cfg = MagicMock()
         cfg.top_k = 5
         cfg.graph_rag_relations = True
-        cfg.graph_rag_entity_embedding_match = False
         cfg.graph_rag_max_hops = 2
         cfg.graph_rag_hop_decay = 0.7
         cfg.graph_rag_distance_weighted = True
@@ -691,6 +695,12 @@ class TestDynamicRetrieveHopCount:
 class TestPerformanceGuard:
     """Verify that _expand_with_entity_graph caps max_hops at 1 for very large graphs."""
 
+    @pytest.fixture(autouse=True)
+    def _graph_tuning(self, monkeypatch):
+        """Values this class used to set on config, before 0.5.0
+        demoted them to graph_defaults constants."""
+        monkeypatch.setattr(_gd, "ENTITY_EMBEDDING_MATCH", False)
+
     def _make_large_router(self, entity_count, seed="seed", chain_depth=2, config_max_hops=3):
         """Build a router with a large flat entity graph plus a small chain from seed."""
         from types import SimpleNamespace
@@ -715,7 +725,6 @@ class TestPerformanceGuard:
         cfg = MagicMock()
         cfg.top_k = 20
         cfg.graph_rag_relations = True
-        cfg.graph_rag_entity_embedding_match = False
         cfg.graph_rag_max_hops = config_max_hops
         cfg.graph_rag_hop_decay = 0.7
         cfg.graph_rag_distance_weighted = True
