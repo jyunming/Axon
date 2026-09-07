@@ -39,7 +39,7 @@ It is much likelier to bite when **two processes share one store** — for examp
 **Fix:**
 
 ```bash
-pip install -U "tqdb>=0.8.5"
+pip install -U "tqdb>=0.9.1"
 ```
 
 Axon 0.5.0 requires that floor, so a fresh install cannot land on an affected version. If you upgraded Axon in place, check what you actually have:
@@ -47,6 +47,8 @@ Axon 0.5.0 requires that floor, so a fresh install cannot land on an affected ve
 ```bash
 python -c "import tqdb; print(tqdb.__version__)"
 ```
+
+**Every machine sharing a store must be on the same tqdb minor.** The 0.8/0.9 `quantizer.bin` change is one-directional: 0.9 reads what 0.8 wrote, but 0.8 **cannot** read what 0.9 wrote, and it fails with the same EOF error as above. That is why the requirement is `>=0.9.1` rather than a range spanning both — with share-mounts, one machine writing what another cannot read is an ordinary setup, not a contrived one.
 
 **If a store cannot be opened**, upgrading alone does not fix it — whether the file is genuinely damaged or simply written in a format this build no longer reads. Rebuild it:
 
