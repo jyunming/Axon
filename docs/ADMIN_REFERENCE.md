@@ -746,10 +746,9 @@ YAML section: `rag:`
 | `rag.sentence_window_size` | int | `3` | Sentences of context on each side (recommended: 1–5) |
 | `rag.mmr` | bool | `false` | Maximal Marginal Relevance deduplication — reorders and removes near-duplicate chunks |
 | `rag.mmr_lambda` | float | `0.5` | MMR diversity–relevance trade-off (`1.0` = pure relevance, `0.0` = pure diversity) |
-| `rag.parent_doc` | bool | `false` | Small-to-big retrieval (index child chunks, return parent passages) |
-| `rag.parent_chunk_size` | int | `1500` | Parent passage size in tokens when `parent_doc` is enabled |
+| `rag.parent_chunk_size` | int | `1500` | Parent passage size in tokens for small-to-big retrieval |
 | `rag.cite` | bool | `true` | Include inline `[Document N]` citations in answers |
-| `rag.discuss` | bool | `true` | Allow general-knowledge fallback when KB has no hits (`discussion_fallback`) |
+| `rag.discussion_fallback` | bool | `true` | Allow general-knowledge fallback when KB has no hits |
 | `rag.query_cache` | bool | `false` | In-memory query result caching |
 | `rag.query_cache_size` | int | `128` | Maximum cached entries |
 | `rag.query_cache_ttl` | int | `1800` | Cache entry expiry in seconds (`0` = no expiry) |
@@ -783,9 +782,18 @@ YAML section: `chunk:`
 | `chunk.strategy` | str | `semantic` | Chunking strategy: `recursive`, `semantic`, `markdown`, or `cosine_semantic` |
 | `chunk.size` | int | `1000` | Target chunk size in tokens (recommended: 400–2000) |
 | `chunk.overlap` | int | `200` | Token overlap between adjacent chunks (recommended: 50–400) |
-| `chunk.cosine_semantic_threshold` | float | `0.7` | Cosine similarity threshold for `cosine_semantic` strategy |
-| `chunk.cosine_semantic_max_size` | int | `500` | Max chunk size in tokens for `cosine_semantic` strategy |
-| `chunk.parent_chunk_size` | int | `1500` | Parent passage size when using small-to-big retrieval |
+| `rag.cosine_semantic_threshold` | float | `0.7` | Cosine similarity threshold for `cosine_semantic` strategy |
+| `rag.cosine_semantic_max_size` | int | `500` | Max chunk size in tokens for `cosine_semantic` strategy |
+
+> The three keys above live under `rag:`, not `chunk:`. `load()` builds
+> `chunk:`'s keys by prefixing (`chunk.size` → `chunk_size`), so a name that
+> does not start with `chunk_` is dropped there. They were documented under
+> `chunk:` until 0.5.0 and silently did nothing at that location.
+>
+> `parent_doc` was also listed as a `rag:` key. It is not one — it is a
+> per-query routing-profile flag (`query_router.py`'s `_ROUTE_PROFILES`), so
+> small-to-big retrieval is chosen per query, not switched on in `config.yaml`.
+> `rag.parent_chunk_size` does apply.
 
 ### 6.7 Reranker Settings
 

@@ -1561,6 +1561,44 @@ class TestRagSectionSchemaMatchesLoad:
         assert match and "no longer a valid key" in match[0].message
         assert "Did you mean" not in (match[0].suggestion or "")
 
+    def test_prefixed_sections_accept_what_load_accepts(self, tmp_path):
+        """`chunk:`/`embedding:`/`llm:` keys derive from the same prefixes.
+
+        `embedding.models_dir` is real — `embedding_` + `models_dir` is a
+        field — but the hand-written set omitted it, so it was rejected with a
+        "Did you mean 'model'?" naming a different setting.
+        """
+        path = self._cfg(
+            tmp_path,
+            "embedding:\n  models_dir: /tmp/m\n"
+            "chunk:\n  size: 400\n  overlap: 40\n"
+            "llm:\n  base_url: http://x\n",  # a rename, with no field of its own
+        )
+        unknown = [i.field for i in AxonConfig.validate(path) if "Unknown key" in i.message]
+        assert not unknown, f"rejected keys load() accepts: {unknown}"
+
+    def test_keys_load_silently_drops_are_reported(self, tmp_path):
+        """The inverse drift: the schema used to bless keys that did nothing.
+
+        `load()` builds `chunk:` keys by prefixing, so `cosine_semantic_threshold`
+        there becomes `chunk_cosine_semantic_threshold`, which is not a field and
+        is discarded. It was documented under `chunk:` and validated clean while
+        having no effect. It belongs under `rag:`, where it works.
+        """
+        path = self._cfg(
+            tmp_path,
+            "chunk:\n  cosine_semantic_threshold: 0.55\n  parent_chunk_size: 3000\n"
+            "rag:\n  parent_doc: true\n  discuss: false\n",
+        )
+        reported = {i.field for i in AxonConfig.validate(path) if "Unknown key" in i.message}
+        for key in ("cosine_semantic_threshold", "parent_chunk_size", "parent_doc", "discuss"):
+            assert key in reported, f"{key} silently accepted but load() drops it"
+        ok = self._cfg(
+            tmp_path,
+            "rag:\n  cosine_semantic_threshold: 0.55\n  parent_chunk_size: 3000\n",
+        )
+        assert not [i for i in AxonConfig.validate(ok) if "Unknown key" in i.message]
+
 
 class TestPostInit:
     """Tests for __post_init__ environment-variable handling."""
