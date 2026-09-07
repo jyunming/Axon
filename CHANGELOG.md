@@ -91,6 +91,27 @@ never reaches. Nothing a default install can do was removed.
   (`main.py:_resolve_model_path`), which a module constant cannot carry per
   brain instance.
 
+- **14 more GraphRAG cache and parallelism config keys are removed**, closing
+  the collapse: `graph_rag_extraction_cache` / `_size`, `_llm_cache` / `_size`,
+  `_llm_fused_extraction`, `_map_auto_workers`, `_map_batch_size`,
+  `_map_use_dedicated_pool`, `_profile`, `_rebuild_skip_if_unchanged`,
+  `_report_compress_ratio`, `_rust_build_edges`, `_rust_merge_entities` and
+  `_large_graph_threshold`. None changes what Axon retrieves — only how much
+  work it repeats and how many threads it spends. `graph_rag_report_compress`
+  stays a setting; only the ratio moved.
+
+  `graph_rag_map_auto_workers` was declared `bool = True` but read as a count
+  (`int(getattr(cfg, ..., 4) or 0)`), and `int(True)` is 1 — so its effective
+  value had always been 1, never the 4 its dead fallback implied. Recorded as
+  `1`, which is the same behaviour without the type confusion.
+
+  **The GraphRAG config surface is now 33 fields, down from 112.** The 79
+  removed were internal tuning: none shipped in the default `config.yaml`, none
+  was reachable from `/config`, and none was documented. Of the 33 that remain,
+  30 are documented — the switches, the backend choices, and the levers
+  `docs/TROUBLESHOOTING.md` names when something goes wrong. A config that
+  still sets a removed key keeps loading and says so.
+
 ### 🐛 Fixes
 
 - **`validate()` reported working config keys as typos, and misnamed the fix.**

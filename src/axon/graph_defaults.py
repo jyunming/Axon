@@ -34,6 +34,48 @@ Two rules for anything added here:
 
 from __future__ import annotations
 
+# ── Caches, parallelism and profiling ───────────────────────────────────────
+#
+# Nothing here changes what Axon retrieves — only how much work it repeats and
+# how many threads it spends doing it.
+
+#: Cache extraction results so re-ingesting an unchanged chunk is free.
+EXTRACTION_CACHE = True
+EXTRACTION_CACHE_SIZE = 5000
+#: Cache raw LLM responses during graph extraction.
+LLM_CACHE = True
+LLM_CACHE_SIZE = 2000
+#: Extract entities and relations in one LLM call rather than two.
+LLM_FUSED_EXTRACTION = True
+#: Skip a community rebuild when the graph signature is unchanged.
+REBUILD_SKIP_IF_UNCHANGED = True
+#: Emit per-stage timings to the log.
+PROFILE = False
+
+#: Community reports per map-phase LLM call.
+MAP_BATCH_SIZE = 5
+#: Run the map phase on a pool of its own rather than the shared executor.
+MAP_USE_DEDICATED_POOL = False
+#: Workers for that dedicated pool.
+#:
+#: This replaces a field declared ``bool = True`` but read as a count —
+#: ``int(getattr(cfg, ..., 4) or 0)``, and ``int(True)`` is 1, so the effective
+#: value has always been 1, never the 4 its dead fallback suggested. Recorded
+#: as 1 here: identical behaviour, minus the type confusion. Moot in practice
+#: while MAP_USE_DEDICATED_POOL is False, which gates the only branch that
+#: reads it.
+MAP_AUTO_WORKERS = 1
+
+#: Target ratio when LLMLingua compresses community reports.
+REPORT_COMPRESS_RATIO = 0.5
+
+#: Rust fast paths, both off pending wider validation.
+RUST_BUILD_EDGES = False
+RUST_MERGE_ENTITIES = False
+
+#: Entity count above which multi-hop traversal is capped to one hop.
+LARGE_GRAPH_THRESHOLD = 50000
+
 # ── Entity / relation extraction internals ──────────────────────────────────
 #
 # What stays a config field here is the switches and the backends: whether

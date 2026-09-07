@@ -150,12 +150,12 @@ class TestGraphRagExtractionCachePersistence:
 
 
 class TestGraphRagExtractionBatching:
-    def test_pipelines_relation_extraction_when_budget_allows(self, tmp_path):
+    def test_pipelines_relation_extraction_when_budget_allows(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(_gd, "LLM_FUSED_EXTRACTION", False)
         cfg = AxonConfig(
             bm25_path=str(tmp_path),
             vector_store_path=str(tmp_path),
             graph_rag_relation_budget=0,
-            graph_rag_llm_fused_extraction=False,
         )
         brain = _make_brain(config=cfg)
         submitted: list[str] = []
@@ -258,7 +258,6 @@ class TestGraphRagFusedExtractionBatching:
             bm25_path=str(tmp_path),
             vector_store_path=str(tmp_path),
             graph_rag_relation_budget=0,
-            graph_rag_llm_fused_extraction=True,
             graph_rag_ner_backend="llm",
             graph_rag_relation_backend="llm",
             graph_rag_depth="standard",
@@ -1164,9 +1163,10 @@ class TestGlobalSearchMapReduce:
 
     def test_reduces_valid_points(self, tmp_path, monkeypatch):
         """Lines 1184-1193: reduce phase calls LLM and returns response."""
+        monkeypatch.setattr(_gd, "MAP_BATCH_SIZE", 1)
 
         monkeypatch.setattr(_gd, "GLOBAL_MIN_SCORE", 0)
-        cfg = AxonConfig(graph_rag_map_batch_size=1)
+        cfg = AxonConfig()
         brain = _make_brain(config=cfg)
         brain._community_summaries = {
             "0_0": {
@@ -1218,9 +1218,10 @@ class TestGlobalSearchMapReduce:
 
     def test_reduce_exception_returns_fallback(self, tmp_path, monkeypatch):
         """Lines 1190-1193: reduce exception returns fallback text."""
+        monkeypatch.setattr(_gd, "MAP_BATCH_SIZE", 1)
 
         monkeypatch.setattr(_gd, "GLOBAL_MIN_SCORE", 0)
-        cfg = AxonConfig(graph_rag_map_batch_size=1)
+        cfg = AxonConfig()
         brain = _make_brain(config=cfg)
         brain._community_summaries = {
             "0_0": {
@@ -3117,9 +3118,10 @@ class TestGlobalSearchMapReduceV2:
 
     def test_reduces_valid_points(self, tmp_path, monkeypatch):
         """Lines 1184-1193: reduce phase calls LLM and returns response."""
+        monkeypatch.setattr(_gd, "MAP_BATCH_SIZE", 1)
 
         monkeypatch.setattr(_gd, "GLOBAL_MIN_SCORE", 0)
-        cfg = AxonConfig(graph_rag_map_batch_size=1)
+        cfg = AxonConfig()
         brain = _make_brain(config=cfg)
         brain._community_summaries = {
             "0_0": {
@@ -3171,9 +3173,10 @@ class TestGlobalSearchMapReduceV2:
 
     def test_reduce_exception_returns_fallback(self, tmp_path, monkeypatch):
         """Lines 1190-1193: reduce exception returns fallback text."""
+        monkeypatch.setattr(_gd, "MAP_BATCH_SIZE", 1)
 
         monkeypatch.setattr(_gd, "GLOBAL_MIN_SCORE", 0)
-        cfg = AxonConfig(graph_rag_map_batch_size=1)
+        cfg = AxonConfig()
         brain = _make_brain(config=cfg)
         brain._community_summaries = {
             "0_0": {
@@ -4123,7 +4126,6 @@ class TestMapCommunityBatch:
         cfg = AxonConfig(
             bm25_path=str(tmp_path),
             vector_store_path=str(tmp_path),
-            graph_rag_map_batch_size=5,
             graph_rag_map_workers=0,
         )
         brain = _make_brain(config=cfg)
@@ -4153,11 +4155,9 @@ class TestMapCommunityBatch:
         brain._global_search_map_reduce("test query", brain.config)
         assert len(llm_calls) == 2, f"Expected 2 LLM calls, got {len(llm_calls)}: {llm_calls}"
 
-    def test_batch_size_config_field_default(self):
-        from axon.config import AxonConfig
-
-        cfg = AxonConfig(bm25_path=".", vector_store_path=".")
-        assert cfg.graph_rag_map_batch_size == 5
+    def test_batch_size_default(self):
+        """Became a graph_defaults constant in 0.5.0; the value is unchanged."""
+        assert _gd.MAP_BATCH_SIZE == 5
 
     def test_batch_mode_collects_points(self, tmp_path):
         import json as _json_t

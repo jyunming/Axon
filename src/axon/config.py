@@ -393,6 +393,22 @@ _DEMOTED_GRAPH_TUNING: tuple[str, ...] = (
     "graph_rag_relation_shard_selective_rewrite",
     "graph_rag_relation_shard_signature_workers",
     "graph_rag_relation_shard_write_workers",
+    # Caches, parallelism and profiling, demoted in 0.5.0. None of it
+    # changes what Axon retrieves — only how much work it repeats.
+    "graph_rag_extraction_cache",
+    "graph_rag_extraction_cache_size",
+    "graph_rag_llm_cache",
+    "graph_rag_llm_cache_size",
+    "graph_rag_llm_fused_extraction",
+    "graph_rag_map_auto_workers",
+    "graph_rag_map_batch_size",
+    "graph_rag_map_use_dedicated_pool",
+    "graph_rag_profile",
+    "graph_rag_rebuild_skip_if_unchanged",
+    "graph_rag_report_compress_ratio",
+    "graph_rag_rust_build_edges",
+    "graph_rag_rust_merge_entities",
+    "graph_rag_large_graph_threshold",
 )
 
 _REMOVED_FIELDS.update(
@@ -999,7 +1015,6 @@ class AxonConfig:
     graph_rag_max_hops: int = 2
     graph_rag_hop_decay: float = 0.7
     graph_rag_distance_weighted: bool = True
-    graph_rag_large_graph_threshold: int = 50000
     # Community detection backend preference.
     # "louvain"   = networkx Louvain only (default — safe on all environments, fast for <10k nodes)
     # "leidenalg" = leidenalg/igraph multi-resolution Leiden (recommended when available)
@@ -1033,7 +1048,6 @@ class AxonConfig:
     graph_rag_map_workers: int = 0
     # Number of community report chunks to send in a single LLM call during the map phase.
     # Set to 5 (default) for ~5× fewer LLM calls vs per-chunk mode (batch_size=1).
-    graph_rag_map_batch_size: int = 5
     # Alternative NER backend. "gliner" skips LLM for entity extraction.
     # Relations and claims still use LLM. pip install axon[gliner]
     graph_rag_ner_backend: Literal["llm", "gliner"] = "llm"
@@ -1045,11 +1059,9 @@ class AxonConfig:
     # When both entity and relation extraction use the LLM and relations are enabled
     # for all processed chunks, issue one fused extraction prompt per chunk instead of
     # separate entity and relation prompts.
-    graph_rag_llm_fused_extraction: bool = True
     # Token-level compression of community reports before map-reduce LLM calls.
     # Uses LLMLingua-2. pip install axon[llmlingua]
     graph_rag_report_compress: bool = False
-    graph_rag_report_compress_ratio: float = 0.5  # target compression (0.0–1.0)
     # Auto-route queries based on complexity.
     # "heuristic": keyword-based, zero latency. "llm": one classifier LLM call.
     # "off" (default): use graph_rag_mode as configured.
@@ -1069,8 +1081,6 @@ class AxonConfig:
     graph_rag_entity_resolve: bool = False
     # Alias-resolution backend. "rust" avoids materializing the full NxN similarity
     # matrix in Python and computes grouping in the Rust module when available.
-    graph_rag_rust_build_edges: bool = False
-    graph_rag_rust_merge_entities: bool = False
     # Alternative relation extraction backend using REBEL (Babelscape/rebel-large).
     # "rebel" skips the LLM for relation extraction; produces structured (subject, relation,
     # object) triples directly from a fine-tuned seq2seq model.
@@ -1088,14 +1098,6 @@ class AxonConfig:
     # silently bypassed YAML loading and the config-validation API. Each
     # of these is now a real dataclass field so config.yaml entries take
     # effect and are visible to /config/get + /config/update.
-    graph_rag_profile: bool = False
-    graph_rag_extraction_cache: bool = True
-    graph_rag_extraction_cache_size: int = 5000
-    graph_rag_llm_cache: bool = True
-    graph_rag_llm_cache_size: int = 2000
-    graph_rag_map_auto_workers: bool = True
-    graph_rag_map_use_dedicated_pool: bool = False
-    graph_rag_rebuild_skip_if_unchanged: bool = True
     # LLM request timeout in seconds (applied where the provider client supports it).
     # Kept at 60 for cloud providers so a stalled request fails fast. Locally served
     # models are far slower — see DEFAULT_LOCAL_LLM_TIMEOUT in this module for the
