@@ -420,6 +420,45 @@ _REMOVED_FIELDS.update(
 )
 
 
+# Sections whose keys `load()` turns into field names by prefixing, e.g.
+# `chunk: {size: 400}` -> `chunk_size`. Kept next to _KNOWN_YAML_KEYS because
+# the two must describe the same thing.
+_PREFIXED_SECTIONS: dict[str, str] = {
+    "embedding": "embedding_",
+    "llm": "llm_",
+    "chunk": "chunk_",
+}
+
+
+def _derived_yaml_keys(cls, section: str) -> set[str]:
+    """Keys `load()` genuinely accepts in *section*, derived from the dataclass.
+
+    `_KNOWN_YAML_KEYS` is hand-written and had drifted in both directions: it
+    was missing 69 keys `load()` accepts under ``rag:`` (so a config `save()`
+    had just written failed validation), and it listed keys `load()` drops on
+    the floor (so a documented setting was accepted while doing nothing).
+    Deriving the set from the same place `load()` derives it removes the
+    duplication rather than re-synchronising two copies.
+
+    The hand-written set is still unioned on top, because ``llm:`` renames
+    several of its keys (``llm.base_url`` -> ``ollama_base_url``) and those
+    have no field of their own to derive from.
+    """
+    # Leading underscore marks internal bookkeeping (`_loaded_path`); it is a
+    # dataclass field, but it is not a setting and must not become a key
+    # `validate()` blesses.
+    fields = {f.name for f in cls.__dataclass_fields__.values() if not f.name.startswith("_")}
+    if section == "rag":
+        # `load()` does `config_dict.update(data["rag"])` — verbatim field
+        # names — and `save()` parks every field lacking a bespoke section
+        # mapping here, so the whole dataclass is legal.
+        return fields
+    prefix = _PREFIXED_SECTIONS.get(section)
+    if prefix:
+        return {name[len(prefix) :] for name in fields if name.startswith(prefix)}
+    return set()
+
+
 _KNOWN_YAML_KEYS: dict[str, set[str]] = {
     "llm": {
         "provider",
@@ -464,8 +503,6 @@ _KNOWN_YAML_KEYS: dict[str, set[str]] = {
         "hyde",
         "multi_query",
         "step_back",
-        "decompose",
-        "compress",
         "rerank",
         "sentence_window",
         "sentence_window_size",
@@ -474,11 +511,8 @@ _KNOWN_YAML_KEYS: dict[str, set[str]] = {
         "cite",
         "raptor",
         "graph_rag",
-        "discuss",
         "top_k",
         "similarity_threshold",
-        "parent_doc",
-        "parent_chunk_size",
         "query_router",
         "code_graph",
         "code_graph_bridge",
@@ -515,9 +549,6 @@ _KNOWN_YAML_KEYS: dict[str, set[str]] = {
         "strategy",
         "size",
         "overlap",
-        "cosine_semantic_threshold",
-        "parent_chunk_size",
-        "cosine_semantic_max_size",
     },
     "rerank": {"enabled", "model", "top_k", "provider"},
     "offline": {
@@ -1674,6 +1705,7 @@ class AxonConfig:
             known = _KNOWN_YAML_KEYS.get(section, set())
             if not known:
                 continue
+            known = known | _derived_yaml_keys(cls, section)
             for key in keys:
                 if key not in known:
                     if key in _REMOVED_FIELDS:

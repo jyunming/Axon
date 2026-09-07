@@ -99,9 +99,21 @@ never reaches. Nothing a default install can do was removed.
   `rag.graph_rag_local_entity_weight: 9.5` therefore took effect *and* produced
   "Unknown key … Did you mean `graph_federation_weights`?" — following that
   advice would have replaced a working setting with an unrelated one. The keys
-  in question are now removed (above) and report themselves as removed. The same
-  divergence still exists for a handful of graph keys not yet collapsed; those
-  follow in the next slices.
+  in question are now removed (above) and report themselves as removed.
+
+  The same divergence turned out to be far wider than the graph keys, and is
+  now fixed at the root. `load()` does `config_dict.update(data["rag"])`,
+  taking that section's keys verbatim as dataclass field names, and `save()`
+  deliberately parks every field without a bespoke section mapping there.
+  `validate()` checked a hand-written list instead, which had fallen **69 keys
+  behind** — so `axon --setup` followed by `axon --doctor` reported 69 keys
+  Axon had just written itself as unknown, and documented, `/config`-exposed
+  settings such as `graph_rag_relation_backend` and `graph_rag_claims` were
+  called typos with a suggestion naming a different real field. `validate()`
+  now derives the accepted `rag:` keys from the same
+  `cls.__dataclass_fields__` expression `load()` filters on, so the two cannot
+  drift again. Genuine typos are still caught, and removed keys still report
+  removal rather than being silently accepted.
 
 - **Two shipped features had never executed once.** `query_router.py` called
   `self.llm.generate()` — a method `OpenLLM` has never defined — inside

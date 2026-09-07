@@ -1492,6 +1492,114 @@ class TestDemotedGraphTuning:
         return hits
 
 
+class TestRagSectionSchemaMatchesLoad:
+    """`validate()` must accept every key `load()` accepts under `rag:`.
+
+    Regression: `load()` does `config_dict.update(data["rag"])`, taking that
+    section's keys verbatim as dataclass field names, and `save()` parks every
+    field without a bespoke section mapping there. `validate()` checked a
+    hand-written `_KNOWN_YAML_KEYS["rag"]` set instead, which had drifted 69
+    keys behind — so a config Axon wrote itself failed its own validation, and
+    documented, API-exposed keys like `graph_rag_relation_backend` were
+    reported as typos with a suggestion naming an unrelated field. Following
+    that advice would replace a working setting with a different one.
+    """
+
+    def _cfg(self, tmp_path, body: str) -> str:
+        p = tmp_path / "config.yaml"
+        p.write_text(body, encoding="utf-8")
+        return str(p)
+
+    def test_every_dataclass_field_validates_under_rag(self, tmp_path):
+        """The whole surface, not a sample — this is what drifted before.
+
+        Each key carries its own default so the config stays semantically
+        valid; only the structural unknown-key pass is under test here.
+        """
+        import yaml as _yaml
+
+        cfg = AxonConfig()
+        rag = {}
+        for name in AxonConfig.__dataclass_fields__:
+            if name.startswith("_"):
+                continue
+            value = getattr(cfg, name, None)
+            if value is None or isinstance(value, (str, int, float, bool, list, dict)):
+                rag[name] = value
+        path = self._cfg(tmp_path, _yaml.safe_dump({"rag": rag}, sort_keys=True))
+        unknown = [i.field for i in AxonConfig.validate(path) if "Unknown key" in i.message]
+        assert not unknown, f"validate() rejects keys load() accepts: {unknown}"
+        assert len(rag) > 150, f"only {len(rag)} fields exercised — the sweep stopped working"
+
+    def test_documented_kept_keys_are_not_called_typos(self, tmp_path):
+        """The keys three PRs of collapsing deliberately kept, spot-checked."""
+        kept = [
+            "graph_rag_relation_backend",
+            "graph_rag_ner_backend",
+            "graph_rag_claims",
+            "graph_rag_canonicalize",
+            "graph_rag_community_lazy",
+            "graph_rag_community_levels",
+            "graph_rag_entity_resolve",
+            "graph_rag_min_entities_for_relations",
+        ]
+        path = self._cfg(tmp_path, "rag:\n" + "".join(f"  {k}: null\n" for k in kept))
+        bad = [i.field for i in AxonConfig.validate(path) if "Unknown key" in i.message]
+        assert not bad, f"documented keys reported as unknown: {bad}"
+
+    def test_a_genuine_typo_is_still_caught(self, tmp_path):
+        """Widening the accepted set must not blunt the typo branch."""
+        path = self._cfg(tmp_path, "rag:\n  top_kk: 5\n")
+        match = [i for i in AxonConfig.validate(path) if i.field == "top_kk"]
+        assert match, "typo produced no issue"
+        assert "Did you mean 'top_k'?" in (match[0].suggestion or "")
+
+    def test_a_removed_key_still_reports_removal(self, tmp_path):
+        """Removed keys must not be silently swallowed by the widened set."""
+        path = self._cfg(tmp_path, "rag:\n  graph_rag_local_entity_weight: 9.5\n")
+        match = [i for i in AxonConfig.validate(path) if i.field == "graph_rag_local_entity_weight"]
+        assert match and "no longer a valid key" in match[0].message
+        assert "Did you mean" not in (match[0].suggestion or "")
+
+    def test_prefixed_sections_accept_what_load_accepts(self, tmp_path):
+        """`chunk:`/`embedding:`/`llm:` keys derive from the same prefixes.
+
+        `embedding.models_dir` is real — `embedding_` + `models_dir` is a
+        field — but the hand-written set omitted it, so it was rejected with a
+        "Did you mean 'model'?" naming a different setting.
+        """
+        path = self._cfg(
+            tmp_path,
+            "embedding:\n  models_dir: /tmp/m\n"
+            "chunk:\n  size: 400\n  overlap: 40\n"
+            "llm:\n  base_url: http://x\n",  # a rename, with no field of its own
+        )
+        unknown = [i.field for i in AxonConfig.validate(path) if "Unknown key" in i.message]
+        assert not unknown, f"rejected keys load() accepts: {unknown}"
+
+    def test_keys_load_silently_drops_are_reported(self, tmp_path):
+        """The inverse drift: the schema used to bless keys that did nothing.
+
+        `load()` builds `chunk:` keys by prefixing, so `cosine_semantic_threshold`
+        there becomes `chunk_cosine_semantic_threshold`, which is not a field and
+        is discarded. It was documented under `chunk:` and validated clean while
+        having no effect. It belongs under `rag:`, where it works.
+        """
+        path = self._cfg(
+            tmp_path,
+            "chunk:\n  cosine_semantic_threshold: 0.55\n  parent_chunk_size: 3000\n"
+            "rag:\n  parent_doc: true\n  discuss: false\n",
+        )
+        reported = {i.field for i in AxonConfig.validate(path) if "Unknown key" in i.message}
+        for key in ("cosine_semantic_threshold", "parent_chunk_size", "parent_doc", "discuss"):
+            assert key in reported, f"{key} silently accepted but load() drops it"
+        ok = self._cfg(
+            tmp_path,
+            "rag:\n  cosine_semantic_threshold: 0.55\n  parent_chunk_size: 3000\n",
+        )
+        assert not [i for i in AxonConfig.validate(ok) if "Unknown key" in i.message]
+
+
 class TestPostInit:
     """Tests for __post_init__ environment-variable handling."""
 
