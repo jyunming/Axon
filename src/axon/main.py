@@ -655,15 +655,42 @@ Your primary goal is to help the user by answering questions based on the provid
                 "original sources instead."
             )
 
-        ids = [d["id"] for d in docs]
-        texts = [d.get("text", "") for d in docs]
-        metadatas = [d.get("metadata", {}) or {} for d in docs]
+        # Ids are the store's primary key, so a corpus carrying the same id
+        # twice cannot be replayed verbatim — the backend rejects the second
+        # row and the whole rebuild aborts. Keep the first occurrence and
+        # report the rest rather than inventing suffixed ids that nothing
+        # else (BM25, the entity graph) would recognise. The dropped rows are
+        # still reachable by keyword search, which is where their text lives.
+        ids, texts, metadatas, seen = [], [], [], set()
+        duplicate_ids: dict[str, int] = {}
+        for d in docs:
+            doc_id = d["id"]
+            if doc_id in seen:
+                duplicate_ids[doc_id] = duplicate_ids.get(doc_id, 1) + 1
+                continue
+            seen.add(doc_id)
+            ids.append(doc_id)
+            texts.append(d.get("text", ""))
+            metadatas.append(d.get("metadata", {}) or {})
         summary = {
             "project": self._active_project,
             "chunks": len(ids),
             "vector_store_path": str(vs_path),
             "dry_run": dry_run,
         }
+        if duplicate_ids:
+            dropped = sum(n - 1 for n in duplicate_ids.values())
+            summary["duplicate_ids"] = len(duplicate_ids)
+            summary["rows_dropped_as_duplicates"] = dropped
+            logger.warning(
+                "%d chunk(s) share %d already-used id(s) and were not indexed for vector "
+                "search; their text remains searchable by keyword. Worth fixing upstream — "
+                "colliding ids mean whatever generated them is not producing unique keys. "
+                "First few: %s",
+                dropped,
+                len(duplicate_ids),
+                ", ".join(list(duplicate_ids)[:3]),
+            )
         if dry_run:
             logger.info("Rebuild (dry run): %d chunks would be re-embedded", len(ids))
             return summary
