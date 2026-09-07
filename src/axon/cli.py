@@ -942,6 +942,21 @@ def main():
             "checklist; exits non-zero on any required-check failure"
         ),
     )
+    parser.add_argument(
+        "--rebuild-vector-store",
+        action="store_true",
+        help=(
+            "Re-embed the active project's chunk text into a fresh vector store. "
+            "Recovery for a store that exists but will not open — the text lives in "
+            "bm25_index/, so no source files are re-read and the entity graph is "
+            "untouched. The old store is moved aside, not deleted"
+        ),
+    )
+    parser.add_argument(
+        "--rebuild-dry-run",
+        action="store_true",
+        help="With --rebuild-vector-store: report what would be re-embedded and stop",
+    )
     # ── Share lifecycle ──────────────────────────────────────────────────────
     parser.add_argument(
         "--share-list",
@@ -1097,6 +1112,28 @@ def main():
         report = run_doctor(_cfg)
         print(render_report(report))
         sys.exit(0 if report.overall != "error" else 1)
+    if getattr(args, "rebuild_vector_store", False):
+        from axon.config import AxonConfig as _AxonConfig
+        from axon.main import AxonBrain as _AxonBrain
+
+        _cfg = _AxonConfig.load(args.config or None)
+        brain = _AxonBrain(_cfg)
+        dry = getattr(args, "rebuild_dry_run", False)
+        try:
+            result = brain.rebuild_vector_store(dry_run=dry)
+        except Exception as exc:
+            print(f"Rebuild failed: {exc}")
+            sys.exit(1)
+        if dry:
+            print(
+                f"Dry run — {result['chunks']} chunk(s) of project "
+                f"'{result['project']}' would be re-embedded into {result['vector_store_path']}."
+            )
+        else:
+            print(f"Rebuilt {result['chunks']} chunk(s) into {result['vector_store_path']}.")
+            if result.get("previous_store_moved_to"):
+                print(f"Previous store kept at {result['previous_store_moved_to']}.")
+        sys.exit(0)
     if getattr(args, "wipe_sealed_cache", False):
         # v0.4.0 Item 3 — orphan sweep. Note: this is a fresh process,
         # so there's no live ``_sealed_cache`` slot to wipe — that path

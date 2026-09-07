@@ -26,7 +26,7 @@ tiktoken>=0.7.0
 # 0.8.5 is the first release with tqdb#102 (close() leaked the mmap, and the
 # truncated live-codes slab then panicked uncatchably on read). Correctness
 # floor — see the note in pyproject.toml.
-tqdb>=0.8.5
+tqdb>=0.8.5,<0.9.0
 chromadb>=0.4.0
 qdrant-client>=1.7.0
 lancedb>=0.8.0

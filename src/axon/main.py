@@ -626,6 +626,82 @@ Your primary goal is to help the user by answering questions based on the provid
             logger.debug("Sealed-cache orphan cleanup raised: %s", _orphan_exc)
         self._log_startup_summary()
 
+    def rebuild_vector_store(self, *, dry_run: bool = False) -> dict:
+        """Re-embed the active project's chunk text into a fresh vector store.
+
+        Recovery path for a store that exists but cannot be opened — a format
+        the installed TurboQuantDB no longer reads, or genuine damage. The
+        chunk text is not in the vector store: it lives in ``bm25_index/``
+        alongside its ids and metadata, so the vectors can be regenerated
+        locally without re-reading the original documents, re-running LLM
+        extraction, or touching the entity/relation graph.
+
+        The old directory is renamed rather than deleted, so a rebuild that
+        turns out worse than the original is reversible.
+
+        Returns a summary dict; raises if there is no chunk text to rebuild
+        from, since an empty rebuild would replace an unreadable store with an
+        empty one and call that success.
+        """
+        import shutil
+        import time as _time
+
+        vs_path = Path(self.config.vector_store_path)
+        docs = list(getattr(self.bm25, "corpus", None) or [])
+        if not docs:
+            raise RuntimeError(
+                f"Nothing to rebuild from: no chunk text found in {self.config.bm25_path}. "
+                "The vector store cannot be regenerated without it — re-ingest the "
+                "original sources instead."
+            )
+
+        ids = [d["id"] for d in docs]
+        texts = [d.get("text", "") for d in docs]
+        metadatas = [d.get("metadata", {}) or {} for d in docs]
+        summary = {
+            "project": self._active_project,
+            "chunks": len(ids),
+            "vector_store_path": str(vs_path),
+            "dry_run": dry_run,
+        }
+        if dry_run:
+            logger.info("Rebuild (dry run): %d chunks would be re-embedded", len(ids))
+            return summary
+
+        backup = None
+        if vs_path.exists():
+            backup = vs_path.with_name(f"{vs_path.name}.old-{_time.strftime('%Y%m%d_%H%M%S')}")
+            # close() first: on Windows a mapped file cannot be renamed while a
+            # handle is open, which is the same constraint that produced the
+            # corruption this method exists to recover from.
+            try:
+                self.vector_store.close()
+            except Exception:
+                pass
+            shutil.move(str(vs_path), str(backup))
+            summary["previous_store_moved_to"] = str(backup)
+            logger.info("Existing store moved aside: %s", backup)
+
+        vs_path.mkdir(parents=True, exist_ok=True)
+        self.vector_store = OpenVectorStore(self.config)
+        logger.info("Re-embedding %d chunks...", len(ids))
+        embeddings = self.embedding.embed(texts)
+        self.vector_store.add(ids=ids, texts=texts, embeddings=embeddings, metadatas=metadatas)
+        try:
+            self.vector_store.close()
+        except Exception:
+            pass
+        self.vector_store = OpenVectorStore(self.config)
+        if self.vector_store.is_unreadable:
+            raise RuntimeError(
+                f"Rebuild wrote a store that still cannot be reopened: "
+                f"{self.vector_store.unreadable_reason}. The previous store is preserved at "
+                f"{backup} — restore it by moving it back."
+            )
+        summary["rebuilt"] = True
+        logger.info("Rebuild complete: %d chunks re-embedded into %s", len(ids), vs_path)
+        return summary
+
     def __enter__(self):
         return self
 

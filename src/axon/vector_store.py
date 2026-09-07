@@ -56,7 +56,23 @@ class OpenVectorStore:
         self.client: Any = None
         self.collection: Any = None
         self._async_client: Any = None  # tqdb.aio.AsyncDatabase — lazy, tqdb-only
+        # Set when an existing store is present but cannot be opened — a format
+        # the installed backend no longer reads, or genuine damage. Distinct
+        # from ``client is None``, which for tqdb means "no store yet, create
+        # one on first add()". Conflating the two would let an ingest silently
+        # write a fresh store over one that is merely unreadable.
+        self.unreadable_reason: str | None = None
         self._init_store()
+
+    @property
+    def is_unreadable(self) -> bool:
+        """True when a store exists on disk that this process cannot open.
+
+        Read through ``getattr``: tests build instances via ``__new__`` to
+        avoid touching a real backend, so the attribute set in ``__init__``
+        need not exist. A store nobody could mark unreadable is readable.
+        """
+        return getattr(self, "unreadable_reason", None) is not None
 
     def _init_store(self):
         if self.provider == "chroma":
@@ -132,16 +148,40 @@ class OpenVectorStore:
                     f"Initializing TurboQuantDB: {self.config.vector_store_path} "
                     f"(dim={dim}, bits={bits})"
                 )
-                self.client = tqdb.Database.open(
-                    self.config.vector_store_path,
-                    dimension=dim,
-                    bits=bits,
-                    metric="ip",
-                    normalize=True,  # engine normalises internally; IP ≡ cosine
-                    rerank=getattr(self.config, "tqdb_rerank", True),
-                    fast_mode=getattr(self.config, "tqdb_fast_mode", False),
-                    rerank_precision=getattr(self.config, "tqdb_rerank_precision", None),
-                )
+                try:
+                    self.client = tqdb.Database.open(
+                        self.config.vector_store_path,
+                        dimension=dim,
+                        bits=bits,
+                        metric="ip",
+                        normalize=True,  # engine normalises internally; IP ≡ cosine
+                        rerank=getattr(self.config, "tqdb_rerank", True),
+                        fast_mode=getattr(self.config, "tqdb_fast_mode", False),
+                        rerank_precision=getattr(self.config, "tqdb_rerank_precision", None),
+                    )
+                except Exception as exc:
+                    # An unopenable store is recoverable for most callers: the
+                    # chunk text lives separately in bm25_index/, so the vectors
+                    # can be rebuilt without re-reading the source files.
+                    # Raising here took down every consumer at construction —
+                    # AxonBrain.__init__ builds the vector store, so an
+                    # embedding application could not start at all, even for
+                    # work that never touches retrieval.
+                    self.client = None
+                    self.unreadable_reason = f"{type(exc).__name__}: {exc}"
+                    logger.error(
+                        "Vector store at %s exists but could not be opened: %s\n"
+                        "  Retrieval is unavailable for this project. Ingest is refused "
+                        "rather than silently starting a new store over these files.\n"
+                        "  The chunk text is held in bm25_index/, so the vectors can be "
+                        "rebuilt without re-reading your sources:  axon --rebuild-vector-store\n"
+                        "  A store written by a different TurboQuantDB build surfaces here as "
+                        "an I/O or end-of-file error rather than a version mismatch — compare "
+                        '`python -c "import tqdb; print(tqdb.__version__)"` with the version '
+                        "that wrote it.",
+                        self.config.vector_store_path,
+                        self.unreadable_reason,
+                    )
             else:
                 self.client = None  # opened lazily on first add()
 
@@ -323,6 +363,18 @@ class OpenVectorStore:
         if metadatas is not None and len(metadatas) != n_ids:
             raise ValueError(
                 f"metadatas length mismatch: metadatas={len(metadatas)} vs ids={n_ids}"
+            )
+        if self.is_unreadable:
+            # `client is None` otherwise means "no store yet, create on first
+            # add". Writing here would start a fresh store on top of files we
+            # simply could not read, turning a recoverable state into real data
+            # loss. Refuse loudly and name the way out.
+            raise RuntimeError(
+                f"Refusing to write: the vector store at {self.config.vector_store_path} "
+                f"exists but could not be opened ({self.unreadable_reason}). Adding now "
+                f"would create a new store over it. Rebuild it first with "
+                f"`axon --rebuild-vector-store`, which re-embeds the chunk text already "
+                f"held in bm25_index/."
             )
         if self.provider == "chroma":
             # Chroma enforces a hard per-call limit (~5461 rows). Slice into safe batches
@@ -552,6 +604,18 @@ class OpenVectorStore:
         filter_dict: dict | None = None,
         query_text: str | None = None,
     ) -> list[dict]:
+        if self.is_unreadable:
+            # Degrade rather than crash, but say so every time: an empty result
+            # set is indistinguishable from "nothing matched", and a caller
+            # silently getting no retrieval is exactly how a broken store goes
+            # unnoticed.
+            logger.warning(
+                "Vector search skipped: store at %s is unreadable (%s). "
+                "Run `axon --rebuild-vector-store` to restore retrieval.",
+                self.config.vector_store_path,
+                self.unreadable_reason,
+            )
+            return []
         if self.provider == "chroma":
             results = self.collection.query(
                 query_embeddings=[query_embedding],
