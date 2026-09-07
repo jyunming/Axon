@@ -97,7 +97,9 @@ def _canned_llm(prompt, system_prompt=None, **kwargs):
 
 This intercepts exactly the two `llm.complete()` calls made by
 `_extract_entities` and `_extract_relations`, leaving all parsing,
-graph-building, and community-detection logic running on real code. Test
-config must also set `graph_rag_llm_fused_extraction=False` — otherwise
-`_extract_graph_llm_batches` routes through a different, JSON-based
-combined-extraction prompt this mock doesn't cover.
+graph-building, and community-detection logic running on real code. Tests
+must also pin `monkeypatch.setattr(_gd, "LLM_FUSED_EXTRACTION", False)` —
+otherwise `_extract_graph_llm_batches` routes through a different,
+JSON-based combined-extraction prompt this mock doesn't cover. (This was
+`AxonConfig(graph_rag_llm_fused_extraction=False)` until 0.5.0 demoted the
+field to a `graph_defaults` constant; the old form now raises `TypeError`.)

@@ -1436,6 +1436,23 @@ class TestDemotedGraphTuning:
         assert _gd.ENTITY_RESOLVE_MAX == 5000
         assert _gd.ENTITY_MATCH_THRESHOLD == 0.5
         assert _gd.RELATION_SHARD_COUNT == 16
+        # Group D — caches, parallelism, profiling. MAP_AUTO_WORKERS is the
+        # one to watch: the field it replaced was declared `bool = True` but
+        # read as `int(...)`, and int(True) is 1.
+        assert _gd.MAP_AUTO_WORKERS == 1
+        assert _gd.MAP_BATCH_SIZE == 5
+        assert _gd.MAP_USE_DEDICATED_POOL is False
+        assert _gd.EXTRACTION_CACHE is True
+        assert _gd.EXTRACTION_CACHE_SIZE == 5000
+        assert _gd.LLM_CACHE is True
+        assert _gd.LLM_CACHE_SIZE == 2000
+        assert _gd.LLM_FUSED_EXTRACTION is True
+        assert _gd.REBUILD_SKIP_IF_UNCHANGED is True
+        assert _gd.PROFILE is False
+        assert _gd.REPORT_COMPRESS_RATIO == 0.5
+        assert _gd.RUST_BUILD_EDGES is False
+        assert _gd.RUST_MERGE_ENTITIES is False
+        assert _gd.LARGE_GRAPH_THRESHOLD == 50000
 
     def test_no_module_reaches_demoted_fields_via_getattr(self):
         """A stale getattr would resurrect the old fallback, which often differed.
@@ -1462,8 +1479,13 @@ class TestDemotedGraphTuning:
         on-disk cache filenames — `".graph_rag_extraction_cache.msgpack"` —
         match too, and those are persisted artefact names, not config reads;
         renaming them to satisfy a test would orphan every existing cache.
+
+        Excluding a preceding quote rather than requiring a preceding word
+        character is deliberate: `[\\w)]` would also miss `configs[0].field`
+        and a dot broken onto its own line, both of which are ordinary
+        attribute reads.
         """
-        hits = self._scan_package(lambda f: rf"(?<=[\w)])\.{f}\b")
+        hits = self._scan_package(lambda f: rf"(?<!['\"])\.{f}\b")
         assert not hits, f"attribute reads of demoted fields: {hits}"
 
     def test_no_module_names_a_demoted_field_as_a_string(self):
