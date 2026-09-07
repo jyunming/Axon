@@ -68,7 +68,13 @@ dependencies = [
     # lancedb moved to the [lancedb] extra in 0.5.0 — the default vector store is
     # turboquantdb (tqdb), and lancedb is only imported inside the
     # `provider == "lancedb"` branch. Matches how chroma/qdrant are already handled.
-    "tqdb>=0.7.0",
+    #
+    # Floor is 0.8.5, the first release carrying tqdb#102: before it, close()
+    # leaked the memory mapping, the next resize failed, and the truncated
+    # live-codes slab made later reads raise a PyO3 PanicException — which
+    # inherits BaseException, so `except Exception` never caught it. That
+    # corrupted a real store, so this is a correctness floor, not a courtesy.
+    "tqdb>=0.8.5",
     "prometheus-client>=0.20",
 ]
 

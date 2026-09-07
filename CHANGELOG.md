@@ -93,6 +93,19 @@ never reaches. Nothing a default install can do was removed.
 
 ### 🐛 Fixes
 
+- **`tqdb` now requires `>=0.8.5`, up from `>=0.7.0`.** 0.8.5 is the first
+  release carrying [tqdb#102](https://github.com/jyunming/TurboQuantDB/issues/102):
+  before it, `close()` leaked the memory mapping, so the next resize of the
+  codes file failed — on Windows a mapped file accepts in-place writes but
+  refuses to grow — leaving `live_codes.bin` truncated. Later reads then
+  panicked from Rust, and PyO3's `PanicException` inherits `BaseException`, so
+  `except Exception:` never caught it and the process died rather than
+  degrading. Symptoms were `[Errno 22] Invalid argument` on ingest and hard
+  crashes on query. This is a correctness floor, not a version bump for its
+  own sake; it corrupted a real store. `docs/TROUBLESHOOTING.md` now documents
+  the symptoms, including that an already-corrupt store needs rebuilding —
+  upgrading alone does not repair a truncated file.
+
 - **`validate()` reported working config keys as typos, and misnamed the fix.**
   `load()` accepted any `AxonConfig` dataclass field, but `validate()` only knew
   the 14 graph keys listed in `_KNOWN_YAML_KEYS`. Setting

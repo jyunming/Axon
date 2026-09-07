@@ -21,6 +21,39 @@ Common issues and fixes for Axon.
 
 ---
 
+## TurboQuantDB: queries crash the process, or `[Errno 22] Invalid argument` on ingest
+
+**Symptoms:** any of these, on a store that used to work —
+
+```
+pyo3_runtime.PanicException: ...            # kills the process outright
+{"detail": "[Errno 22] Invalid argument"}   # POST /add_text, POST /ingest
+OSError: [WinError 1224] The requested operation cannot be performed
+                         on a file with a user-mapped section open
+```
+
+**Cause:** a bug in TurboQuantDB before **0.8.5** ([tqdb#102](https://github.com/jyunming/TurboQuantDB/issues/102)). `close()` did not release the memory mapping, so the next resize of the codes file failed — on Windows a mapped file accepts in-place writes but refuses to grow or truncate. That left `live_codes.bin` truncated, and later reads panicked from Rust. The panic surfaces as PyO3's `PanicException`, which inherits `BaseException` rather than `Exception`, so ordinary `except Exception:` handlers do not catch it and the process dies instead of degrading.
+
+It is much likelier to bite when **two processes share one store** — for example an `axon-api` left running on the old default port 8000 alongside a newer one on 8420. Two live mappings of one file is exactly the condition the leak needs.
+
+**Fix:**
+
+```bash
+pip install -U "tqdb>=0.8.5"
+```
+
+Axon 0.5.0 requires that floor, so a fresh install cannot land on an affected version. If you upgraded Axon in place, check what you actually have:
+
+```bash
+python -c "import tqdb; print(tqdb.__version__)"
+```
+
+**If a store is already corrupt**, upgrading does not repair it — the truncated file stays truncated. Confirm only one `axon-api` is running against the store, then move the affected project's `vector_store_data/` aside and re-ingest. Keep the directory rather than deleting it until you have confirmed the rebuild is good.
+
+**Prevention:** run one server per store. `axon-api` writes a single-instance lock for this reason; the failure mode above is what happens when a second process predates the lock or points at the store by a different path.
+
+---
+
 ## ChromaDB: `InvalidDimensionException`
 
 **Error:**
