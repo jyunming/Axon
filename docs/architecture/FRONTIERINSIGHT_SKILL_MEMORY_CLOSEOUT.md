@@ -128,12 +128,12 @@ bound to the same store — not the request shape.
 
 ---
 
-## 3. The `default`-prefix residual — reachable, and not only via `default`
+## 3. The `default`-prefix residual — investigated, and not a defect
 
-FI classified this as "narrow, and it does not affect FI." Both halves hold. But
-the hazard is **reachable rather than theoretical**, and the widest path does not
-run through the `default` exemption at all — which makes the item slightly
-mis-named, and worth setting out precisely.
+FI classified this as "narrow, and it does not affect FI." Both halves hold, and
+after chasing it properly the answer is narrower still: it is not a defect at
+all. The reasoning is set out below because an earlier revision of this section
+got it wrong in a way worth not repeating.
 
 Verified live during the `/add_text` test above. A document ingested into
 `default` receives the id `fi_addtext_probe_20260906_p0_chunk_0` — no prefix —
@@ -141,53 +141,58 @@ against FI's observed `proj_51d42033…::file_98c8ff97…_p5_chunk_2` from a nam
 project. The exemption at `main.py:2466` is doing exactly what its comment says.
 
 Namespaced ids cannot collide with each other — `proj_A::X` and `proj_B::X`
-differ. A collision needs two **un-prefixed** id spaces sharing one fan-out. Two
-things produce un-prefixed ids: the `default` exemption, and any row ingested
-into a named project *before* namespacing landed. Any multi-project scope can
-then put two of them together.
+differ. A collision needs two **un-prefixed** id spaces sharing one fan-out, and
+`@store` scope creates exactly that at `src/axon/main.py:828-830`, placing
+`default` alongside every named project.
 
-`@store` scope does it explicitly, at `src/axon/main.py:828-830`:
+**Correction, 2026-09-07.** An earlier revision of this section claimed the
+collision was reachable and dropped documents silently, and rated it worth
+fixing. That was wrong, and the error is worth recording because of how it was
+made: the reachability was reasoned about without checking what a bare id
+actually contains.
+
+Bare chunk ids are built on `loaders.py`'s `_stable_file_id`:
 
 ```python
-if scope == "@store":
-    # Include the default project
-    project_paths.insert(0, (self._base_vector_store_path, self._base_bm25_path))
+def _stable_file_id(path: str, kind: str = "file") -> str:
+    """SHA-256 based stable ID from absolute path. Prevents basename collisions."""
+    abspath = os.path.normcase(os.path.normpath(os.path.abspath(path)))
+    return kind + "_" + hashlib.sha256(abspath.encode()).hexdigest()[:24]
 ```
 
-which places `default` in the same `MultiVectorStore` as every named project.
-Three pairings are reachable:
+The id is a hash of the **absolute path**. So two stores holding the same bare
+id are holding the same source file — which is precisely the case
+`MultiVectorStore`'s dedup exists to merge, and
+`tests/test_vector_store.py::test_search_merges_results_deduplicates_keeps_max_score`
+has encoded that intent all along. Keying on `(store_index, id)` instead would
+return one document twice and spend two of the caller's `top_k` slots on it.
 
-1. **`default` ↔ a mount whose content was ingested into the owner's own
-   `default`.** Both raw, both in the fan-out, ids can coincide. `@store` only.
-2. **`default` ↔ legacy pre-namespacing rows in a named project.** `@store`
-   only, but needs no mount — just a store old enough.
-3. **Legacy rows in project A ↔ legacy rows in project B.** No `default`
-   involved at all, so this one fires under plain **`@projects`** scope
-   (`main.py:819-827`, which fans out every authoritative project). Any store
-   with two or more projects predating namespacing is exposed.
+The `default` exemption is therefore cosmetic rather than a defect: a bare id
+colliding across projects means the same file was ingested into both, and
+keeping the higher-scoring copy is the right answer.
 
-So the trigger is a multi-project scope, not `@store` specifically: `@store`
-always, `@projects` whenever at least two projects carry legacy rows. Pairing 3
-is the one worth remembering, because it is reachable on the most ordinary scope
-and the `default` exemption is not what causes it.
+Colliding ids for genuinely *different* documents do exist, but they come from
+ids supplied by a caller rather than derived from a path — FrontierInsight's
+title-derived `fi_external_ref_spine:title:…` keys put six unrelated papers
+under one id. That collision is *within* a single store, where per-store keying
+would not help either, and it is filed where it belongs
+([FrontierInsight#237](https://github.com/jyunming/FrontierInsight/issues/237)).
 
-Consequence is a silent dedup drop, not corruption or a wrong answer: one of the
-two documents disappears from results.
+**Axon's decision: no change.** Prefixing `default` retroactively would orphan
+every existing raw id in every `default` store, and the exemption's stated
+reason ("existing single-project deployments are unaffected") is sound. Keying
+the fan-out on `(store_index, id)` — the fix an earlier revision of this
+document recommended — was implemented, found to break six existing tests that
+encode the opposite intent, and reverted once `_stable_file_id` settled which
+side was right.
 
-**Axon's decision: fix it, but not as a namespacing change.** Prefixing `default`
-retroactively would orphan every existing raw id in every `default` store — the
-exemption's stated reason ("existing single-project deployments are unaffected")
-is sound and stays. Nor would prefixing help pairing 3, which involves no
-`default` at all. The defect is that a fan-out merges id spaces obeying
-different naming rules, so the fix belongs at the fan-out: `MultiVectorStore` /
-`MultiBM25Retriever` dedup should key on `(store_index, id)` rather than `id`
-alone. That costs nothing, covers all three pairings, and stays correct however
-any individual store names its rows.
+**It does not affect FI** either way, which pins a single project
+(`core/knowledge.py:189`) and so never fans out at all.
 
-Scheduled against the 0.5.0 slim-down, not as a hotfix — it is silent, it needs
-a multi-project scope, and pairing 3 additionally needs a store old enough to
-hold pre-namespacing rows in two projects. **It does not affect FI**, which pins
-a single project (`core/knowledge.py:189`) and so never fans out at all.
+What is worth carrying forward is the method, not the conclusion: "two things
+could share a key, therefore one is lost" is a hypothesis, and the id format
+decides it. Reading `_stable_file_id` first would have cost a minute and saved
+the round trip.
 
 ---
 
