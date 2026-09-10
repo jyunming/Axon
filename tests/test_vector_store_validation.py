@@ -309,3 +309,54 @@ class TestSearchPanicDoesNotKillTheCaller:
         vs = self._store_that_opens_but_fails_on_search(tmp_path, monkeypatch, KeyboardInterrupt())
         with pytest.raises(KeyboardInterrupt):
             vs.search([0.1] * 4, top_k=3)
+
+
+class TestTqdbFloorRationale:
+    """The tqdb floor is a compatibility decision, not a feature preference.
+
+    A store written by tqdb 0.9.x cannot be read by 0.8.x — the 0.8.4
+    quantizer.bin change is one-directional. A version range spanning both
+    therefore permits one machine writing what another cannot read, and
+    share-mounts make that an ordinary setup. The floor exists to remove that
+    pairing; this test exists so a future widening has to argue with it.
+    """
+
+    def _spec(self) -> str:
+        import re
+        from pathlib import Path
+
+        import axon
+
+        pyproject = Path(axon.__file__).parent.parent.parent / "pyproject.toml"
+        if not pyproject.exists():  # installed, not in-tree
+            import pytest
+
+            pytest.skip("pyproject.toml not available from an installed package")
+        m = re.search(r'"(tqdb[^"]*)"', pyproject.read_text(encoding="utf-8"))
+        assert m, "tqdb is not declared in pyproject.toml"
+        return m.group(1)
+
+    def test_floor_is_at_least_0_9_1(self):
+        spec = self._spec()
+        assert ">=0.9.1" in spec, (
+            f"tqdb floor is {spec!r}. Below 0.9.1 the allowed range spans the "
+            "0.8/0.9 quantizer format boundary in the direction that breaks: a "
+            "0.9-written store is unreadable by 0.8.x."
+        )
+
+    def test_the_range_is_bounded(self):
+        spec = self._spec()
+        assert "<" in spec, (
+            f"tqdb spec is {spec!r} — unbounded. An open ceiling on the library "
+            "that owns the on-disk format is how a breaking change in a patch "
+            "release reached users with nothing in the way."
+        )
+
+    def test_the_installed_version_satisfies_the_floor(self):
+        import tqdb
+
+        parts = tuple(int(x) for x in tqdb.__version__.split(".")[:3])
+        assert parts >= (0, 9, 1), (
+            f"tqdb {tqdb.__version__} is installed but the project requires >=0.9.1; "
+            "stores written here may be unreadable elsewhere."
+        )

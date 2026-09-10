@@ -114,18 +114,38 @@ never reaches. Nothing a default install can do was removed.
 
 ### 🐛 Fixes
 
-- **`tqdb` now requires `>=0.8.5`, up from `>=0.7.0`.** 0.8.5 is the first
-  release carrying [tqdb#102](https://github.com/jyunming/TurboQuantDB/issues/102):
-  before it, `close()` leaked the memory mapping, so the next resize of the
-  codes file failed — on Windows a mapped file accepts in-place writes but
-  refuses to grow — leaving `live_codes.bin` truncated. Later reads then
-  panicked from Rust, and PyO3's `PanicException` inherits `BaseException`, so
-  `except Exception:` never caught it and the process died rather than
-  degrading. Symptoms were `[Errno 22] Invalid argument` on ingest and hard
-  crashes on query. This is a correctness floor, not a version bump for its
-  own sake; it corrupted a real store. `docs/TROUBLESHOOTING.md` now documents
-  the symptoms, including that an already-corrupt store needs rebuilding —
-  upgrading alone does not repair a truncated file.
+- **`tqdb` now requires `>=0.9.1,<1.0.0`, up from an unbounded `>=0.7.0`.**
+  Two separate problems, one pin.
+
+  0.8.4 changed `quantizer.bin`'s dense rotation matrix from f32 to bf16 and
+  shipped it in a *patch* release with no version guard, so a store written by
+  0.8.3 or earlier fails to open with a bare `io error: unexpected end of
+  file`. That read like disk corruption, which is how it was first reported.
+  Filed upstream as
+  [TurboQuantDB#110](https://github.com/jyunming/TurboQuantDB/issues/110);
+  0.9.1 now names the file, explains the format change and says to regenerate.
+
+  The break is also one-directional, and that decides the floor rather than
+  any single feature:
+
+  | written by | read by | |
+  |---|---|---|
+  | 0.8.5 | 0.9.1 | works |
+  | 0.9.1 | 0.8.5 | `io error: unexpected end of file` |
+
+  A range spanning both would permit one machine writing what another cannot
+  read — and with share-mounts that is an ordinary setup, not a contrived one.
+  Requiring 0.9.1 removes the pairing instead of documenting it, and costs no
+  rebuild: 0.9.1 reads every store 0.8.5 wrote, verified against all of them.
+
+  0.9.1 also carries the `close()` mmap-leak fix
+  ([tqdb#102](https://github.com/jyunming/TurboQuantDB/issues/102)) that
+  corrupted a store on Windows, where a mapped file refuses to grow.
+
+  The ceiling matters as much as the floor. `>=0.7.0` had none, which is how a
+  breaking on-disk change in a patch version reached users with nothing in the
+  way — of 29 base dependencies only two were bounded, and tqdb is the one
+  where the absence could cost data.
 
 - **An unreadable vector store no longer takes the host application down**
   ([#165](https://github.com/jyunming/Axon/issues/165)). `tqdb.Database.open`
