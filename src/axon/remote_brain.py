@@ -327,6 +327,14 @@ class RemoteBrain:
         """
         return self._request("POST", "/clear", {}) or {}
 
+    def delete_documents(self, doc_ids: list[str]) -> dict:
+        """Delete chunks or whole documents via the server's ``/delete``.
+
+        Same return shape as ``AxonBrain.delete_documents()``; write access
+        is enforced server-side, as for :meth:`clear`.
+        """
+        return self._request("POST", "/delete", {"doc_ids": list(doc_ids)}) or {}
+
     # ------------------------------------------------------------------ #
     # Read-only introspection
     # ------------------------------------------------------------------ #

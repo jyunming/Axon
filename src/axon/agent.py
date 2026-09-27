@@ -1029,34 +1029,10 @@ def _tool_delete_documents(brain, args: dict) -> str:
     ids_to_delete = [cid for d in target for cid in d.get("doc_ids", [])]
     if not ids_to_delete:
         return f"Source '{source}' found but has no chunk IDs."
-    # Delete from vector store
-    brain._own_vector_store.delete_by_ids(ids_to_delete)
-    # Delete from BM25 index
-    if brain._own_bm25 is not None:
-        brain._own_bm25.delete_documents(ids_to_delete)
-    # Prune entity graph (no-op if graph is empty)
-    brain._graph_backend.delete_documents(ids_to_delete)
-    # Purge content hashes so the source can be re-ingested without force=true.
-    # The hashes are keyed by chunk content, not by ID, so we retrieve the chunk
-    # texts from the doc index metadata if available, else use the stored IDs as
-    # a best-effort lookup.
-    removed_hashes = 0
-    for d in target:
-        for cid in d.get("doc_ids", []):
-            # Each stored ID encodes the hash as the last segment (id format: source::hash).
-            parts = cid.rsplit("::", 1)
-            if len(parts) == 2:
-                h = parts[1]
-                if h in brain._ingested_hashes:
-                    brain._ingested_hashes.discard(h)
-                    removed_hashes += 1
-    if removed_hashes:
-        try:
-            brain._save_hash_store()
-        except Exception:
-            pass
-    note = f" (purged {removed_hashes} content hash(es))" if removed_hashes else ""
-    return f"Deleted {len(ids_to_delete)} chunk(s) from source '{source}'.{note}"
+    # delete_documents() also forgets the chunks' dedup hashes, so the source
+    # can be re-ingested without force=true.
+    result = brain.delete_documents(ids_to_delete)
+    return f"Deleted {result['deleted']} chunk(s) from source '{source}'."
 
 
 def _tool_clear_project(brain) -> str:

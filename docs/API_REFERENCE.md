@@ -168,7 +168,7 @@ retrieval `trace` object (pipeline step timings and intermediate results).
 | `POST` | `/ingest_url` | Fetch and ingest content from a remote URL |
 | `POST` | `/add_text` | Ingest a single text string |
 | `POST` | `/add_texts` | Batch ingest a list of text strings |
-| `POST` | `/delete` | Delete documents matching a metadata filter or doc_id list |
+| `POST` | `/delete` | Delete chunks or whole documents by chunk ID or document ID |
 
 **`POST /ingest` body:**
 ```json
@@ -239,21 +239,27 @@ Response: `{"message": "Ingestion started for /path/to/documents", "job_id": "ab
 | `GET` | `/collection` | Source and chunk counts for the active project |
 | `GET` | `/collection/stale` | Documents not refreshed in N days (`?days=30`) |
 | `GET` | `/tracked-docs` | Full tracked-document manifest with hashes and timestamps |
-| `POST` | `/delete` | Remove documents by internal chunk ID list |
+| `POST` | `/delete` | Remove documents by chunk ID or document ID |
 | `POST` | `/clear` | Wipe entire active project store and index (irreversible) |
 
 **`POST /delete` body:**
 ```json
 {"doc_ids": ["chunk-abc123", "chunk-def456"]}
 ```
-**Important:** `/delete` accepts **internal chunk IDs** only — not the source-level `doc_id`
-returned by `/add_text`, `/ingest_url`, or `/add_texts`. Those ingest responses identify the
-source document, not individual vector chunks. `GET /collection/stale` returns source-dedup
-metadata (source path and ingest timestamp); its `doc_id` field is a source identifier, **not**
-a chunk ID usable with `/delete`. `GET /tracked-docs` returns content hashes and timestamps and
-also does not expose chunk IDs. Currently there is no public endpoint that maps a source document
-to its chunk IDs; delete by source is not yet a clean public contract. Use `GET /collection` to
-inspect ingested sources and chunk counts.
+Each entry may be an internal chunk ID or a **document ID**: the `doc_id` passed to `/add_text`,
+`/add_texts` or `/ingest_url`, or the `id` given to `AxonBrain.ingest()`. A document ID deletes every
+chunk of that document (matched on the chunks' `source` / `source_id` metadata, including the
+`<id>_p<n>` parents that parent-document splitting creates). Response:
+`{"status", "deleted", "doc_ids": [<chunk ids deleted>], "not_found": [...]}`.
+
+Deleting also forgets the chunks' dedup hashes, the source-level dedup records and the
+`/tracked-docs` entry, so the same text can be ingested again afterwards. (One exception: chunks
+ingested with `contextual_retrieval: true` before chunks recorded a `dedup_hash` in their metadata
+have rewritten stored text, so their hash can't be recovered; re-ingest those with
+`dedup_on_ingest: false`.) On a parent project only the
+parent's own chunks are deleted; chunks held by a sub-project come back in `not_found`. From Python,
+call `brain.delete_documents(ids)` (same behaviour and return shape; `RemoteBrain` proxies it to
+this endpoint).
 
 ---
 

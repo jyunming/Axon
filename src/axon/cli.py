@@ -804,7 +804,7 @@ def main():
         "--delete-doc-id",
         nargs="+",
         metavar="ID",
-        help="Delete specific chunk IDs directly (space-separated), then exit",
+        help="Delete chunk IDs or document IDs (space-separated), then exit",
     )
     # ── Store init ───────────────────────────────────────────────────────────
     parser.add_argument(
@@ -2421,64 +2421,22 @@ def main():
             print(f"  No documents matching source '{source}'.")
             sys.exit(1)
         ids_to_delete = [i for d in match for i in d.get("doc_ids", [])]
-        brain.vector_store.delete_by_ids(ids_to_delete)
-        if brain.bm25 is not None:
-            brain.bm25.delete_documents(ids_to_delete)
-        # Remove tracked doc_versions entries and associated content hashes so the
-        # source can be re-ingested cleanly. This avoids the situation where
-        # delete reports success but the source remains retrievable due to stale
-        # metadata or hash entries.
+        # delete_documents() also forgets each chunk's dedup hash and the
+        # source's _doc_versions record, so the source can be re-ingested.
         try:
-            removed_sources = []
-            for d in match:
-                src = d.get("source")
-                if not src:
-                    continue
-                # Remove from doc_versions if present
-                if getattr(brain, "_doc_versions", None) and src in brain._doc_versions:
-                    rec = brain._doc_versions.pop(src, None)
-                    if rec:
-                        removed_sources.append(src)
-            # _doc_versions' content_hash is a whole-source combined MD5, but
-            # _ingested_hashes stores one MD5 per chunk (query_router.py's
-            # _doc_hash) — discarding the combined hash directly was always a
-            # no-op for multi-chunk sources, silently leaving _ingested_hashes
-            # unable to forget a deleted document's chunks. Recompute and
-            # discard each deleted chunk's own hash instead.
-            if ids_to_delete and hasattr(brain, "_ingested_hashes"):
-                try:
-                    for cdoc in brain.vector_store.get_by_ids(ids_to_delete):
-                        try:
-                            brain._ingested_hashes.discard(brain._doc_hash(cdoc))
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-            # Persist changes
-            try:
-                if hasattr(brain, "_save_hash_store"):
-                    brain._save_hash_store()
-            except Exception:
-                pass
-            try:
-                if hasattr(brain, "_save_doc_versions"):
-                    brain._save_doc_versions()
-            except Exception:
-                pass
-        except Exception:
-            pass
-        total_chunks = sum(d["chunks"] for d in match)
-        print(f"  Deleted {total_chunks} chunk(s) from '{source}'.")
+            result = brain.delete_documents(ids_to_delete)
+        except PermissionError as exc:
+            print(f"  Error: {exc}")
+            sys.exit(1)
+        print(f"  Deleted {result['deleted']} chunk(s) from '{source}'.")
         return
     if getattr(args, "delete_doc_id", None):
-        ids_to_delete = args.delete_doc_id
-        existing = brain.vector_store.get_by_ids(ids_to_delete)
-        existing_ids = [d["id"] for d in existing]
-        not_found = [i for i in ids_to_delete if i not in existing_ids]
-        if existing_ids:
-            brain.vector_store.delete_by_ids(existing_ids)
-            if brain.bm25 is not None:
-                brain.bm25.delete_documents(existing_ids)
+        try:
+            result = brain.delete_documents(args.delete_doc_id)
+        except PermissionError as exc:
+            print(f"  Error: {exc}")
+            sys.exit(1)
+        existing_ids, not_found = result["doc_ids"], result["not_found"]
         print(f"  Deleted: {len(existing_ids)}  Not found: {len(not_found)}")
         return
     if getattr(args, "store_init", None):

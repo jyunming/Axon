@@ -1140,6 +1140,152 @@ Your primary goal is to help the user by answering questions based on the provid
             _api._source_hashes.pop("_global", None)
         return {"status": "success", "message": "Collection cleared"}
 
+    def delete_documents(self, doc_ids: list[str]) -> dict:
+        """Delete chunks or whole documents from the active project.
+
+        The single delete implementation behind ``POST /delete``, the CLI and
+        the agent tool, so they can't drift apart again. Each id in *doc_ids*
+        may be a chunk id or the id of an ingested document. An id that is not
+        a stored chunk is expanded to every chunk whose ``metadata.source``
+        or ``metadata.source_id`` is that id, including the ``<id>_p<n>``
+        source ids parent-document splitting gives the children of *id*.
+
+        Beyond the vector store, BM25 index and graph, this forgets each
+        deleted chunk's dedup hash (``_ingested_hashes``), the source-level
+        dedup records in ``axon.api._source_hashes``, and the ``_doc_versions``
+        entries of sources with no chunks left, so the same text can be
+        ingested again afterwards. Only the active project's own stores are
+        touched; on a parent project, chunks that live in a descendant come
+        back in ``not_found``.
+
+        Returns:
+            ``{"status", "deleted", "doc_ids", "not_found"}``, where ``doc_ids``
+            lists the chunk ids actually deleted.
+        """
+        import re
+
+        from axon import api as _api
+
+        self._assert_write_allowed("delete")
+        vs = self._own_vector_store
+        bm25 = self._own_bm25
+        project = getattr(self, "_active_project", "default") or "default"
+        # ingest() prefixes chunk ids and source_ids with this in non-default
+        # projects; callers usually pass the id they ingested with.
+        ns = ""
+        if project != "default":
+            from axon.projects import get_project_id
+
+            ns = f"{get_project_id(project) or project}::"
+
+        requested = list(dict.fromkeys(doc_ids))
+        chunks: dict[str, dict] = {}
+        for doc in vs.get_by_ids(requested) or []:
+            chunks[doc["id"]] = doc
+        not_found = [i for i in requested if i not in chunks]
+        if ns and not_found:
+            prefixed = {ns + i: i for i in not_found if not i.startswith(ns)}
+            if prefixed:
+                for doc in vs.get_by_ids(list(prefixed)) or []:
+                    chunks[doc["id"]] = doc
+                not_found = [i for i in not_found if ns + i not in chunks]
+        in_vector_store = set(chunks)
+
+        # Expand document ids to their chunks via the BM25 corpus. The corpus
+        # may still be a lazy on-disk payload; every BM25Retriever method
+        # materializes it first, so do the same before reading it directly.
+        corpus = None
+        if bm25 is not None:
+            materialize = getattr(bm25, "_ensure_corpus_materialized", None)
+            if callable(materialize):
+                materialize()
+            corpus = getattr(bm25, "corpus", None)
+        if not_found and corpus:
+            keys: dict[str, str] = {}
+            for i in not_found:
+                keys[i] = i
+                if ns and not i.startswith(ns):
+                    keys[ns + i] = i
+            parent_re = re.compile(r"^(.*)_p\d+$")
+            matched: set[str] = set()
+            expanded: list[str] = []
+            for chunk in corpus:
+                meta = chunk.get("metadata") or {}
+                src = meta.get("source") or ""
+                sid = meta.get("source_id") or ""
+                # Only parent-document splitting sets parent_text; without that
+                # check an unsplit document whose own id ends in "_p1" would be
+                # taken for a child of the id with the suffix stripped.
+                parent = parent_re.match(sid) if sid and "parent_text" in meta else None
+                hit = (
+                    (keys.get(src) if src else None)
+                    or (keys.get(sid) if sid else None)
+                    or (keys.get(parent.group(1)) if parent else None)
+                )
+                if hit is None:
+                    continue
+                matched.add(hit)
+                if chunk["id"] not in chunks:
+                    chunks[chunk["id"]] = chunk
+                    expanded.append(chunk["id"])
+            if expanded:
+                in_vector_store.update(d["id"] for d in vs.get_by_ids(expanded) or [])
+            not_found = [i for i in not_found if i not in matched]
+
+        deleted = list(chunks)
+        if not deleted:
+            return {"status": "success", "deleted": 0, "doc_ids": [], "not_found": not_found}
+
+        vs_ids = [i for i in deleted if i in in_vector_store]
+        if vs_ids:
+            vs.delete_by_ids(vs_ids)
+        if bm25 is not None:
+            bm25.delete_documents(deleted)
+        self._graph_backend.delete_documents(deleted)
+
+        # Forget each chunk's dedup hash. ingest() records the hash it checked
+        # in metadata["dedup_hash"]; that is the only reliable source once
+        # contextual retrieval has rewritten the stored text, so recomputing
+        # from the text is just the fallback for chunks stored before it.
+        hashes_changed = False
+        for chunk in chunks.values():
+            h = (chunk.get("metadata") or {}).get("dedup_hash") or self._doc_hash(chunk)
+            if h in self._ingested_hashes:
+                self._ingested_hashes.discard(h)
+                hashes_changed = True
+        if hashes_changed:
+            self._save_hash_store()
+
+        # ingest() keys _doc_versions by metadata.source, falling back to the
+        # chunk id. Drop a source's record only once none of its chunks remain,
+        # so deleting one chunk doesn't untrack the rest of the document. With
+        # no BM25 corpus to check that against, only chunk-id keys are dropped.
+        if corpus is not None:
+            sources = {(c.get("metadata") or {}).get("source") or cid for cid, c in chunks.items()}
+            sources -= {(c.get("metadata") or {}).get("source") or c.get("id") for c in bm25.corpus}
+        else:
+            sources = set(chunks)
+        versions_changed = False
+        for src in sources:
+            if self._doc_versions.pop(src, None) is not None:
+                versions_changed = True
+        if versions_changed:
+            self._save_doc_versions()
+
+        _api._purge_dedup(
+            deleted,
+            project,
+            source_ids={
+                src for c in chunks.values() if (src := (c.get("metadata") or {}).get("source"))
+            },
+        )
+        return {
+            "status": "success",
+            "deleted": len(deleted),
+            "doc_ids": deleted,
+            "not_found": not_found,
+        }
+
     # ------------------------------------------------------------------
     # Sealed-project routing (lazy — only fires when [sealed] installed)
     # ------------------------------------------------------------------
@@ -2602,6 +2748,10 @@ Your primary goal is to help the user by answering questions based on the provid
             for doc in documents:
                 h = self._doc_hash(doc)
                 if h not in self._ingested_hashes:
+                    # delete_documents() needs this hash to forget the chunk;
+                    # contextual retrieval rewrites the text after this point,
+                    # so it can't always be recomputed from what is stored.
+                    doc["metadata"] = {**(doc.get("metadata") or {}), "dedup_hash": h}
                     new_docs.append(doc)
                     new_hashes.append(h)
             skipped = before - len(new_docs)

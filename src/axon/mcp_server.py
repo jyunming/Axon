@@ -270,10 +270,12 @@ async def switch_project(project_name: str) -> Any:
 
 @mcp.tool()
 async def delete_documents(doc_ids: list[str]) -> Any:
-    """Remove documents from the knowledge base by their IDs.
-    Deletes from both the vector store and the BM25 index.
+    """Remove documents or chunks from the knowledge base by their IDs.
+    Deletes from the vector store, the BM25 index and the graph, and clears the
+    dedup records, so the same text can be ingested again afterwards.
     Args:
-        doc_ids: List of document IDs to delete.
+        doc_ids: Chunk IDs, or document IDs (the doc_id given to ingest_text /
+            ingest_texts / ingest_url); a document ID deletes all its chunks.
     """
     return await _post("/delete", {"doc_ids": doc_ids})
 

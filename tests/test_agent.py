@@ -838,15 +838,16 @@ class TestToolDeleteDocuments:
     def test_delete_documents_success(self):
         brain = _make_brain()
         brain.list_documents.return_value = [
-            {"source": "target.pdf", "chunks": 2, "doc_ids": ["target.pdf::h1", "target.pdf::h2"]}
+            {"source": "target.pdf", "chunks": 2, "doc_ids": ["target_chunk_0", "target_chunk_1"]}
         ]
-        brain._ingested_hashes = {"h1", "h2"}
+        brain.delete_documents.return_value = {"deleted": 2, "doc_ids": [], "not_found": []}
         confirm_cb = MagicMock(return_value=True)
         result = dispatch_tool(
             brain, "delete_documents", {"source": "target.pdf"}, confirm_cb=confirm_cb
         )
-        assert "Deleted" in result
-        brain._own_vector_store.delete_by_ids.assert_called_once()
+        assert "Deleted 2 chunk(s)" in result
+        # AxonBrain.delete_documents owns store deletion and dedup-hash cleanup.
+        brain.delete_documents.assert_called_once_with(["target_chunk_0", "target_chunk_1"])
 
 
 # ---------------------------------------------------------------------------

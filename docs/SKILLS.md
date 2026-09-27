@@ -177,7 +177,7 @@ List all indexed sources in the active project with chunk counts.
 ### `delete_documents`
 Remove specific documents by their IDs.
 - **Use when** the user explicitly asks to delete specific content.
-- **Key params:** `doc_ids` — list of document ID strings.
+- **Key params:** `doc_ids` — chunk IDs or document IDs (a document ID deletes all its chunks).
 
 ### `clear_knowledge`
 Delete ALL documents from the active project.
