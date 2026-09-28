@@ -249,6 +249,16 @@ def test_delete_propagates_error():
     assert resp.status_code == 500
 
 
+def test_delete_os_permission_error_is_500_not_403():
+    """Past the write-access check, a PermissionError is an OS/IO failure
+    (e.g. a locked index file on Windows) — a retryable 500, not a 403."""
+    api_module.brain = _make_brain()
+    api_module.brain.vector_store.get_by_ids.return_value = [{"id": "x", "text": "t"}]
+    api_module.brain.vector_store.delete_by_ids.side_effect = PermissionError("[WinError 32]")
+    resp = client.post("/delete", json={"doc_ids": ["x"]})
+    assert resp.status_code == 500
+
+
 def test_delete_calls_delete_by_ids_not_collection_delete():
     """Endpoint must use delete_by_ids (works for all providers) not collection.delete."""
     api_module.brain = _make_brain()
@@ -2596,7 +2606,24 @@ def _make_brain(provider="chroma"):
     brain.config.query_decompose = False
     brain.config.compress_context = False
     brain._apply_overrides.return_value = brain.config
+    _wire_real_delete(brain)
     return brain
+
+
+def _wire_real_delete(brain):
+    """Run the real AxonBrain.delete_documents against the mock's stores, so
+    /delete tests exercise the actual delete logic the route delegates to."""
+    import hashlib
+
+    from axon.main import AxonBrain
+
+    brain._own_vector_store = brain.vector_store
+    brain._own_bm25 = brain.bm25
+    brain._active_project = "default"
+    brain._ingested_hashes = set()
+    brain._doc_versions = {}
+    brain._doc_hash = lambda doc: hashlib.md5(doc.get("text", "").encode("utf-8")).hexdigest()
+    brain.delete_documents.side_effect = lambda ids: AxonBrain.delete_documents(brain, ids)
 
 
 # ---------------------------------------------------------------------------
@@ -3245,6 +3272,7 @@ def _make_brain(provider="chroma"):
         brain._raptor_summary_cache = {}
 
     brain._graph_backend.clear.side_effect = _reset_graph_fields
+    _wire_real_delete(brain)
     return brain
 
 

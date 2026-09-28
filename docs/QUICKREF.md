@@ -453,11 +453,11 @@ curl -X POST http://localhost:8420/add_texts \
 curl -X POST http://localhost:8420/ingest_url \
   -H "Content-Type: application/json" \
   -d '{"url": "https://example.com/page"}'
-# Remove documents by internal chunk ID list (chunk IDs are not returned by /collection/stale;
-# delete-by-source is not yet a public contract — use GET /collection to inspect sources)
+# Remove documents by chunk ID or by the doc_id they were ingested with
+# (a document ID deletes all its chunks; the same text can be re-ingested afterwards)
 curl -X POST http://localhost:8420/delete \
   -H "Content-Type: application/json" \
-  -d '{"doc_ids": ["chunk-abc123", "chunk-def456"]}'
+  -d '{"doc_ids": ["my-doc-id", "chunk-def456"]}'
 ```
 
 ### GraphRAG

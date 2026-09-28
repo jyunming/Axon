@@ -437,7 +437,7 @@ Interactive docs: `/docs` (Swagger UI), `/redoc` — both branded with the Axon 
 | `GET` | `/collection` | Source count and total chunk count for the active project |
 | `GET` | `/collection/stale` | List documents not refreshed in N days (query param: `days=7`) |
 | `GET` | `/tracked-docs` | Full manifest: all ingested sources with hashes and timestamps |
-| `POST` | `/delete` | Delete specific document chunks by `doc_ids` list |
+| `POST` | `/delete` | Delete chunks or whole documents by `doc_ids` list (chunk or document IDs); also clears their dedup records |
 
 ### 4.4 Projects & Config
 
@@ -579,7 +579,7 @@ Returns: `ingest_path` / `ingest_url` → `{"job_id": "..."}`. `get_job_status` 
 | Tool | Parameters | Description |
 |------|-----------|-------------|
 | `list_knowledge` | — | List all ingested sources with chunk counts |
-| `delete_documents` | `doc_ids` (list of str, required) | Delete specific chunk IDs |
+| `delete_documents` | `doc_ids` (list of str, required) | Delete chunks or whole documents by chunk ID or document ID |
 | `clear_knowledge` | — | Wipe entire knowledge base for active project (irreversible) |
 | `get_stale_docs` | `days` (int, default `7`) | List documents not refreshed in N days |
 | `get_active_leases` | — | List active write-lease counts per project |

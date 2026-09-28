@@ -757,37 +757,29 @@ class TestCliRefreshHashMatch:
         brain.ingest.assert_called_once()
 
 
-class TestCliDeleteDocMultiChunk:
-    """--delete-doc's _ingested_hashes cleanup discarded _doc_versions'
-    whole-source combined hash, but _ingested_hashes stores one hash per
-    chunk — for any multi-chunk source this was always a silent no-op,
-    leaving stale hashes that block a legitimate future re-ingest."""
+class TestCliDeleteDoc:
+    """--delete-doc / --delete-doc-id delegate to AxonBrain.delete_documents,
+    which owns chunk deletion and the dedup-hash / _doc_versions cleanup
+    (tested in tests/test_delete_documents.py)."""
 
-    def test_delete_doc_discards_all_chunk_hashes(self, brain):
-        import hashlib
-
-        chunk0_text = "chunk zero text"
-        chunk1_text = "chunk one text"
-        chunk0_hash = hashlib.md5(chunk0_text.encode("utf-8", errors="replace")).hexdigest()
-        chunk1_hash = hashlib.md5(chunk1_text.encode("utf-8", errors="replace")).hexdigest()
-        unrelated_hash = "unrelated0000000000000000000000"
-
+    def test_delete_doc_passes_all_chunk_ids(self, brain, capsys):
         brain.list_documents.return_value = [
             {"source": "doc1.txt", "chunks": 2, "doc_ids": ["doc1_chunk_0", "doc1_chunk_1"]}
         ]
-        brain._doc_versions = {"doc1.txt": {"content_hash": "whole-source-combined-hash-unused"}}
-        brain._ingested_hashes = {chunk0_hash, chunk1_hash, unrelated_hash}
-        brain.vector_store.get_by_ids.return_value = [
-            {"id": "doc1_chunk_0", "text": chunk0_text},
-            {"id": "doc1_chunk_1", "text": chunk1_text},
-        ]
-        brain._doc_hash = lambda doc: hashlib.md5(
-            doc["text"].encode("utf-8", errors="replace")
-        ).hexdigest()
-
+        brain.delete_documents.return_value = {"deleted": 2, "doc_ids": [], "not_found": []}
         run_cli("--delete-doc", "doc1.txt")
+        brain.delete_documents.assert_called_once_with(["doc1_chunk_0", "doc1_chunk_1"])
+        assert "Deleted 2 chunk(s)" in capsys.readouterr().out
 
-        assert brain._ingested_hashes == {unrelated_hash}
+    def test_delete_doc_id_reports_counts(self, brain, capsys):
+        brain.delete_documents.return_value = {
+            "deleted": 1,
+            "doc_ids": ["a"],
+            "not_found": ["b"],
+        }
+        run_cli("--delete-doc-id", "a", "b")
+        brain.delete_documents.assert_called_once_with(["a", "b"])
+        assert "Deleted: 1  Not found: 1" in capsys.readouterr().out
 
 
 # ---------------------------------------------------------------------------

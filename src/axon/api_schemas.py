@@ -326,7 +326,12 @@ class URLIngestRequest(BaseModel):
 
 
 class DeleteRequest(BaseModel):
-    doc_ids: list[str] = Field(..., description="List of stored IDs to delete from the collection.")
+    doc_ids: list[str] = Field(
+        ...,
+        description=(
+            "Chunk IDs or document IDs to delete; a document ID deletes all of its chunks."
+        ),
+    )
 
 
 class ProjectSwitchRequest(BaseModel):

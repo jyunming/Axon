@@ -136,13 +136,13 @@ List indexed sources with chunk counts for the active project. No parameters.
 
 ### `delete_documents`
 
-Remove documents from the index by chunk ID.
+Remove chunks or whole documents from the index. Also clears their dedup records, so the same text can be ingested again afterwards.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `doc_ids` | `[string]` | required | List of document IDs to delete |
+| `doc_ids` | `[string]` | required | Chunk IDs, or document IDs (the `doc_id` given to `ingest_text` / `ingest_texts` / `ingest_url`); a document ID deletes all its chunks |
 
-**Returns:** `{"deleted": N}`
+**Returns:** `{"status": "success", "deleted": N, "doc_ids": [<chunk ids deleted>], "not_found": [...]}`
 
 ### `clear_knowledge`
 

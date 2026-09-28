@@ -697,50 +697,9 @@ async def delete_documents(
     project = getattr(brain, "_active_project", "default")
     try:
         _enforce_write_access(brain, "delete")
-        existing = brain.vector_store.get_by_ids(request.doc_ids)
-        existing_ids_set = {doc["id"] for doc in existing}
-        existing_ids = [i for i in request.doc_ids if i in existing_ids_set]
-        not_found = [i for i in request.doc_ids if i not in existing_ids_set]
-        # Source ids (e.g. "agent_doc_x") behind the deleted chunks, so
-        # _purge_dedup can match _source_hashes' source-level records —
-        # comparing against chunk ids alone never matches for a multi-chunk
-        # source. Seed from the directly-matched docs' own metadata; the
-        # not-found expansion below adds any resolved via the BM25 corpus.
-        resolved_sources: set[str] = {
-            doc.get("metadata", {}).get("source", "")
-            for doc in existing
-            if doc.get("metadata", {}).get("source")
-        }
-        # Expand any not-found IDs that are source doc IDs (e.g. returned by
-        # ingest_text) to their actual chunk IDs via the BM25 corpus, then
-        # delete those expanded chunk IDs from both stores.
-        if not_found and brain.bm25 is not None:
-            not_found_set = set(not_found)
-            expanded: list[str] = []
-            for chunk in brain.bm25.corpus:
-                src = chunk.get("metadata", {}).get("source", "")
-                if src in not_found_set:
-                    expanded.append(chunk["id"])
-                    resolved_sources.add(src)
-            if expanded:
-                vs_source_docs = brain.vector_store.get_by_ids(expanded)
-                vs_source_ids = [d["id"] for d in vs_source_docs]
-                if vs_source_ids:
-                    brain.vector_store.delete_by_ids(vs_source_ids)
-                brain.bm25.delete_documents(expanded)
-                existing_ids.extend(expanded)
-                not_found = [i for i in not_found if i not in resolved_sources]
-        if existing_ids:
-            # Delete chunk IDs that were found directly (not from source expansion)
-            direct_ids = [i for i in existing_ids if i in existing_ids_set]
-            if direct_ids:
-                brain.vector_store.delete_by_ids(direct_ids)
-                if brain.bm25 is not None:
-                    brain.bm25.delete_documents(direct_ids)
-            brain._graph_backend.delete_documents(existing_ids)
-            from axon import api as _api
-
-            _api._purge_dedup(existing_ids, project, source_ids=resolved_sources)
+        result = brain.delete_documents(request.doc_ids)
+        existing_ids = result["doc_ids"]
+        not_found = result["not_found"]
         gov.emit(
             "delete",
             "document",
@@ -750,12 +709,7 @@ async def delete_documents(
             surface=surface,
             request_id=rid,
         )
-        return {
-            "status": "success",
-            "deleted": len(existing_ids),
-            "doc_ids": existing_ids,
-            "not_found": not_found,
-        }
+        return result
     except HTTPException:
         raise
     except Exception as e:
