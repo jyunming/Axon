@@ -455,7 +455,10 @@ def mock_api_response(url_path: str, method: str, body: dict) -> dict:
             ]
         }
     if p == "/project/switch":
-        return {"active_project": body.get("name", "default"), "status": "ok"}
+        return {
+            "active_project": body.get("project_name") or body.get("name", "default"),
+            "status": "ok",
+        }
     if p == "/project/new":
         return {"status": "ok", "project": body.get("name", "new-proj")}
     if p.startswith("/project/delete/"):
@@ -484,6 +487,31 @@ def mock_api_response(url_path: str, method: str, body: dict) -> dict:
         return {"status": "ok", "message": "Collection cleared"}
     if p == "/config/update":
         return {"status": "ok", "message": "Settings applied"}
+    if p == "/config/set":
+        settings = body.get("settings") or {}
+        return {
+            "status": "success",
+            "applied": [
+                {"key": k, "flat_key": k, "old_value": None, "new_value": v}
+                for k, v in settings.items()
+            ],
+            "persisted": bool(body.get("persist", True)),
+        }
+    if p == "/config/validate":
+        return {"valid": True, "issue_count": 0, "issues": []}
+    if p == "/graph/retrieve":
+        return {"backend": "graphrag", "contexts": []}
+    if p == "/graph/facts":
+        return {
+            "status": "created",
+            "backend_id": "dynamic_graph",
+            "fact_id": "fact-001",
+            "superseded_ids": [],
+            "conflicted_ids": [],
+            "detail": "",
+        }
+    if p == "/share/extend":
+        return {"key_id": body.get("key_id", "sk_test123abc"), "expires_at": None}
     if p == "/share/generate":
         return {
             "project": body.get("project", "default"),
@@ -529,22 +557,6 @@ def mock_api_response(url_path: str, method: str, body: dict) -> dict:
         return {"stale_docs": [{"project": "default", "doc_id": "old-doc-001", "age_days": 14}]}
     if p == "/graph/finalize":
         return {"status": "ok", "community_summary_count": 7}
-    if p == "/governance/overview":
-        return {
-            "project": "default",
-            "maintenance": {"maintenance_state": "normal", "active_leases": 0},
-            "graph": {"entity_count": 12, "relation_count": 8, "community_count": 3},
-            "stale_doc_count": 2,
-            "active_ingest_jobs": 0,
-            "copilot_sessions_active": 1,
-            "project_count": 3,
-        }
-    if p == "/governance/graph/rebuild":
-        return {"status": "ok", "message": "Graph rebuild queued"}
-    if p == "/governance/project/maintenance":
-        return {"status": "ok", "maintenance_state": body.get("state", "maintenance")}
-    if p.startswith("/governance/copilot/session/") and p.endswith("/expire"):
-        return {"status": "ok", "expired": True}
     if p == "/search/raw":
         return {
             "results": [

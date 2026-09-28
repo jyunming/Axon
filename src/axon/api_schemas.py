@@ -311,6 +311,31 @@ class IngestRequest(BaseModel):
             "Must be within RAG_INGEST_BASE (default: current working directory)."
         ),
     )
+    project: str | None = Field(
+        None,
+        description="Optional project assertion. When provided, it must match the active project.",
+    )
+
+
+class ClearRequest(BaseModel):
+    """Optional body for ``POST /clear`` (the route also accepts no body)."""
+
+    project: str | None = Field(
+        None,
+        description=(
+            "Optional project assertion — the project the caller means to wipe. "
+            "409 (nothing cleared) if the server is serving a different project."
+        ),
+    )
+
+
+class RefreshRequest(BaseModel):
+    """Optional body for ``POST /ingest/refresh`` (the route also accepts no body)."""
+
+    project: str | None = Field(
+        None,
+        description="Optional project assertion. When provided, it must match the active project.",
+    )
 
 
 class TextIngestRequest(BaseModel):

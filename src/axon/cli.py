@@ -98,16 +98,19 @@ def _print_shares_listing(
     print()
 
 
-def _run_via_server(server: dict, args, config) -> None:
+def _run_via_server(server: dict, args, config) -> str:
     """Execute store-mutating CLI commands against a detected axon-api server.
 
     Mirrors the local ``--project-new``/``--project``/``--project-delete``/
-    ``--ingest``/``--project-pack``/``--project-unpack`` handling but over
+    ``--clear``/``--ingest``/``--project-pack``/``--project-unpack`` handling but over
     HTTP, so the running server (the single owner of the store) does the
     write. Called from ``main()`` when :func:`axon.server_client.detect_server`
     finds a live server and the user did not pass ``--local``. Any HTTP
     failure is surfaced and re-raised so the caller can decide to fall back
-    to local.
+    to local. Writes that act on "the active project" (``--clear``,
+    ``--ingest``) carry that project as an assertion, so a concurrent
+    ``/project/switch`` from another client makes them fail with 409 instead
+    of landing on the wrong project. Returns the project the server was left on.
     """
     from axon import server_client as sc
 
@@ -136,6 +139,10 @@ def _run_via_server(server: dict, args, config) -> None:
         sc.remote_project_delete(base, name, headers)
         print(f"  Deleted project '{name}'.")
 
+    if getattr(args, "clear", False):
+        sc.remote_clear(base, headers, project=active)
+        print(f"  Knowledge base cleared for project '{active}'.")
+
     if getattr(args, "ingest", None):
         print(f"  Ingesting '{args.ingest}' via server (project '{active}')...")
 
@@ -144,7 +151,7 @@ def _run_via_server(server: dict, args, config) -> None:
             if phase:
                 print(f"    {phase}...")
 
-        result = sc.remote_ingest(base, args.ingest, headers, on_progress=_progress)
+        result = sc.remote_ingest(base, args.ingest, headers, project=active, on_progress=_progress)
         docs = result.get("documents_ingested")
         chunks = result.get("chunks_total")
         print(
@@ -176,6 +183,39 @@ def _run_via_server(server: dict, args, config) -> None:
             f"  Unpacked '{result['project']}' "
             f"({result['file_count']} files, sealed={result['sealed']})."
         )
+
+    return active
+
+
+def _run_cli_query(brain, args) -> None:
+    """Answer the positional ``query`` with *brain* (local AxonBrain or RemoteBrain)."""
+    if getattr(args, "dry_run", False):
+        from axon.remote_brain import RemoteBrain
+
+        if isinstance(brain, RemoteBrain):
+            print("  --dry-run needs an in-process brain; re-run with --local.")
+            return
+        results, diag, trace = brain.search_raw(args.query)
+        import json as _json_cli
+
+        print(f"\n  [DRY RUN] {diag.result_count} chunk(s) retrieved")
+        print(f"  Diagnostics:\n{_json_cli.dumps(diag.to_dict(), indent=4)}")
+        print("\n  Ranked chunks:")
+        for i, r in enumerate(results, 1):
+            meta = r.get("metadata", {})
+            src = meta.get("source") or meta.get("file_path") or r["id"]
+            sym = meta.get("symbol_name", "")
+            label = f"{src} :: {sym}" if sym else src
+            print(f"  {i:>2}. [{r['score']:.3f}]  {label}")
+            print(f"      {r['text'][:100]!r}")
+    elif args.stream:
+        for chunk in brain.query_stream(args.query):
+            if isinstance(chunk, dict):
+                continue
+            print(chunk, end="", flush=True)
+        print()
+    else:
+        print(f"\n  Response:\n{brain.query(args.query)}")
 
 
 def _write_python_discovery() -> None:
@@ -824,6 +864,21 @@ def main():
         metavar="ID",
         help="Delete chunk IDs or document IDs (space-separated), then exit",
     )
+    parser.add_argument(
+        "--clear",
+        action="store_true",
+        help=(
+            "Wipe every document in the active project (or --project NAME): vectors, "
+            "BM25 index, dedup records and graph. Irreversible; requires --yes. Exits "
+            "afterwards unless combined with --ingest (clear, then ingest) or a query"
+        ),
+    )
+    parser.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="Confirm a destructive command (currently --clear)",
+    )
     # ── Store init ───────────────────────────────────────────────────────────
     parser.add_argument(
         "--store-init",
@@ -1068,6 +1123,16 @@ def main():
         help="Migrate vectors from ChromaDB at CHROMA_PATH (or auto-detect) to LanceDB, then exit",
     )
     args = parser.parse_args()
+    # --clear is irreversible: refuse before any config/brain loading so the
+    # refusal is instant and nothing is touched without an explicit --yes.
+    if args.clear and not args.yes:
+        _target = f"project '{args.project.lower()}'" if args.project else "the active project"
+        print(f"  --clear wipes every document in {_target} and cannot be undone.")
+        print(
+            "  Re-run with --yes to confirm:  axon --clear --yes"
+            + (f" --project {args.project}" if args.project else "")
+        )
+        sys.exit(2)
     # Snapshot first-run filesystem state BEFORE any AxonConfig.load() call —
     # AxonConfig.load auto-creates the default config file, so a naive check
     # later in main() would always see the config present. _is_first_run
@@ -1491,6 +1556,7 @@ def main():
         and not getattr(args, "graph_fact", None)
         and not getattr(args, "delete_doc", None)
         and not getattr(args, "delete_doc_id", None)
+        and not getattr(args, "clear", False)
         and not getattr(args, "store_init", None)
         and not getattr(args, "store_status", False)
         and not getattr(args, "store_bootstrap", None)
@@ -1646,6 +1712,7 @@ def main():
         or getattr(args, "graph_fact", None)
         or getattr(args, "delete_doc", None)
         or getattr(args, "delete_doc_id", None)
+        or getattr(args, "clear", False)
         or getattr(args, "optimize_index", False)
         or getattr(args, "migrate_vectors", None) is not None
         or getattr(args, "list_models", False)
@@ -1653,7 +1720,7 @@ def main():
     )
     # --- Single-instance detection ------------------------------------------
     # If an axon-api server is already running, route store-mutating commands
-    # (--ingest, --project-new, --project-delete, --project-pack,
+    # (--ingest, --clear, --project-new, --project-delete, --project-pack,
     # --project-unpack, and any --project switch that accompanies them)
     # through it instead of opening a second local AxonBrain on the same
     # store. Two processes racing on the TurboQuantDB files crash, and each
@@ -1668,17 +1735,40 @@ def main():
         or getattr(args, "project_delete", None)
         or getattr(args, "project_pack", None)
         or getattr(args, "project_unpack", None)
+        or getattr(args, "clear", False)
     ):
         from axon.server_client import ServerRequestError, detect_server
 
         _server = detect_server(config)
         if _server is not None:
             try:
-                _run_via_server(_server, args, config)
+                _server_project = _run_via_server(_server, args, config)
             except ServerRequestError as _e:
-                print(f"  Could not route to the running Axon server: {_e.detail}")
-                print("  (Re-run with --local to run in-process instead.)")
+                if _e.status == 409:
+                    print(f"  Refused by the running Axon server: {_e.detail}")
+                    print(
+                        "  Another client switched the server's active project while this "
+                        "command ran; nothing was changed by the refused step. Re-run it."
+                    )
+                else:
+                    print(f"  Could not route to the running Axon server: {_e.detail}")
+                    print("  (Re-run with --local to run in-process instead.)")
                 sys.exit(1)
+            if args.query:
+                # e.g. `axon --clear --yes --ingest DIR "question"`: answer it on
+                # the same server, asserting the project the writes went to.
+                from axon.remote_brain import RemoteBrain
+
+                try:
+                    _run_cli_query(
+                        RemoteBrain(config, {**_server, "project": _server_project}), args
+                    )
+                except ServerRequestError as _e:
+                    # The writes above already succeeded; only the answer failed
+                    # (e.g. 409: another client switched projects in between).
+                    print(f"  The server refused the query: {_e.detail}")
+                    print("  The clear/ingest step completed; re-run the query on its own.")
+                    sys.exit(1)
             return
     # Fast-path: handle lightweight, metadata-only commands without creating AxonBrain
     if not need_brain:
@@ -2192,6 +2282,19 @@ def main():
             sys.exit(1)
         brain.switch_project(proj_name)
         print(f"  Using project '{proj_name}'  ({project_dir(proj_name)})")
+    if getattr(args, "clear", False):
+        # --yes was checked right after parse_args(); AxonBrain.clear()
+        # enforces write access (read-only mounts, maintenance state). Runs
+        # before --ingest so `--clear --yes --ingest DIR` rebuilds, matching
+        # the order _run_via_server() uses.
+        try:
+            brain.clear()
+        except PermissionError as exc:
+            print(f"  Error: {exc}")
+            sys.exit(1)
+        print(f"  Knowledge base cleared for project '{brain._active_project}'.")
+        if not (args.ingest or args.query):
+            return
     if args.ingest:
         if os.path.isdir(args.ingest):
             asyncio.run(brain.load_directory(args.ingest))
@@ -2669,28 +2772,7 @@ def main():
         _cli_migrate_vectors(brain, args.migrate_vectors)
         return
     if args.query:
-        if getattr(args, "dry_run", False):
-            results, diag, trace = brain.search_raw(args.query)
-            import json as _json_cli
-
-            print(f"\n  [DRY RUN] {diag.result_count} chunk(s) retrieved")
-            print(f"  Diagnostics:\n{_json_cli.dumps(diag.to_dict(), indent=4)}")
-            print("\n  Ranked chunks:")
-            for i, r in enumerate(results, 1):
-                meta = r.get("metadata", {})
-                src = meta.get("source") or meta.get("file_path") or r["id"]
-                sym = meta.get("symbol_name", "")
-                label = f"{src} :: {sym}" if sym else src
-                print(f"  {i:>2}. [{r['score']:.3f}]  {label}")
-                print(f"      {r['text'][:100]!r}")
-        elif args.stream:
-            for chunk in brain.query_stream(args.query):
-                if isinstance(chunk, dict):
-                    continue
-                print(chunk, end="", flush=True)
-            print()
-        else:
-            print(f"\n  Response:\n{brain.query(args.query)}")
+        _run_cli_query(brain, args)
         return
     # No query supplied — enter interactive REPL (streaming on by default)
     _quiet = args.quiet or not sys.stdin.isatty()

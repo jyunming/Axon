@@ -24,38 +24,33 @@ def test_extension_manifest_contract(extension_root_path):
 
     tools = {t["name"] for t in manifest["contributes"]["languageModelTools"]}
 
-    actual_tools = {
+    # 0.5.0: the 18 MCP tools + the two client-side tools (show_graph, ingest_image).
+    expected_tools = {
         "search_knowledge",
         "query_knowledge",
-        "ingest_text",
-        "ingest_url",
-        "ingest_path",
+        "ingest_knowledge",
         "get_job_status",
+        "list_knowledge",
+        "delete_documents",
         "list_projects",
         "switch_project",
         "create_project",
-        "delete_project",
-        "delete_documents",
-        "list_knowledge",
-        "clear_knowledge",
-        "update_settings",
+        "get_config",
+        "set_config",
+        "graph_retrieve",
+        "update_fact",
         "share_project",
         "redeem_share",
-        "revoke_share",
         "list_shares",
-        "init_store",
-        "get_store_status",
-        "refresh_ingest",
-        "get_stale_docs",
-        "graph_status",
-        "graph_finalize",
-        "get_current_settings",
+        "revoke_share",
+        "extend_share",
+        "show_graph",
+        "ingest_image",
     }
 
-    # Verify manifest has them
-
-    for t in actual_tools:
-        assert t in tools, f"Tool {t} missing from manifest"
+    assert (
+        tools == expected_tools
+    ), f"missing: {sorted(expected_tools - tools)}  extra: {sorted(tools - expected_tools)}"
 
 
 # ---------------------------------------------------------------------------
@@ -72,36 +67,33 @@ def test_extension_manifest_contract(extension_root_path):
     [
         ("search_knowledge", {"query": "test"}, "/search"),
         ("query_knowledge", {"query": "why"}, "/query"),
-        ("ingest_text", {"text": "val"}, "/add_text"),
-        ("ingest_url", {"url": "http://a"}, "/ingest_url"),
-        ("ingest_path", {"path": "/tmp"}, "/ingest"),
+        ("ingest_knowledge", {"text": "val"}, "/add_text"),
+        ("ingest_knowledge", {"docs": [{"text": "a"}]}, "/add_texts"),
+        ("ingest_knowledge", {"url": "http://a"}, "/ingest_url"),
+        ("ingest_knowledge", {"path": "/tmp"}, "/ingest"),
+        ("ingest_knowledge", {"refresh": True}, "/ingest/refresh"),
         ("get_job_status", {"job_id": "j1"}, "/ingest/status/j1"),
         ("list_projects", {}, "/projects"),
-        ("switch_project", {"name": "p1"}, "/project/switch"),
+        ("switch_project", {"project_name": "p1"}, "/project/switch"),
         ("create_project", {"name": "p2"}, "/project/new"),
-        ("delete_project", {"name": "p3"}, "/project/delete/p3"),
-        ("delete_documents", {"docIds": ["d1"]}, "/delete"),
+        ("delete_documents", {"doc_ids": ["d1"]}, "/delete"),
         ("list_knowledge", {}, "/collection"),
-        ("clear_knowledge", {}, "/clear"),
-        ("update_settings", {"top_k": 10}, "/config/update"),
+        ("get_config", {}, "/config"),
+        ("get_config", {"validate": True}, "/config/validate"),
+        ("set_config", {"settings": {"top_k": 10}}, "/config/set"),
+        ("graph_retrieve", {"query": "who"}, "/graph/retrieve"),
+        ("update_fact", {"subject": "A", "relation": "WORKS_FOR", "object": "B"}, "/graph/facts"),
         ("share_project", {"project": "p", "grantee": "g"}, "/share/generate"),
         ("redeem_share", {"share_string": "s"}, "/share/redeem"),
         ("revoke_share", {"key_id": "k"}, "/share/revoke"),
         ("list_shares", {}, "/share/list"),
-        ("init_store", {"base_path": "/b"}, "/store/init"),
-        ("refresh_ingest", {}, "/ingest/refresh"),
-        ("get_stale_docs", {}, "/collection/stale"),
-        ("graph_status", {}, "/graph/status"),
-        ("graph_finalize", {}, "/graph/finalize"),
-        ("get_current_settings", {}, "/config"),
+        ("extend_share", {"key_id": "k", "ttl_days": 7}, "/share/extend"),
     ],
 )
 def test_tool_invocations(run_tool, live_recorder_server, tool_name, tool_input, expected_path):
     base_url, recorded = live_recorder_server
 
-    extra = {"_inputResponse": "7"} if tool_name == "get_stale_docs" else None
-
-    res = run_tool(base_url, tool_name, tool_input, extra)
+    res = run_tool(base_url, tool_name, tool_input)
 
     assert not res.get("toolError"), f"Tool {tool_name} failed: {res.get('toolError')}"
 
@@ -141,3 +133,34 @@ def test_ingest_image_tool(run_tool, live_recorder_server, tmp_path):
     assert not res.get("toolError")
 
     assert any(r["path"] == "/add_text" for r in recorded)
+
+
+def test_ingest_knowledge_rejects_zero_or_many_sources(run_tool, live_recorder_server):
+    base_url, recorded = live_recorder_server
+
+    res = run_tool(base_url, "ingest_knowledge", {"text": "a", "url": "http://a"})
+
+    assert not res.get("toolError")
+    assert "exactly one" in json.dumps(res)
+    assert not recorded, f"no request should be sent, got {[r['path'] for r in recorded]}"
+
+
+def test_set_config_sends_one_batched_request_without_persist(run_tool, live_recorder_server):
+    base_url, recorded = live_recorder_server
+
+    res = run_tool(base_url, "set_config", {"settings": {"top_k": 4, "rerank": True}})
+
+    assert not res.get("toolError")
+    sets = [r for r in recorded if r["path"] == "/config/set"]
+    assert len(sets) == 1
+    assert sets[0]["body"] == {"settings": {"top_k": 4, "rerank": True}, "persist": False}
+
+
+def test_revoke_share_never_sends_rotate(run_tool, live_recorder_server):
+    base_url, recorded = live_recorder_server
+
+    res = run_tool(base_url, "revoke_share", {"key_id": "ssk_x", "project": "p", "rotate": True})
+
+    assert not res.get("toolError")
+    (req,) = [r for r in recorded if r["path"] == "/share/revoke"]
+    assert req["body"] == {"key_id": "ssk_x", "project": "p"}

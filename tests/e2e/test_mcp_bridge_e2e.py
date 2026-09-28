@@ -34,7 +34,7 @@ def test_mcp_tools_bridge_project_text_query_and_settings(live_api_server, make_
         assert switched["status"] == "success"
         assert switched["active_project"] == "mcp_lab"
 
-        ingested = await mcp_server.ingest_text(
+        ingested = await mcp_server.ingest_knowledge(
             text="Axon exposes MCP tools over FastMCP for agent workflows.",
             metadata={"source": "mcp_bridge.txt", "topic": "mcp"},
             project="mcp_lab",
@@ -48,13 +48,17 @@ def test_mcp_tools_bridge_project_text_query_and_settings(live_api_server, make_
         answer = await mcp_server.query_knowledge("What exposes MCP tools?", top_k=3)
         assert "FastMCP" in answer["response"]
 
-        settings_before = await mcp_server.get_current_settings()
+        settings_before = await mcp_server.get_config()
         assert settings_before["top_k"] == 5
         assert settings_before["hybrid_search"] is True
 
-        settings_after = await mcp_server.update_settings(top_k=7, hybrid_search=False)
-        assert settings_after["config"]["top_k"] == 7
-        assert settings_after["config"]["hybrid_search"] is False
+        settings_after = await mcp_server.set_config({"top_k": 7, "hybrid_search": False})
+        applied = {a["flat_key"]: a["new_value"] for a in settings_after["applied"]}
+        assert applied == {"top_k": 7, "hybrid_search": False}
+        assert settings_after["persisted"] is False
+        current = await mcp_server.get_config()
+        assert current["top_k"] == 7
+        assert current["hybrid_search"] is False
 
         listed = await mcp_server.list_knowledge()
         assert listed["total_files"] >= 1
@@ -73,7 +77,7 @@ def test_mcp_tools_bridge_path_ingest_and_status_polling(
     monkeypatch.setattr(mcp_server, "API_KEY", None)
 
     async def _run():
-        job = await mcp_server.ingest_path(str(sample_docs_dir))
+        job = await mcp_server.ingest_knowledge(path=str(sample_docs_dir))
         assert job["status"] == "processing"
         assert job["job_id"]
 

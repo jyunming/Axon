@@ -933,7 +933,23 @@ Expected: `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05",...}
 
 ### Available MCP tools
 
-For the full list of all 55 tools with parameter tables, see [MCP_TOOLS.md](MCP_TOOLS.md). Configuration tools (`get_config`, `set_config`, `update_config`, `validate_config`) close the last parity gap — config was previously readable and writable from every surface except MCP. v0.3.2 adds `graph_retrieve` (point-in-time), `graph_conflicts`, and capability-flagged `graph_finalize`.
+`axon-mcp` exposes **18 tools** (0.5.0) — everything an agent needs to *use* a knowledge base:
+
+| Group | Tools |
+|---|---|
+| Retrieval | `query_knowledge`, `search_knowledge` |
+| Ingest | `ingest_knowledge` (exactly one of `text` / `docs` / `url` / `path` / `refresh`), `get_job_status` |
+| Collection | `list_knowledge`, `delete_documents` |
+| Projects | `list_projects`, `switch_project`, `create_project` |
+| Config | `get_config` (optionally with validation), `set_config` (a batch of keys; `persist` defaults to false) |
+| Graph | `graph_retrieve` (point-in-time), `update_fact` (write a fact into a `dynamic_graph` project) |
+| Sharing | `share_project`, `redeem_share`, `list_shares`, `revoke_share` (soft revoke only), `extend_share` |
+
+Destructive, credential and administrative operations — clearing or deleting a project, the
+sealed store, seal/pack/unpack, hard share revocation with key rotation, sessions, graph
+finalize/status/conflicts — are human-only: use the CLI, the REPL or the REST API. A tool's
+`project` parameter is an assertion (409 on mismatch), never a switch. Parameter tables and
+the full list of human routes: [MCP_TOOLS.md](MCP_TOOLS.md).
 
 > **Tip:** use `search_knowledge` (not `query_knowledge`) in agent mode — the agent's own LLM synthesises the answer from raw chunks, so no Ollama is required.
 
@@ -1051,46 +1067,35 @@ Copilot will call `list_knowledge` or `list_projects` automatically. You can als
 @axon search for information about neural networks
 ```
 
-### Available tools (41 VS Code LM tools)
+### Available tools (20 VS Code LM tools)
 
-> v0.3.2 added `graph_retrieve` (point-in-time, with `--at TS`), `graph_conflicts`, and capability-flagged `graph_finalize` to this list. Run `axon-ext` (or open the Axon: Show Tools command in VS Code) to list everything live.
+The Copilot LM tools are the 18 MCP tools — same names, same parameters, see
+[MCP_TOOLS.md](MCP_TOOLS.md) — plus two that only make sense inside VS Code. Destructive and
+administrative operations are not LM tools; the commands below (and the CLI/REPL/REST) cover
+them for humans.
 
 | Tool | What it does |
 |---|---|
 | `search_knowledge` | Raw chunk retrieval — best for discovery, letting Copilot synthesise the answer. If `threshold` filters out all results, automatically falls back to top-N candidates with a note. |
 | `query_knowledge` | Retrieval + answer via the configured LLM provider |
-| `ingest_text` | Ingest a text snippet directly |
-| `ingest_texts` | Ingest multiple text snippets in one call |
-| `ingest_url` | Fetch and ingest a web page |
-| `ingest_path` | Ingest a local file or directory (async; returns `job_id`) |
-| `get_job_status` | Poll an ingest job by `job_id` — call after `ingest_path` before searching |
-| `list_projects` | List available projects |
-| `switch_project` | Switch active project |
-| `create_project` | Create a new project |
-| `delete_project` | Delete a project and all its data |
-| `pack_project` | Zip a project's entire on-disk footprint for backup, restore, or relocation |
-| `unpack_project` | Restore a project from a packed zip into AxonStore |
-| `delete_documents` | Remove documents or chunks by ID |
+| `ingest_knowledge` | Ingest exactly one of: `text`, `docs` (batch), `url`, `path` (async; returns `job_id`), or `refresh: true` (re-ingest changed files; async) |
+| `get_job_status` | Poll an ingest job by `job_id` — call after a `path` / `refresh` ingest before searching |
 | `list_knowledge` | List all ingested files with chunk counts |
-| `clear_knowledge` | Wipe all data from the current project |
-| `update_settings` | Adjust RAG settings (top_k, rerank, hyde, etc.) |
-| `get_current_settings` | Read the current active Axon configuration (retrieval flags, RAG mode, LLM provider) |
-| `share_project` | Generate a share key for a project |
+| `delete_documents` | Remove documents or chunks by ID (`doc_ids`) |
+| `list_projects` | List available projects |
+| `switch_project` | Switch active project (`project_name`) |
+| `create_project` | Create a new project (optional `graph_backend`) |
+| `get_config` | Read the active config (secrets masked); `validate: true` also checks `config.yaml` |
+| `set_config` | Set several config keys in one call (`settings`); `persist` defaults to false |
+| `graph_retrieve` | Graph-backend retrieval, with point-in-time (`point_in_time`) and federation weights |
+| `update_fact` | Assert or correct a graph fact (subject, relation, object) in a `dynamic_graph` / `federated` project |
+| `share_project` | Generate a share key for a project (optional `ttl_days`) |
 | `redeem_share` | Mount a project shared by another user |
-| `revoke_share` | Revoke an active share |
 | `list_shares` | List outgoing and incoming project shares |
-| `init_store` | Initialise AxonStore multi-user mode at a given base directory |
-| `get_store_status` | Check whether the AxonStore is initialised and return its metadata |
-| `ingest_image` | Describe an image via Copilot vision model and ingest the description. Accepts optional `alt_text` param to provide a description directly (enables headless/offline use without Copilot vision). |
-| `refresh_ingest` | Re-ingest files whose content has changed since last ingest |
-| `get_stale_docs` | Find documents not re-ingested within N days |
-| `graph_status` | Show entity count, community summary count, and graph readiness |
+| `revoke_share` | Soft-revoke a share (`project` required for sealed shares); key rotation is human-only |
+| `extend_share` | Renew or clear a plaintext share's expiry |
 | `show_graph` | Open the Axon Graph Panel for a query — shows answer, citations, and 3D entity/code graph side by side |
-| `graph_finalize` | Rebuild community summaries and finalize the knowledge graph for global-mode queries |
-| `graph_data` | Return raw graph payload (nodes + links) for the active project |
-| `list_sessions` | List active REPL/API sessions |
-| `get_session` | Get details for a specific session |
-| `get_active_leases` | List active write-lease counts per project |
+| `ingest_image` | Describe an image via Copilot vision model and ingest the description. Accepts optional `alt_text` param to provide a description directly (enables headless/offline use without Copilot vision). |
 
 ### Available VS Code commands
 
@@ -1110,6 +1115,11 @@ Access via Ctrl+Shift+P:
 | `Axon: Redeem Share` | Join a project shared by another user |
 | `Axon: Revoke Share` | Revoke an active share |
 | `Axon: List Shares` | View all active shares |
+| `Axon: Refresh — Re-ingest Changed Files` | Re-ingest tracked files whose content changed |
+| `Axon: List Stale Documents...` | List documents not refreshed in N days |
+| `Axon: Clear Knowledge Base` | Wipe the current project (asks for confirmation) |
+| `Axon: Show GraphRAG Status` | Show community-summary count and build state |
+| `Axon: Config Setup Wizard` | Step through provider, model, chunking and RAG toggles |
 | `Axon: Show Graph for Query…` | Open the Graph Panel — prompts for a query, then shows answer + citations + 3D graph |
 | `Axon: Show Graph for Selection` | Open the Graph Panel using the current editor selection as the query |
 

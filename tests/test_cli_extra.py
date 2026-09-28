@@ -781,6 +781,169 @@ class TestCliDeleteDoc:
         assert "Deleted: 1  Not found: 1" in capsys.readouterr().out
 
 
+class TestCliClear:
+    """axon --clear wipes the active project (like REPL /clear and POST /clear)
+    and refuses to run without --yes."""
+
+    def test_refuses_without_yes_before_loading_anything(self, brain, capsys):
+        with patch("axon.main.AxonBrain", return_value=brain) as ctor:
+            with patch("axon.config.AxonConfig.load") as load:
+                code = run_cli("--clear")
+        assert code == 2
+        ctor.assert_not_called()
+        load.assert_not_called()
+        brain.clear.assert_not_called()
+        out = capsys.readouterr().out
+        assert "--yes" in out and "axon --clear --yes" in out
+
+    def test_refusal_names_the_target_project(self, brain, capsys):
+        code = run_cli("--clear", "--project", "Research")
+        assert code == 2
+        out = capsys.readouterr().out
+        assert "project 'research'" in out
+        assert "--project Research" in out
+        brain.clear.assert_not_called()
+
+    def test_yes_clears_the_active_project(self, brain, capsys):
+        brain._active_project = "default"
+        with patch("axon.server_client.detect_server", return_value=None):
+            code = run_cli("--clear", "--yes")
+        assert code == 0
+        brain.clear.assert_called_once_with()
+        assert "Knowledge base cleared for project 'default'" in capsys.readouterr().out
+
+    def test_short_y_flag_confirms(self, brain):
+        with patch("axon.server_client.detect_server", return_value=None):
+            code = run_cli("--clear", "-y")
+        assert code == 0
+        brain.clear.assert_called_once_with()
+
+    def test_honours_project_switch_before_clearing(self, brain):
+        calls = []
+        brain.switch_project.side_effect = lambda name: calls.append(("switch", name))
+        brain.clear.side_effect = lambda: calls.append(("clear",)) or {"status": "success"}
+        with patch("axon.server_client.detect_server", return_value=None):
+            code = run_cli("--clear", "--yes", "--project", "research")
+        assert code == 0
+        assert calls == [("switch", "research"), ("clear",)]
+
+    def test_clear_runs_before_ingest(self, brain, tmp_path):
+        """`--clear --yes --ingest FILE` rebuilds: wipe first, then ingest —
+        the same order _run_via_server() uses."""
+        doc = tmp_path / "doc.txt"
+        doc.write_text("hello world", encoding="utf-8")
+        calls = []
+        brain.clear.side_effect = lambda: calls.append("clear") or {"status": "success"}
+        brain.ingest.side_effect = lambda docs, **kw: calls.append("ingest")
+        with patch("axon.server_client.detect_server", return_value=None):
+            run_cli("--clear", "--yes", "--ingest", str(doc))
+        assert calls[:2] == ["clear", "ingest"]
+
+    def test_write_denied_exits_1(self, brain, capsys):
+        brain.clear.side_effect = PermissionError("Cannot clear on mounted share 'mounts/a_p'.")
+        with patch("axon.server_client.detect_server", return_value=None):
+            code = run_cli("--clear", "--yes")
+        assert code == 1
+        assert "mounted share" in capsys.readouterr().out
+
+    def test_routes_through_running_server(self, brain, capsys):
+        server = {"project": "default", "_api_base": "http://127.0.0.1:8420"}
+        with patch("axon.server_client.detect_server", return_value=server):
+            with patch("axon.server_client.remote_clear", return_value={"status": "success"}) as rc:
+                with patch("axon.server_client.remote_project_switch") as rs:
+                    code = run_cli("--clear", "--yes", "--project", "research")
+        assert code == 0
+        rs.assert_called_once()
+        assert rs.call_args.args[1] == "research"
+        rc.assert_called_once()
+        # The clear asserts the project it just switched to, so a concurrent
+        # /project/switch from another client gets a 409, not a wrong-project wipe.
+        assert rc.call_args.kwargs["project"] == "research"
+        brain.clear.assert_not_called()
+        assert "cleared for project 'research'" in capsys.readouterr().out
+
+    def test_server_clear_without_project_asserts_the_probed_project(self, brain):
+        server = {"project": "alpha", "_api_base": "http://127.0.0.1:8420"}
+        with patch("axon.server_client.detect_server", return_value=server):
+            with patch("axon.server_client.remote_clear", return_value={}) as rc:
+                code = run_cli("--clear", "--yes")
+        assert code == 0
+        assert rc.call_args.kwargs["project"] == "alpha"
+
+    def test_server_409_prints_a_clear_error(self, brain, capsys):
+        from axon.server_client import ServerRequestError
+
+        server = {"project": "alpha", "_api_base": "http://127.0.0.1:8420"}
+        err = ServerRequestError(409, "Brain is serving project 'beta', not 'alpha'.")
+        with patch("axon.server_client.detect_server", return_value=server):
+            with patch("axon.server_client.remote_clear", side_effect=err):
+                code = run_cli("--clear", "--yes")
+        assert code == 1
+        out = capsys.readouterr().out
+        assert "serving project 'beta'" in out
+        assert "switched the server's active project" in out
+        assert "--local" not in out
+
+    def test_server_ingest_asserts_project(self, brain, tmp_path):
+        server = {"project": "alpha", "_api_base": "http://127.0.0.1:8420"}
+        with patch("axon.server_client.detect_server", return_value=server):
+            with patch("axon.server_client.remote_project_switch"):
+                with patch("axon.server_client.remote_ingest", return_value={}) as ri:
+                    run_cli("--ingest", str(tmp_path), "--project", "research")
+        assert ri.call_args.kwargs["project"] == "research"
+
+    def test_server_clear_then_query_answers_on_the_server(self, brain, capsys):
+        server = {"project": "alpha", "_api_base": "http://127.0.0.1:8420"}
+        with patch("axon.server_client.detect_server", return_value=server):
+            with patch("axon.server_client.remote_clear", return_value={}):
+                with patch("axon.server_client.remote_project_switch"):
+                    with patch(
+                        "axon.remote_brain.RemoteBrain.query", return_value="remote answer"
+                    ) as rq:
+                        with patch("axon.remote_brain.RemoteBrain._request") as req:
+                            code = run_cli(
+                                "--clear", "--yes", "--project", "research", "what is it?"
+                            )
+        assert code == 0
+        rq.assert_called_once_with("what is it?")
+        req.assert_not_called()
+        brain.query.assert_not_called()
+        assert "remote answer" in capsys.readouterr().out
+
+    def test_server_query_409_after_clear_is_a_clean_error(self, brain, capsys):
+        """The clear succeeded; a 409 on the follow-up query (another client
+        switched projects in between) must print a message, not a traceback."""
+        from axon.server_client import ServerRequestError
+
+        server = {"project": "alpha", "_api_base": "http://127.0.0.1:8420"}
+        err = ServerRequestError(409, "Active project is 'other'")
+        with patch("axon.server_client.detect_server", return_value=server):
+            with patch("axon.server_client.remote_clear", return_value={}):
+                with patch("axon.server_client.remote_project_switch"):
+                    with patch("axon.remote_brain.RemoteBrain.query", side_effect=err):
+                        code = run_cli("--clear", "--yes", "--project", "research", "q?")
+        assert code == 1
+        out = capsys.readouterr().out
+        assert "refused the query" in out and "Active project is 'other'" in out
+
+    def test_server_query_uses_the_switched_project(self, brain):
+        from axon.remote_brain import RemoteBrain
+
+        seen = []
+        server = {"project": "alpha", "_api_base": "http://127.0.0.1:8420"}
+
+        def _fake_query(self, q, **kw):
+            seen.append(self._active_project)
+            return "ok"
+
+        with patch("axon.server_client.detect_server", return_value=server):
+            with patch("axon.server_client.remote_clear", return_value={}):
+                with patch("axon.server_client.remote_project_switch"):
+                    with patch.object(RemoteBrain, "query", _fake_query):
+                        run_cli("--clear", "--yes", "--project", "research", "q")
+        assert seen == ["research"]
+
+
 class TestCliGraphReadCommandsLoadTheBrain:
     """--graph-status / --graph-conflicts / --graph-retrieve were missing from
     need_brain, so they ran with brain=None: status always printed 0 entities,

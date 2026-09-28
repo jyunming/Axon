@@ -118,6 +118,7 @@ If no query string is given, the interactive REPL starts. If a query string is g
 | `--stale-days N` | Age threshold in days for `--list-stale` (default: `7`) |
 | `--delete-doc SOURCE` | Delete all chunks for a source (matched by source path/name), then exit |
 | `--delete-doc-id ID...` | Delete specific chunk IDs directly (space-separated), then exit |
+| `--clear --yes` | Wipe every document in the active project (or `--project NAME`): vectors, BM25 index, dedup records and graph, then exit. Irreversible; without `--yes` (or `-y`) it refuses and prints the command to confirm. Routed through a running `axon-api` |
 
 ### 2.6 Collection & Listing
 
@@ -242,7 +243,7 @@ Start the REPL with `axon`. All commands begin with `/`. Use `!<cmd>` for shell 
 |---------|-------------|---------|
 | `/help [cmd]` | Show all commands, or detailed help for a specific command | `/help rag` |
 | `/quit` or `/exit` | Exit the REPL | `/quit` |
-| `/clear` | Clear conversation history (does not delete the saved session) | `/clear` |
+| `/clear` | Wipe the current project's knowledge base (asks for confirmation; same as `axon --clear --yes` / `POST /clear`) | `/clear` |
 | `/debug` | Toggle verbose debug logging on/off | `/debug` |
 | `/theme [NAME]` | Switch syntax-highlighting theme for code blocks (e.g. `monokai`, `dracula`, `solarized-dark`) | `/theme dracula` |
 | `/keys [set PROVIDER]` | Show API key status for all providers; `/keys set <provider>` saves interactively | `/keys set openai` |
@@ -548,97 +549,35 @@ Exposed metrics: `axon_requests_total` (Counter, labels: `path/method/status`), 
 
 ## 5. MCP Tools Reference
 
-51 tools are registered when running `axon-mcp`.
-
-### 5.1 Ingestion (6)
-
-| Tool | Parameters | Description |
-|------|-----------|-------------|
-| `ingest_text` | `text` (str, required), `metadata` (dict, optional), `project` (str, optional) | Ingest a text string |
-| `ingest_texts` | `docs` (list of `{text, metadata}`, required), `project` (str, optional) | Batch ingest multiple documents |
-| `ingest_url` | `url` (str, required), `metadata` (dict, optional), `project` (str, optional) | Fetch and ingest a public URL |
-| `ingest_path` | `path` (str, required) | Ingest a file or directory by absolute path |
-| `refresh_ingest` | `project` (str, optional) | Re-ingest all tracked files whose SHA-256 hash has changed |
-| `get_job_status` | `job_id` (str, required) | Poll async ingest job status |
-
-Returns: `ingest_path` / `ingest_url` → `{"job_id": "..."}`. `get_job_status` → `{"status": "pending|running|completed|failed", "phase": "...", "chunks_embedded": N}`.
-
-### 5.2 Search & Query (2)
+18 tools are registered when running `axon-mcp` (0.5.0). Full parameter tables:
+[MCP_TOOLS.md](MCP_TOOLS.md). The VS Code Copilot LM tools are the same 18 plus `show_graph`
+and `ingest_image`. `project` parameters are assertions (409 on mismatch), never switches.
 
 | Tool | Parameters | Description |
 |------|-----------|-------------|
-| `search_knowledge` | `query` (str), `top_k` (int, default `5`), `threshold` (float, optional), `hybrid` (bool, optional), `project` (str, optional) | Semantic/hybrid search — returns raw chunks with scores, no synthesis |
-| `query_knowledge` | `query` (str), `top_k` (int, optional), `hyde` (bool, optional), `rerank` (bool, optional), `project` (str, optional), `chat_history` (list, default `[]`) | Full RAG query with LLM synthesis |
+| `query_knowledge` | `query`, `top_k`, `filters`, `project` | Retrieval + generated answer (`POST /query`) |
+| `search_knowledge` | `query`, `top_k` (5), `filters`, `project` | Raw chunks with scores (`POST /search`) |
+| `ingest_knowledge` | exactly one of `text` / `docs` / `url` / `path` / `refresh`; `metadata`, `doc_id`, `project` | Ingest (`/add_text`, `/add_texts`, `/ingest_url`, `/ingest` async, `/ingest/refresh` async) |
+| `get_job_status` | `job_id` | Poll an async ingest job |
+| `list_knowledge` | — | Indexed sources with chunk counts |
+| `delete_documents` | `doc_ids` | Delete chunks or whole documents; clears dedup records |
+| `list_projects` | — | Local projects and mounted shares |
+| `switch_project` | `project_name` | Change the active project (global server state) |
+| `create_project` | `name`, `description`, `graph_backend` | Create a project |
+| `get_config` | `validate` (false) | Active config, secrets masked; with validation findings when `validate=true` |
+| `set_config` | `settings` (dict), `persist` (false) | Batched `POST /config/set`; one unknown key rejects the batch |
+| `graph_retrieve` | `query`, `top_k`, `point_in_time`, `federation_weights`, `project` | Graph-backend retrieval, point-in-time capable |
+| `update_fact` | `subject`, `relation`, `object`, `description`, `confidence`, `replace`, `project` | Assert/correct a fact (`POST /graph/facts`) |
+| `share_project` | `project`, `grantee`, `ttl_days` | Generate a read-only share key |
+| `redeem_share` | `share_string` | Mount a shared project |
+| `list_shares` | — | Outgoing and incoming shares |
+| `revoke_share` | `key_id`, `project` (required for `ssk_`) | Soft revoke only — no `rotate` |
+| `extend_share` | `key_id`, `ttl_days` | Renew or clear a plaintext share's expiry |
 
-### 5.3 Knowledge Base Management (5)
-
-| Tool | Parameters | Description |
-|------|-----------|-------------|
-| `list_knowledge` | — | List all ingested sources with chunk counts |
-| `delete_documents` | `doc_ids` (list of str, required) | Delete chunks or whole documents by chunk ID or document ID |
-| `clear_knowledge` | — | Wipe entire knowledge base for active project (irreversible) |
-| `get_stale_docs` | `days` (int, default `7`) | List documents not refreshed in N days |
-| `get_active_leases` | — | List active write-lease counts per project |
-
-### 5.4 Project Management (6)
-
-| Tool | Parameters | Description |
-|------|-----------|-------------|
-| `list_projects` | — | List all projects with metadata |
-| `switch_project` | `project_name` (str, required) | Switch to a named project |
-| `create_project` | `name` (str, required), `description` (str, default `""`) | Create a new project |
-| `delete_project` | `name` (str, required) | Delete a project and all its data |
-| `pack_project` | `project_name` (str, required), `out_path` (str, optional) | Zip a project's entire on-disk footprint for backup, restore, or relocation |
-| `unpack_project` | `zip_path` (str, required), `as_name` (str, optional), `force` (bool, default `false`) | Restore a project from a packed zip into AxonStore |
-
-### 5.5 Settings (2)
-
-| Tool | Parameters | Description |
-|------|-----------|-------------|
-| `get_current_settings` | — | Return all current config values |
-| `update_settings` | `hyde`, `rerank`, `graph_rag`, `cite`, `top_k`, `threshold`, `sentence_window_size`, `llm_provider`, `llm_model` (all optional) | Update config fields for the session |
-
-### 5.6 Sessions (2)
-
-| Tool | Parameters | Description |
-|------|-----------|-------------|
-| `list_sessions` | — | List up to 20 most recent sessions |
-| `get_session` | `session_id` (str, required) | Retrieve a full session transcript |
-
-### 5.7 AxonStore & Sharing (7)
-
-| Tool | Parameters | Description |
-|------|-----------|-------------|
-| `get_store_status` | — | Check AxonStore init state, path, version |
-| `init_store` | `base_path` (str, required), `persist` (bool, default `false`) | Initialise or move the store to a shared filesystem |
-| `share_project` | `project` (str), `grantee` (str), `expires_at` (str, optional) | Generate a read-only share key |
-| `redeem_share` | `share_string` (str, required) | Mount a shared project (read-only) |
-| `revoke_share` | `key_id` (str, required) | Revoke an outgoing share |
-| `extend_share` | `key_id` (str, required), `ttl_days` (int, optional) | Extend share expiry |
-| `list_shares` | — | List outgoing and incoming shares |
-
-### 5.8 Security (Sealed Store) (9)
-
-| Tool | Parameters | Description |
-|------|-----------|-------------|
-| `security_status` | — | Show sealed-store init/unlock state |
-| `security_bootstrap` | `passphrase` (str, required) | One-time sealed-store init |
-| `security_unlock` | `passphrase` (str, required) | Unlock for sealed-project operations |
-| `security_lock` | — | Lock the sealed-store (clear in-process key cache) |
-| `security_change_passphrase` | `old_passphrase` (str), `new_passphrase` (str) | Rotate the sealed-store passphrase |
-| `seal_project` | `project_name` (str), `migration_mode` (str, default `"in_place"`) | Encrypt all content files in a project at rest |
-| `suggest_passphrase` | `words` (int, optional, 4-12, default 6), `separator` (str, optional, default "-") | Diceware passphrase from EFF wordlist. v0.4.0 Item 1 |
-| `set_keyring_mode` | `mode` (str, required, "persistent"\|"session"\|"never") | Change DEK storage mode at runtime. v0.4.0 Item 2 |
-| `wipe_sealed_cache` | (no params) | Wipe the active sealed-project plaintext cache. Returns `{wiped: bool}`. v0.4.0 Item 3 |
-
-### 5.9 Graph (4)
-
-| Tool | Parameters | Description |
-|------|-----------|-------------|
-| `graph_status` | — | Entity count, edge count, community count, rebuild status |
-| `graph_finalize` | — | Trigger community detection rebuild |
-| `graph_data` | — | Return full nodes+links JSON |
-| `graph_backend_status` | — | Active graph backend type and health metrics |
+Human-only since 0.5.0 (no MCP / LM tool): clearing or deleting a project, stale-doc
+listing, sessions, store init/status/whoami, the sealed-store commands, seal/pack/unpack,
+mount refresh, hard share revocation (`rotate`), graph status/finalize/conflicts/data, and
+write-lease diagnostics — use the CLI flags, REPL commands and REST routes in sections 2–4.
 
 ---
 

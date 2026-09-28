@@ -107,10 +107,10 @@ notes — full detail lives there. This is a scannable index.
   (rather than shares) `projects.py`'s inline reinit-on-change logic.
 - **User Surfaces** — two independent OpenAI-format tool-schema sets
   (`agent.py::REPL_TOOLS`, `mcp_server.py`) name the same operations
-  differently (`add_text` vs. `ingest_text`; `clear_project` vs.
-  `clear_knowledge`), have drifted parameters for the same tool
-  (`update_settings`), and now differ in coverage (`pack_project`/
-  `unpack_project` are MCP-only); `cli.py`/`repl.py` still reimplement project
+  differently (`add_text` vs. `ingest_knowledge(text=...)`), and differ
+  deliberately in coverage since the 0.5.0 MCP consolidation (the in-process
+  REPL agent still has `clear_project`/`delete_project` behind its own
+  confirmation gate); `cli.py`/`repl.py` still reimplement project
   CRUD, share generate/redeem/revoke/extend, store lifecycle and refresh
   end-to-end (only share *listing* is shared now); one
   confirmation prompt (`cli.py`'s `axon update`) still bypasses
@@ -1151,14 +1151,15 @@ Covers `src/axon/api.py`, `api_schemas.py`, `surface_contract.py`, and all modul
 
 **Role**: Declarative registry mapping every user-facing capability to which surfaces (API/REPL/CLI/VSCode) support it, with documented intentional exceptions. This is the cross-interface-parity source of truth the project's own CLAUDE.md/MEMORY.md rules ("cross-interface parity" development rule) point back to — a new feature's surface coverage should be registered here, not just implemented. **`Surface.WEBAPP` was removed in `#157`** (the Streamlit UI deletion) — the enum now has 4 members, not 5, and `ALL_SURFACES`/registry entries shrank accordingly with no `intentional_exceptions` loss (every capability's `supported_surfaces` had inherited `WEBAPP` only via `ALL_SURFACES`, never named it explicitly).
 
-- `Tier` enum (`ONE`/`TWO`/`API_ONLY`) and `Surface` enum (`API`/`REPL`/`CLI`/`VSCODE`) — classification vocabulary — `surface_contract.py:29,35`
-- `Capability` dataclass — `{id, name, category, tier, description, supported_surfaces, intentional_exceptions, api_route, docs_targets, test_targets}` — `surface_contract.py:52`
-- `ALL_SURFACES` / `NO_VSCODE` (API+REPL+CLI, no VSCODE) / `PRIMARY_SURFACES` (API+REPL+CLI+VSCODE) — reusable `frozenset[Surface]` shorthands for `supported_surfaces` — `surface_contract.py:42,45,48`
-- `REGISTRY: list[Capability]` — **39** registered capabilities (42 before the three `governance_*` entries were dropped with the governance console; `active_leases` moved to the `maintenance` category) spanning query/ingest/collection/project/config/share/store/graph/session/maintenance/security categories, each cross-referencing its `api_route` — `surface_contract.py`
-- `capabilities_by_category()` — groups registry entries by `category` — `surface_contract.py:540`
-- `tier1_capabilities()` — filters `Tier.ONE` entries (required on every surface) — `surface_contract.py:548`
-- `surface_capabilities(surface)` — capabilities supported on a given surface — `surface_contract.py:553`
-- `unsupported_on(surface)` — `(capability, reason)` pairs for Tier 1/2 capabilities missing from a surface, using the documented exception or a "no explicit exception" fallback — used by parity-audit tooling/tests — `surface_contract.py:558`
+- `Tier` enum (`ONE`/`TWO`/`API_ONLY`) and `Surface` enum (`API`/`REPL`/`CLI`/`VSCODE`/`MCP`) — classification vocabulary. Since 0.5.0 Tier 1 means "required on every *human* surface"; `Surface.VSCODE` means the Copilot LM tools only (extension commands/webviews are human UI)
+- `Capability` dataclass — `{id, name, category, tier, description, supported_surfaces, intentional_exceptions, api_route, docs_targets, test_targets}` — `surface_contract.py:73`
+- `ALL_SURFACES` / `HUMAN_SURFACES` (API+REPL+CLI) / `AGENT_SURFACES` (MCP+VSCODE) — reusable `frozenset[Surface]` shorthands for `supported_surfaces` (`NO_VSCODE` / `PRIMARY_SURFACES` were removed in 0.5.0)
+- `_human_only(reason, routes)` — builds the MCP+VSCODE intentional-exception reasons for a human-only capability, naming the human route (e.g. "Destructive — human-only (0.5.0): REPL /clear, `axon --clear --yes`, REST POST /clear, ...")
+- `REGISTRY: list[Capability]` — **40** registered capabilities (42 before the three `governance_*` entries were dropped with the governance console, then +1 for `graph_fact_update`; `active_leases` moved to the `maintenance` category and, in 0.5.0, to `Tier.API_ONLY`), spanning query/ingest/collection/project/config/share/store/graph/session/maintenance/security categories, each cross-referencing its `api_route`. 20 of them are on the agent surfaces (MCP and VS Code carry the same set); `tests/test_surface_parity_contract.py` checks that the MCP tool set and the VS Code manifest/registrations equal the tools mapped from those capabilities, and that every capability has at least one human surface — `surface_contract.py`
+- `capabilities_by_category()` — groups registry entries by `category` — `surface_contract.py:607`
+- `tier1_capabilities()` — filters `Tier.ONE` entries (required on every human surface) — `surface_contract.py:615`
+- `surface_capabilities(surface)` — capabilities supported on a given surface — `surface_contract.py:620`
+- `unsupported_on(surface)` — `(capability, reason)` pairs for Tier 1/2 capabilities missing from a surface, using the documented exception or a "no explicit exception" fallback — used by parity-audit tooling/tests — `surface_contract.py:625`
 
 ### src/axon/api_routes/__init__.py
 
@@ -1357,7 +1358,7 @@ Notable one-shot flag groups implemented inline in `main()` (each pairs with an 
 - Store lifecycle: pre-brain fast path (`--wipe-sealed-cache`, `--passphrase-generate`) at `cli.py:1166-1210`; post-brain block (`--store-bootstrap/-unlock/-lock/-change-passphrase`, `--project-seal`) at `cli.py:1710-1800`; **`--store-init` is handled twice** — once pre-brain at `cli.py:1710` and again in a post-brain-init duplicate path at `cli.py:2442-2467` (mirrors the sharing duplication below).
 - Sharing: `--share-list/-generate/-redeem/-revoke/-extend`, `--share-ttl-days`, `--share-rotate` — pre-brain block `cli.py:1856-2070`, post-brain-init duplicate path `cli.py:2469-2650`. The **listing** render (`--share-list`) is no longer duplicated (both call `_print_shares_listing`); generate/redeem/revoke/extend logic is still two independent copies within this file, plus a third in `repl.py`.
 - Graph ops: `--graph-status/-finalize/-conflicts/-retrieve/-export`, `--graph-at` — `cli.py:2311-2415`.
-- Doc lifecycle: `--refresh`, `--list-stale`, `--delete-doc`, `--delete-doc-id`, `--optimize-index`, `--migrate-vectors` — `cli.py:2240-2300`, `:2456-2472`, `:2667`. **`--delete-doc`/`--delete-doc-id` now both call `brain.delete_documents(...)` (`main.py:1143`)**, the same single implementation the REST `POST /delete` route and `agent.py::_tool_delete_documents` call (fixed in `#169`) — no more separate chunk-ID-expansion logic in the CLI. `--refresh` still hand-rolls its own `hashlib.md5` comparison inline (see overlap note; the hash *algorithm* itself was fixed in `3b1b7ef` to actually match `AxonBrain.ingest()`'s MD5 — previously it used `api_schemas._compute_content_hash()`'s SHA-256, which never matched, so "skip unchanged" silently never fired).
+- Doc lifecycle: `--refresh`, `--list-stale`, `--delete-doc`, `--delete-doc-id`, `--clear --yes` (0.5.0: wipes the active/`--project` project via `AxonBrain.clear()`, refuses without `--yes` before loading anything, routes through a running `axon-api` via `server_client.remote_clear()`), `--optimize-index`, `--migrate-vectors` — `cli.py:2240-2300`, `:2456-2472`, `:2667`. **`--delete-doc`/`--delete-doc-id` now both call `brain.delete_documents(...)` (`main.py:1143`)**, the same single implementation the REST `POST /delete` route and `agent.py::_tool_delete_documents` call (fixed in `#169`) — no more separate chunk-ID-expansion logic in the CLI. `--refresh` still hand-rolls its own `hashlib.md5` comparison inline (see overlap note; the hash *algorithm* itself was fixed in `3b1b7ef` to actually match `AxonBrain.ingest()`'s MD5 — previously it used `api_schemas._compute_content_hash()`'s SHA-256, which never matched, so "skip unchanged" silently never fired).
 
 ### src/axon/repl.py
 
@@ -1439,24 +1440,24 @@ claim that the Streamlit web GUI also used this module is now moot — that GUI 
 
 **Role**: `FastMCP`-based stdio MCP server (`axon-mcp` console script). Every tool is a **thin async
 HTTP proxy** (`_get`/`_post`) onto a running `axon-api` REST server — no direct `AxonBrain` access,
-unlike `agent.py`'s in-process dispatch. **51 tools total** (verified: `grep -c "@mcp.tool()"
-mcp_server.py`; 56 before the five `governance_*` tools were removed with the governance console); grouped below by concern rather than listed individually since
-the full reference lives in `docs/`. Two changes since the last audit: the `refresh_mount` tool was
-**removed** in `#157` (it posted to `/mount/refresh` with no arguments, which `mount_refresh(project=None)`
-already does as a strict superset — 57→56), and `pack_project`/`unpack_project` were **added** in commit `f2e81f9`.
+unlike `agent.py`'s in-process dispatch. **18 tools total** since the 0.5.0 agent-surface
+consolidation (PR5c; verified: `grep -c "@mcp.tool()" mcp_server.py`) — 51 before it, 56 at the start
+of 0.5.0. The set is what an agent needs to *use* a knowledge base; destructive, credential and
+administrative operations are human-only (REST / CLI / REPL), and each such gap names its human
+route in `surface_contract.py`'s intentional-exception reasons. `project` parameters are assertions
+(`enforce_project` → 409), never switches.
 
-- `_headers()` — builds request headers with `X-API-Key` (from `RAG_API_KEY` env) and `X-Axon-Surface: mcp` attribution — `mcp_server.py:70`.
-- `_get(path, params=None)` / `_post(path, body)` — shared async `httpx` GET/POST helpers (60s timeout) used by every `@mcp.tool()` function — `mcp_server.py:78`, `:85`.
-- `API_BASE` (`RAG_API_BASE` env, default `http://localhost:8420`) / `API_KEY` (`RAG_API_KEY` env) — module-level config — `mcp_server.py:61,64`.
-- Tool groups (all `@mcp.tool()` async functions, name → REST route):
-  - Ingest/retrieval: `ingest_text`, `ingest_texts`, `ingest_url`, `ingest_path`, `refresh_ingest`, `get_job_status`, `search_knowledge`, `query_knowledge`, `list_knowledge` — `mcp_server.py:100-246`; `query_stream` (accumulates SSE chunks into one response) — `mcp_server.py:908`.
-  - Project mgmt: `switch_project`, `delete_documents`, `list_projects`, `get_stale_docs`, `create_project`, `delete_project`, `clear_knowledge` — `mcp_server.py:255-333`; `pack_project`, `unpack_project` — new in commit `f2e81f9`, `mcp_server.py:696,709`.
-  - Config: `get_current_settings`, `update_settings` — `mcp_server.py:341,349`; `get_config`, `set_config`, `update_config`, `validate_config` — `mcp_server.py:981-1029`.
-  - Sessions: `list_sessions`, `get_session` — `mcp_server.py:400,406`.
-  - Sharing: `share_project`, `redeem_share`, `list_shares`, `revoke_share`, `extend_share` — `mcp_server.py:415-501`.
-  - Sealed-store security: `get_store_status`, `init_store`, `security_status`, `wipe_sealed_cache`, `set_keyring_mode`, `suggest_passphrase`, `security_bootstrap`, `security_unlock`, `security_lock`, `security_change_passphrase`, `seal_project` — `mcp_server.py:515-672`.
-  - Graph: `graph_status`, `graph_finalize`, `graph_data`, `graph_backend_status`, `graph_conflicts`, `graph_retrieve` — `mcp_server.py:724-785`.
-  - Ops: `get_active_leases`, `mount_refresh` — `mcp_server.py`. (`refresh_mount` removed — see above.)
+- `_headers()` — builds request headers with `X-API-Key` (from `RAG_API_KEY` env) and `X-Axon-Surface: mcp` attribution.
+- `_get(path, params=None)` / `_post(path, body)` — shared async `httpx` GET/POST helpers (60s timeout) used by every `@mcp.tool()` function; `_with_project(body, project)` adds the project assertion.
+- `API_BASE` (`RAG_API_BASE` env, default `http://localhost:8420`) / `API_KEY` (`RAG_API_KEY` env) — module-level config.
+- Tools (all `@mcp.tool()` async functions, name → REST route):
+  - Retrieval: `query_knowledge` → `/query`, `search_knowledge` → `/search`.
+  - Ingest: `ingest_knowledge` — exactly one of `text` (`/add_text`), `docs` (`/add_texts`), `url` (`/ingest_url`), `path` (`/ingest`, async) or `refresh=True` (`/ingest/refresh`, async), else `ValueError`; `get_job_status` → `/ingest/status/{id}`.
+  - Collection: `list_knowledge` → `/collection`, `delete_documents` → `/delete`.
+  - Projects: `list_projects`, `switch_project`, `create_project(name, description, graph_backend)`.
+  - Config: `get_config(validate=False)` → `/config` (+ `/config/validate`, returned as `{config, validation}`); `set_config(settings: dict, persist=False)` → batched `POST /config/set {settings}`.
+  - Graph: `graph_retrieve` → `/graph/retrieve`, `update_fact` → `POST /graph/facts`.
+  - Sharing: `share_project`, `redeem_share`, `list_shares`, `revoke_share(key_id, project)` (soft revoke only — no `rotate`; hard revoke is human-only), `extend_share`.
 - `main()` — `axon-mcp` console-script entry point (`configure_logging()` + `mcp.run()`) — `mcp_server.py:1046`.
 
 ### src/axon/ext_install.py

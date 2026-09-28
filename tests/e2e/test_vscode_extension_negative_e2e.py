@@ -25,13 +25,13 @@ NEG-002  API unreachable — query_knowledge
 NEG-003  400 bad request — create_project (invalid name)
 
 
-NEG-004  403 read-only rejection — ingest_text
+NEG-004  403 read-only rejection — ingest_knowledge (text)
 
 
-NEG-005  403 read-only rejection — clear_knowledge
+NEG-005  403 read-only rejection — delete_documents
 
 
-NEG-006  403 read-only rejection — graph_finalize
+NEG-006  403 read-only rejection — update_fact
 
 
 NEG-007  404 missing job — get_job_status
@@ -52,7 +52,7 @@ NEG-011  no Copilot model available — ingest_image
 NEG-012  empty Copilot image description — ingest_image
 
 
-NEG-013  graph endpoint failure — graph_status 500
+NEG-013  graph endpoint failure — graph_retrieve 500
 
 
 NEG-014  store not active — share_project 404
@@ -263,30 +263,34 @@ def test_create_project_bad_name_400(run_tool, live_recorder_server):
 
 
 def test_ingest_text_403_mounted(run_tool, live_recorder_server):
-    """NEG-004: ingest_text on a mounted/read-only project shows 403 error."""
+    """NEG-004: ingest_knowledge(text) on a mounted/read-only project shows 403 error."""
 
     with _error_server(403, "Write to mounted project not allowed") as err_url:
-        res = run_tool(err_url, "ingest_text", {"text": "hello"})
+        res = run_tool(err_url, "ingest_knowledge", {"text": "hello"})
 
     _assert_error_text(res, "403", "error", "not allowed", "mounted")
 
 
-def test_clear_collection_403_mounted(run_tool, live_recorder_server):
-    """NEG-005: clear_knowledge on a read-only project shows 403 error."""
+def test_delete_documents_403_mounted(run_tool, live_recorder_server):
+    """NEG-005: delete_documents on a read-only project shows 403 error.
+    (clear_knowledge is no longer an LM tool — human-only since 0.5.0.)"""
 
     with _error_server(403, "Write to mounted project not allowed") as err_url:
-        res = run_tool(err_url, "clear_knowledge", {})
+        res = run_tool(err_url, "delete_documents", {"doc_ids": ["d1"]})
 
     _assert_error_text(res, "403", "error", "not allowed", "mounted")
 
 
-def test_finalize_graph_403_mounted(run_tool, live_recorder_server):
-    """NEG-006: graph_finalize on a read-only project shows 403 error."""
+def test_update_fact_403_mounted(run_tool, live_recorder_server):
+    """NEG-006: update_fact on a read-only (mounted) project shows 403 error.
+    (graph_finalize is no longer an LM tool — human-only since 0.5.0.)"""
 
     with _error_server(403, "Write to mounted project not allowed") as err_url:
-        res = run_tool(err_url, "graph_finalize", {})
+        res = run_tool(
+            err_url, "update_fact", {"subject": "A", "relation": "WORKS_FOR", "object": "B"}
+        )
 
-    _assert_error_text(res, "403", "error", "finalize", "graph")
+    _assert_error_text(res, "403", "error", "not allowed", "mounted")
 
 
 # ---------------------------------------------------------------------------
@@ -320,7 +324,7 @@ def test_switch_project_404_missing(run_tool, live_recorder_server):
     """NEG-008: switch_project to a non-existent project surfaces a 404 error."""
 
     with _error_server(404, "Project 'ghost' not found") as err_url:
-        res = run_tool(err_url, "switch_project", {"name": "ghost"})
+        res = run_tool(err_url, "switch_project", {"project_name": "ghost"})
 
     _assert_error_text(res, "404", "not found", "error")
 
@@ -418,13 +422,14 @@ def test_ingest_image_empty_description(run_tool, live_recorder_server, tmp_path
 # ---------------------------------------------------------------------------
 
 
-def test_show_graph_status_500(run_tool, live_recorder_server):
-    """NEG-013: graph_status with a 500 backend error surfaces the error text."""
+def test_graph_retrieve_500(run_tool, live_recorder_server):
+    """NEG-013: graph_retrieve with a 500 backend error surfaces the error text.
+    (graph_status is no longer an LM tool — human-only since 0.5.0.)"""
 
     with _error_server(500, "Internal server error") as err_url:
-        res = run_tool(err_url, "graph_status", {})
+        res = run_tool(err_url, "graph_retrieve", {"query": "who"})
 
-    _assert_error_text(res, "error", "500", "graph", "status")
+    _assert_error_text(res, "error", "500", "graph")
 
 
 # ---------------------------------------------------------------------------

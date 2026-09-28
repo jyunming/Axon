@@ -6,7 +6,7 @@ import * as vscode from 'vscode';
 
 import { state, resolveApiBase } from '../shared';
 
-import { httpGet, httpPost, formatDetail, apiConnectionError, parseJsonSafe } from '../client/http';
+import { httpGet, httpPost, formatDetail, apiConnectionError } from '../client/http';
 
 // ---------------------------------------------------------------------------
 
@@ -37,16 +37,17 @@ export class AxonListProjectsTool implements vscode.LanguageModelTool<any> {
 export class AxonSwitchProjectTool implements vscode.LanguageModelTool<any> {
   async prepareInvocation(options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
     return {
-      invocationMessage: `Switching Axon active project to: "${options.input.name}"...`
+      invocationMessage: `Switching Axon active project to: "${options.input?.project_name ?? options.input?.name}"...`
     };
   }
   async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
     const apiBase = resolveApiBase();
     const apiKey = config.get<string>('apiKey', '');
-    const { name } = options.input;
+    // `project_name` matches the MCP tool; `name` is the pre-0.5.0 input.
+    const name = options.input?.project_name ?? options.input?.name;
     try {
-      const result = await httpPost(`${apiBase}/project/switch`, { name }, apiKey);
+      const result = await httpPost(`${apiBase}/project/switch`, { project_name: name }, apiKey);
       const data = JSON.parse(result.body);
       if (result.status !== 200) {
         return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Axon API Error (${result.status}): ${formatDetail(data, result.body)}`)]);
@@ -69,9 +70,11 @@ export class AxonCreateProjectTool implements vscode.LanguageModelTool<any> {
     const config = vscode.workspace.getConfiguration('axon');
     const apiBase = resolveApiBase();
     const apiKey = config.get<string>('apiKey', '');
-    const { name, description = '' } = options.input;
+    const { name, description = '', graph_backend } = options.input;
     try {
-      const result = await httpPost(`${apiBase}/project/new`, { name, description }, apiKey);
+      const body: any = { name, description };
+      if (graph_backend != null) { body.graph_backend = graph_backend; }
+      const result = await httpPost(`${apiBase}/project/new`, body, apiKey);
       const data = JSON.parse(result.body);
       if (result.status !== 200) {
         return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Axon Project Creation Error (${result.status}): ${formatDetail(data, result.body)}`)]);
@@ -84,42 +87,18 @@ export class AxonCreateProjectTool implements vscode.LanguageModelTool<any> {
 
 }
 
-export class AxonDeleteProjectTool implements vscode.LanguageModelTool<any> {
-  async prepareInvocation(options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
-    return {
-      invocationMessage: `Deleting Axon project: "${options.input.name}"...`
-    };
-  }
-  async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
-    const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = resolveApiBase();
-    const apiKey = config.get<string>('apiKey', '');
-    const { name } = options.input;
-    try {
-      const result = await httpPost(`${apiBase}/project/delete/${name}`, {}, apiKey);
-      const data = JSON.parse(result.body);
-      if (result.status !== 200) {
-        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Axon Project Deletion Error (${result.status}): ${formatDetail(data, result.body)}`)]);
-      }
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Status: ${data.status}, Message: ${data.message}`)]);
-    } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
-    }
-  }
-
-}
-
 export class AxonDeleteDocumentsTool implements vscode.LanguageModelTool<any> {
   async prepareInvocation(options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
     return {
-      invocationMessage: `Deleting ${options.input.docIds.length} documents from Axon...`
+      invocationMessage: `Deleting ${(options.input?.doc_ids ?? options.input?.docIds ?? []).length} documents from Axon...`
     };
   }
   async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
     const apiBase = resolveApiBase();
     const apiKey = config.get<string>('apiKey', '');
-    const { docIds } = options.input;
+    // `doc_ids` matches the MCP tool; `docIds` is the pre-0.5.0 input.
+    const docIds = options.input?.doc_ids ?? options.input?.docIds;
     try {
       const result = await httpPost(`${apiBase}/delete`, { doc_ids: docIds }, apiKey);
       const data = JSON.parse(result.body);
@@ -147,92 +126,6 @@ export class AxonListKnowledgeTool implements vscode.LanguageModelTool<any> {
       }
       const files = (data.files || []).map((f: any) => `${f.source} (${f.chunks} chunks)`).join('\n');
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Total Files: ${data.total_files}\nTotal Chunks: ${data.total_chunks}\n\nFiles:\n${files}`)]);
-    } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
-    }
-  }
-
-}
-
-export class AxonUpdateSettingsTool implements vscode.LanguageModelTool<any> {
-  async prepareInvocation(_options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
-    return {
-      invocationMessage: `Updating Axon RAG settings...`
-    };
-  }
-  async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
-    const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = resolveApiBase();
-    const apiKey = config.get<string>('apiKey', '');
-    try {
-      const result = await httpPost(`${apiBase}/config/update`, options.input, apiKey);
-      const data = JSON.parse(result.body);
-      if (result.status !== 200) {
-        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Axon Configuration Error (${result.status}): ${formatDetail(data, result.body)}`)]);
-      }
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Status: ${data.status}, Settings Applied.`)]);
-    } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
-    }
-  }
-
-}
-
-export class AxonGetCurrentSettingsTool implements vscode.LanguageModelTool<any> {
-  async invoke(_options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
-    const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = resolveApiBase();
-    const apiKey = config.get<string>('apiKey', '');
-    try {
-      const result = await httpGet(`${apiBase}/config`, apiKey);
-      const data = JSON.parse(result.body);
-      if (result.status !== 200) {
-        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Axon API Error (${result.status}): ${formatDetail(data, result.body)}`)]);
-      }
-      const summary = JSON.stringify(data, null, 2);
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Current Axon settings:\n${summary}`)]);
-    } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
-    }
-  }
-
-}
-
-export class AxonListSessionsTool implements vscode.LanguageModelTool<any> {
-  async invoke(_options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
-    const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = resolveApiBase();
-    const apiKey = config.get<string>('apiKey', '');
-    try {
-      const result = await httpGet(`${apiBase}/sessions`, apiKey);
-      const data = JSON.parse(result.body);
-      if (result.status !== 200) {
-        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Sessions error: ${formatDetail(data, result.body)}`)]);
-      }
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(JSON.stringify(data, null, 2))]);
-    } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
-    }
-  }
-
-}
-
-export class AxonGetSessionTool implements vscode.LanguageModelTool<any> {
-  async prepareInvocation(options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
-    return { invocationMessage: `Loading session ${options.input?.session_id}…` };
-  }
-  async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
-    const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = resolveApiBase();
-    const apiKey = config.get<string>('apiKey', '');
-    const { session_id } = options.input ?? {};
-    try {
-      const result = await httpGet(`${apiBase}/session/${encodeURIComponent(session_id)}`, apiKey);
-      const data = JSON.parse(result.body);
-      if (result.status !== 200) {
-        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Session error: ${formatDetail(data, result.body)}`)]);
-      }
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(JSON.stringify(data, null, 2))]);
     } catch (err) {
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
     }
@@ -304,61 +197,5 @@ export async function createNewProject(apiBase: string): Promise<void> {
     vscode.window.showErrorMessage(`Axon: Failed to create project. ${apiConnectionError(err)}`);
   }
 
-}
-
-export class AxonPackProjectTool implements vscode.LanguageModelTool<any> {
-  async prepareInvocation(options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
-    return { invocationMessage: `Packing project "${options.input?.project_name}"…` };
-  }
-  async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
-    const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = resolveApiBase();
-    const apiKey = config.get<string>('apiKey', '');
-    const { project_name, out_path } = options.input ?? {};
-    try {
-      const result = await httpPost(`${apiBase}/project/pack`, { project_name, out_path }, apiKey);
-      const data = parseJsonSafe(result.body);
-      if (result.status !== 200) {
-        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(
-          `Pack failed: ${formatDetail(data, result.body)}`
-        )]);
-      }
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(
-        `Packed '${data.project}' -> ${data.out_path} (${data.file_count} files).`
-      )]);
-    } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
-    }
-  }
-}
-
-export class AxonUnpackProjectTool implements vscode.LanguageModelTool<any> {
-  async prepareInvocation(options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
-    return { invocationMessage: `Unpacking "${options.input?.zip_path}"…` };
-  }
-  async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
-    const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = resolveApiBase();
-    const apiKey = config.get<string>('apiKey', '');
-    const { zip_path, as_name, force } = options.input ?? {};
-    try {
-      const result = await httpPost(
-        `${apiBase}/project/unpack`,
-        { zip_path, as_name: as_name ?? null, force: force ?? false },
-        apiKey,
-      );
-      const data = parseJsonSafe(result.body);
-      if (result.status !== 200) {
-        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(
-          `Unpack failed: ${formatDetail(data, result.body)}`
-        )]);
-      }
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(
-        `Unpacked '${data.project}' (${data.file_count} files, sealed=${data.sealed}).`
-      )]);
-    } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
-    }
-  }
 }
 

@@ -338,8 +338,11 @@ class RemoteBrain:
         then ``collection_ops.clear_active_project()`` itself), write-access
         is enforced server-side by the route — there is no local
         ``vector_store``/``bm25``/graph state in this process to touch.
+        The project this brain believes is active is sent as an assertion, so
+        if another client switched the server meanwhile the server answers 409
+        instead of wiping a different project.
         """
-        return self._request("POST", "/clear", {}) or {}
+        return self._request("POST", "/clear", {"project": self._active_project}) or {}
 
     def delete_documents(self, doc_ids: list[str]) -> dict:
         """Delete chunks or whole documents via the server's ``/delete``.

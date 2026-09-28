@@ -38,11 +38,77 @@ never reaches. Nothing a default install can do was removed.
   `POST /project/maintenance` with a JSON body `{"name": ..., "state": ...}`
   (instead of `POST /governance/project/maintenance?name=&state=`) and
   `POST /graph/finalize` (instead of `POST /governance/graph/rebuild`).
-  Maintenance states, `GET /project/maintenance`, `GET /registry/leases`, the
-  `get_active_leases` MCP tool, and the `X-Request-ID` / `X-Axon-Surface`
-  request headers are unchanged. The leftover `.governance.db` (or
+  Maintenance states, `GET /project/maintenance`, `GET /registry/leases`, and
+  the `X-Request-ID` / `X-Axon-Surface` request headers are unchanged (the
+  `get_active_leases` MCP tool went with the agent-surface cut below). The leftover `.governance.db` (or
   `.governance.jsonl`) in your projects root — `~/.axon/projects/` by default —
   is no longer read or written and can be deleted. MCP tool count: 56 → 51.
+- **The agent surfaces are cut to what an agent needs to use a knowledge
+  base.** MCP goes from 51 tools to **18** (56 → 18 across 0.5.0); the VS Code
+  Copilot LM tools from 41 declared (48 registered) to **20** — the same 18,
+  with the same names and parameters, plus `show_graph` and `ingest_image`.
+  The 18: `query_knowledge`, `search_knowledge`, `ingest_knowledge`,
+  `get_job_status`, `list_knowledge`, `delete_documents`, `list_projects`,
+  `switch_project`, `create_project`, `get_config`, `set_config`,
+  `graph_retrieve`, `update_fact`, `share_project`, `redeem_share`,
+  `list_shares`, `revoke_share`, `extend_share`.
+  - **Consolidated:** `ingest_text` / `ingest_texts` / `ingest_url` /
+    `ingest_path` / `refresh_ingest` → `ingest_knowledge` (exactly one of
+    `text`, `docs`, `url`, `path`, `refresh=true`);
+    `get_current_settings` / `validate_config` → `get_config(validate=False)`;
+    `update_settings` / `update_config` / single-key `set_config(key, value)` →
+    `set_config(settings: dict, persist=False)`.
+  - **Human-only now** (REST, CLI, REPL — each has a named human route in
+    `surface_contract.py` and in `docs/MCP_TOOLS.md`): `clear_knowledge`,
+    `delete_project`, the sealed-store tools (`security_*`,
+    `suggest_passphrase`, `set_keyring_mode`, `wipe_sealed_cache`),
+    `init_store`, `get_store_status`, `seal_project`, `pack_project`,
+    `unpack_project`, `mount_refresh`, `list_sessions` / `get_session`,
+    `get_stale_docs`, `get_active_leases`, `query_stream`, and graph
+    administration (`graph_status`, `graph_finalize`, `graph_data`,
+    `graph_backend_status`, `graph_conflicts`). VS Code keeps its human
+    commands for these (clear, refresh, stale docs, store init, graph status);
+    its governance-panel command goes with the governance console.
+  - **Sharing stays agent-callable** — `share_project`, `redeem_share`,
+    `list_shares`, `revoke_share`, `extend_share` — except key rotation:
+    `revoke_share` on MCP and VS Code has no `rotate` parameter. Hard revoke
+    is `axon --share-rotate`, REPL `/share revoke … --rotate`, or
+    `POST /share/revoke {"rotate": true}`.
+  - **`project` is an assertion everywhere.** Tools that take `project` fail
+    with 409 when the server is serving a different project; they never
+    switch. The old MCP `refresh_ingest(project=…)` silently switched the
+    server's active project first. `POST /ingest` and `POST /ingest/refresh`
+    accept the same `project` assertion now (the refresh body stays optional).
+  - `POST /config/set` also accepts a batch, `{"settings": {...}, "persist":
+    …}`: every key is resolved first, an unknown key is a 400 naming all of
+    them with nothing applied, and the response lists each change under
+    `applied`. The single-key body is unchanged, including its
+    `persist: true` default; the agent tools default to `persist=false`. Both
+    forms are now all-or-nothing: if reinitialising a component fails (e.g.
+    `embedding_provider: sentence_transformers` without that extra) every
+    field is restored, nothing is saved, and the 400 names the failure —
+    previously the config stayed half-changed behind a bare 500.
+  - MCP tool errors now carry the server's `detail` (unknown config keys, the
+    project actually being served on a 409, …) instead of httpx's
+    "Client error '400 Bad Request' for url …".
+  - `surface_contract.py` gains `Surface.MCP` (five surfaces again) plus
+    `HUMAN_SURFACES` / `AGENT_SURFACES`; Tier 1 now means "on every human
+    surface". Contract tests pin the MCP tool set and the VS Code manifest,
+    `registerTool` calls and activation events to the registry.
+- **New `axon --clear --yes`** wipes the active project (or `--project NAME`)
+  like REPL `/clear` and `POST /clear` — vectors, BM25 index, dedup records and
+  graph; read-only mounts and maintenance states are refused. Without `--yes`
+  it refuses immediately, before loading anything, and prints the command to
+  confirm. With `axon-api` running it goes through the server, and a query
+  given alongside it (`axon --clear --yes --ingest DIR "question"`) is
+  answered there too.
+- **`POST /clear` accepts an optional `{"project": ...}` assertion** (409,
+  nothing cleared, on mismatch). CLI commands routed through a running server
+  — `--clear` and `--ingest` — send the project they switched to, so a
+  concurrent `/project/switch` from another client can no longer make them
+  wipe or ingest into a different project; `RemoteBrain.clear()` (REPL `/clear`
+  against a running server) asserts its project too. A bodiless `POST /clear`
+  still works.
 - **`sentence-transformers`, `tf-keras` and `lancedb` are no longer base
   dependencies.** They are reachable only through non-default configuration
   (`embedding.provider: sentence_transformers`, `rerank.provider: cross-encoder`,
@@ -137,9 +203,9 @@ never reaches. Nothing a default install can do was removed.
   instead of waiting for a document that says so. It is also on the CLI
   (`axon --graph-fact SUBJECT RELATION OBJECT [--graph-fact-mode replace|add]
   [--graph-fact-desc TEXT]`) and the REPL
-  (`/graph fact Alice | IS_CEO_OF | Globex [| description] [--add|--replace]`);
-  the MCP and VS Code agent tools arrive with the upcoming agent-surface
-  consolidation.
+  (`/graph fact Alice | IS_CEO_OF | Globex [| description] [--add|--replace]`),
+  and — the point of it — on the agent surfaces as the `update_fact` MCP tool
+  and VS Code Copilot LM tool.
   - Replace mode supersedes every other current fact for that subject and
     relation — including ones extracted from ingested text — and keeps them as
     history: `/graph/retrieve` with a `point_in_time` before the change still

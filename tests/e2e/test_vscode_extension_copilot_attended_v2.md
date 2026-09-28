@@ -1,6 +1,6 @@
 # VS Code Extension — Agent Test Design Guide
 
-This guide enables an AI agent or human tester to systematically verify all 39 LM tools,
+This guide enables an AI agent or human tester to systematically verify the LM tools,
 the VS Code command palette commands, and the `@axon` chat participant registered by the
 Axon VS Code extension.
 
@@ -52,6 +52,29 @@ VS Code settings used by the extension (configurable via `axon.*`):
 ---
 
 ## Tool Test Cases
+
+> **0.5.0 agent-surface consolidation.** The extension now registers exactly **20** LM
+> tools — the 18 MCP tools (`query_knowledge`, `search_knowledge`, `ingest_knowledge`,
+> `get_job_status`, `list_knowledge`, `delete_documents`, `list_projects`, `switch_project`,
+> `create_project`, `get_config`, `set_config`, `graph_retrieve`, `update_fact`,
+> `share_project`, `redeem_share`, `list_shares`, `revoke_share`, `extend_share`) plus
+> `show_graph` and `ingest_image`. The per-tool cases below predate that and are kept for
+> the recipes; map them as follows:
+>
+> - T03–T06, T08 (`ingest_text` / `ingest_texts` / `ingest_url` / `ingest_path` /
+>   `refresh_ingest`) → `ingest_knowledge` with exactly one of `text` / `docs` / `url` /
+>   `path` / `refresh: true`.
+> - T18/T19, T33/T34 (`update_settings`, `get_current_settings`, `axon_config_*`) →
+>   `set_config {settings, persist=false}` and `get_config {validate}`.
+> - `switch_project` takes `project_name`; `delete_documents` takes `doc_ids` (the old
+>   `name` / `docIds` inputs are still accepted).
+> - Removed (human-only — REPL / CLI / REST / extension commands): T09 `get_stale_docs`,
+>   T10 `clear_knowledge`, T15 `delete_project`, T20/T21 sessions, T26/T27 store,
+>   T28 `graph_status`, T30 `graph_finalize`, T31 `graph_data`, T32 `get_active_leases`,
+>   T35–T39 security tools. `revoke_share` never sends `rotate`.
+>
+> The automated source of truth is `tests/e2e/test_vscode_extension_tools_e2e.py` and
+> `tests/test_surface_parity_contract.py`.
 
 ### Category 1: Query Tools
 
@@ -1072,13 +1095,6 @@ prefix the command name with `cmd:` in the `tool_name` argument.
   ```
 - **Success criteria:** `panelCount` equals `1`
 
-### C19 — `axon.showGovernancePanel`
-
-- **Handler:** `showGovernancePanel(context)` (`governance/panel.ts`)
-- **Behavior:** Opens the governance WebviewPanel
-- **Test recipe:** `run_tool(base_url, "cmd:axon.showGovernancePanel", {})`
-- **Success criteria:** `panelCount` equals `1`
-
 ### C20 — `axon.configSetup`
 
 - **Handler:** `runConfigSetupWizard(apiBase, apiKey)` (`tools/config.ts`)
@@ -1141,49 +1157,27 @@ The `@axon` chat participant is registered as `axon.chat`. In the Node.js runner
 |---|---|---|
 | `search_knowledge` | Yes | `test_tool_invocations[search_knowledge...]` |
 | `query_knowledge` | Yes | `test_tool_invocations[query_knowledge...]` |
-| `ingest_text` | Yes | `test_tool_invocations[ingest_text...]` |
-| `ingest_texts` | Yes | `test_ingest_texts_tool` |
-| `ingest_url` | Yes | `test_tool_invocations[ingest_url...]` |
-| `ingest_path` | Yes | `test_tool_invocations[ingest_path...]` |
+| `ingest_knowledge` | Yes | `test_tool_invocations[ingest_knowledge...] (text, docs, url, path, refresh), test_ingest_knowledge_rejects_zero_or_many_sources` |
 | `get_job_status` | Yes | `test_tool_invocations[get_job_status...]` |
-| `refresh_ingest` | Yes | `test_tool_invocations[refresh_ingest...]` |
-| `get_stale_docs` | Yes | `test_tool_invocations[get_stale_docs...]` |
-| `clear_knowledge` | Yes | `test_tool_invocations[clear_knowledge...]` |
-| `ingest_image` | Yes | `test_ingest_image_tool` |
+| `list_knowledge` | Yes | `test_tool_invocations[list_knowledge...]` |
+| `delete_documents` | Yes | `test_tool_invocations[delete_documents...]` |
 | `list_projects` | Yes | `test_tool_invocations[list_projects...]` |
 | `switch_project` | Yes | `test_tool_invocations[switch_project...]` |
 | `create_project` | Yes | `test_tool_invocations[create_project...]` |
-| `delete_project` | Yes | `test_tool_invocations[delete_project...]` |
-| `delete_documents` | Yes | `test_tool_invocations[delete_documents...]` |
-| `list_knowledge` | Yes | `test_tool_invocations[list_knowledge...]` |
-| `update_settings` | Yes | `test_tool_invocations[update_settings...]` |
-| `get_current_settings` | Yes | `test_tool_invocations[get_current_settings...]` |
-| `list_sessions` | Yes | `test_list_sessions_tool` |
-| `get_session` | Yes | `test_get_session_tool` |
+| `get_config` | Yes | `test_tool_invocations[get_config...] (plain + validate)` |
+| `set_config` | Yes | `test_tool_invocations[set_config...], test_set_config_sends_one_batched_request_without_persist` |
+| `graph_retrieve` | Yes | `test_tool_invocations[graph_retrieve...]` |
+| `update_fact` | Yes | `test_tool_invocations[update_fact...]` |
 | `share_project` | Yes | `test_tool_invocations[share_project...]` |
 | `redeem_share` | Yes | `test_tool_invocations[redeem_share...]` |
-| `revoke_share` | Yes | `test_tool_invocations[revoke_share...]` |
 | `list_shares` | Yes | `test_tool_invocations[list_shares...]` |
-| `init_store` | Yes | `test_tool_invocations[init_store...]` |
-| `get_store_status` | No — registration check only | manifest contract test |
-| `graph_status` | Yes | `test_tool_invocations[graph_status...]` |
+| `revoke_share` | Yes | `test_tool_invocations[revoke_share...], test_revoke_share_never_sends_rotate` |
+| `extend_share` | Yes | `test_tool_invocations[extend_share...]` |
 | `show_graph` | Yes | `test_show_graph_tool` |
-| `graph_finalize` | Yes | `test_tool_invocations[graph_finalize...]` |
-| `graph_data` | Yes | `test_graph_data_tool` |
-| `get_active_leases` | Yes | `test_get_active_leases_tool` |
-| `axon_config_validate` | Yes | `test_axon_config_validate_tool` |
-| `axonConfigValidate` (alias) | No | — |
-| `axon_config_set` | Yes | `test_axon_config_set_tool` |
-| `axonConfigSet` (alias) | No | — |
-| `security_status` | Yes | `test_security_status_tool` |
-| `security_bootstrap` | Yes | `test_security_bootstrap_tool` |
-| `security_unlock` | Yes | `test_security_unlock_tool` |
-| `security_lock` | Yes | `test_security_lock_tool` |
-| `security_change_passphrase` | Yes | `test_security_change_passphrase_tool` |
+| `ingest_image` | Yes | `test_ingest_image_tool` |
 
-**Coverage gaps to address:**
-- `get_store_status` — add a parametrized test entry hitting `GET /store/status`
-- `axonConfigValidate` and `axonConfigSet` camelCase aliases — add two smoke tests verifying they are registered and produce the same results as their snake_case counterparts
+Registration parity (registerTool names == manifest == activation events) is checked by
+`tests/test_surface_parity_contract.py::TestVsCodeManifestContract::test_extension_registrations_match_manifest`.
 
 ---
 
@@ -1198,26 +1192,17 @@ The `@axon` chat participant is registered as `axon.chat`. In the Node.js runner
    `extra._copilotModels`. Attended tests should use a real PNG and observe the Copilot
    vision round-trip. Always supply `alt_text` when running in CI to skip the vision call.
 
-3. **`axon.showGovernancePanel`** — the governance panel webview (`governance/panel.ts`) is
-   not covered by the tool test parametrize list; verify via the command path (`cmd:` prefix)
-   or in real VS Code.
-
-4. **`axon.showGraphForSelection`** — reads `activeTextEditor.selection`; the stub always
+3. **`axon.showGraphForSelection`** — reads `activeTextEditor.selection`; the stub always
    provides the `_selectedText` extra config value. Real selection behaviour requires a live
    editor.
 
-5. **Security tools (T35–T39)** — all require the Axon server to have been bootstrapped with
+4. **Security tools (T35–T39)** — no longer LM tools (0.5.0); kept for reference. They all require the Axon server to have been bootstrapped with
    a passphrase. In automated tests, the `live_recorder_server` mock returns the expected
    200 response regardless; real attended tests must perform the bootstrap-unlock-lock cycle
    in order.
 
-6. **`axon.configSetup` wizard (C20)** — the `showQuickPick` stub returns the first item in
+5. **`axon.configSetup` wizard (C20)** — the `showQuickPick` stub returns the first item in
    the list by default. Step 5 uses `canPickMany: true`; the stub cannot simulate a
    multi-selection. Use `_quickPickResponse` as a plain string (e.g. `"ollama"`) for provider
    steps; the final confirmation step returns the first item (`"Apply and save"`). Full
    multi-select validation requires an attended test in real VS Code.
-
-7. **camelCase aliases** (`axonConfigValidate`, `axonConfigSet`) — registered alongside the
-   snake_case names. Both must appear in `res["registeredTools"]`. No dedicated test asserts
-   their functional equivalence; add tests to `test_vscode_extension_tools_e2e.py` if alias
-   divergence becomes a risk.

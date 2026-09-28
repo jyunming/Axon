@@ -1,12 +1,12 @@
 /**
- * Config validation and wizard LM tools + VS Code command implementations.
+ * Config LM tools (get_config / set_config) + the axon.configSetup wizard command.
  */
 
 import * as vscode from 'vscode';
 
 import { state, resolveApiBase } from '../shared';
 
-import { httpGet, httpPost, formatDetail, apiConnectionError } from '../client/http';
+import { httpGet, httpPost, formatDetail, parseJsonSafe, apiConnectionError } from '../client/http';
 
 // ---------------------------------------------------------------------------
 
@@ -14,43 +14,50 @@ import { httpGet, httpPost, formatDetail, apiConnectionError } from '../client/h
 
 // ---------------------------------------------------------------------------
 
-export class AxonConfigValidateTool implements vscode.LanguageModelTool<any> {
-  async prepareInvocation(_options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
+function formatValidation(data: any): string {
+  const issues: any[] = data?.issues || [];
+  const valid: boolean = data?.valid ?? true;
+  if (issues.length === 0) {
+    return 'Config validation passed. No issues found.';
+  }
+  const lines = issues.map((issue: any) => {
+    const suggestion = issue.suggestion ? ` Suggestion: ${issue.suggestion}` : '';
+    return `[${String(issue.level).toUpperCase()}] ${issue.section}.${issue.field}: ${issue.message}${suggestion}`;
+  });
+  const summary = valid
+    ? `Config has ${issues.length} notice(s) (no errors):`
+    : `Config has errors (${issues.filter((i: any) => i.level === 'error').length} error(s)):`;
+  return `${summary}\n${lines.join('\n')}`;
+}
+
+/** get_config — GET /config (secrets masked); validate=true adds GET /config/validate. */
+export class AxonConfigGetTool implements vscode.LanguageModelTool<any> {
+  async prepareInvocation(options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
     return {
-      invocationMessage: 'Validating Axon config.yaml...',
+      invocationMessage: options.input?.validate ? 'Reading and validating Axon config…' : 'Reading Axon config…',
     };
   }
-  async invoke(_options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
+  async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
     const apiBase = resolveApiBase();
     const apiKey = config.get<string>('apiKey', '');
     try {
-      const result = await httpGet(`${apiBase}/config/validate`, apiKey);
-      const data = JSON.parse(result.body);
+      const result = await httpGet(`${apiBase}/config`, apiKey);
+      const data = parseJsonSafe(result.body);
       if (result.status !== 200) {
         return new (vscode as any).LanguageModelToolResult([
-          new (vscode as any).LanguageModelTextPart(
-            `Axon API Error (${result.status}): ${formatDetail(data, result.body)}`
-          ),
+          new (vscode as any).LanguageModelTextPart(`Axon API Error (${result.status}): ${formatDetail(data, result.body)}`),
         ]);
       }
-      const issues: any[] = data.issues || [];
-      const valid: boolean = data.valid ?? true;
-      if (issues.length === 0) {
-        return new (vscode as any).LanguageModelToolResult([
-          new (vscode as any).LanguageModelTextPart('Config validation passed. No issues found.'),
-        ]);
+      let text = `Current Axon config:\n${JSON.stringify(data, null, 2)}`;
+      if (options.input?.validate === true) {
+        const vResult = await httpGet(`${apiBase}/config/validate`, apiKey);
+        const vData = parseJsonSafe(vResult.body);
+        text += vResult.status === 200
+          ? `\n\nValidation:\n${formatValidation(vData)}`
+          : `\n\nValidation error (${vResult.status}): ${formatDetail(vData, vResult.body)}`;
       }
-      const lines = issues.map((issue: any) => {
-        const suggestion = issue.suggestion ? ` Suggestion: ${issue.suggestion}` : '';
-        return `[${issue.level.toUpperCase()}] ${issue.section}.${issue.field}: ${issue.message}${suggestion}`;
-      });
-      const summary = valid
-        ? `Config has ${issues.length} notice(s) (no errors):`
-        : `Config has errors (${issues.filter((i: any) => i.level === 'error').length} error(s)):`;
-      return new (vscode as any).LanguageModelToolResult([
-        new (vscode as any).LanguageModelTextPart(`${summary}\n${lines.join('\n')}`),
-      ]);
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(text)]);
     } catch (err) {
       return new (vscode as any).LanguageModelToolResult([
         new (vscode as any).LanguageModelTextPart(apiConnectionError(err)),
@@ -60,57 +67,50 @@ export class AxonConfigValidateTool implements vscode.LanguageModelTool<any> {
 
 }
 
+/**
+ * set_config — one batched POST /config/set {settings, persist}. The server
+ * resolves every key first, so an unknown key rejects the whole batch and
+ * nothing is applied. persist defaults to false (running server only).
+ */
 export class AxonConfigSetTool implements vscode.LanguageModelTool<any> {
   async prepareInvocation(options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
-    const changes = options.input.changes || {};
-    const keys = Object.keys(changes).join(', ');
+    const keys = Object.keys(options.input?.settings || {}).join(', ');
     return {
       invocationMessage: `Applying Axon config changes: ${keys}...`,
     };
   }
-  /**
-   * Accepts input of the form: { changes: { "chunk.strategy": "markdown", "rag.top_k": 15 } }
-   * Each key is a dot-notation config field; calls POST /config/set for each change.
-   */
   async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
     const apiBase = resolveApiBase();
     const apiKey = config.get<string>('apiKey', '');
-    const changes: Record<string, any> = options.input.changes || {};
-    const persist: boolean = options.input.persist !== false; // default true
-    const results: string[] = [];
-    const errors: string[] = [];
-    for (const [key, value] of Object.entries(changes)) {
-      try {
-        const result = await httpPost(`${apiBase}/config/set`, { key, value, persist }, apiKey);
-        const data = JSON.parse(result.body);
-        if (result.status !== 200) {
-          errors.push(`${key}: API Error (${result.status}) — ${formatDetail(data, result.body)}`);
-        } else {
-          const isSensitive = /key|secret|password|token/i.test(key);
-          const display = isSensitive ? '[redacted]' : JSON.stringify(data.new_value);
-          const prev = isSensitive ? '[redacted]' : JSON.stringify(data.old_value);
-          results.push(`${key} = ${display} (was ${prev})`);
-        }
-      } catch (err) {
-        errors.push(`${key}: ${err instanceof Error ? err.message : String(err)}`);
+    const settings: Record<string, any> = options.input?.settings || {};
+    const persist: boolean = options.input?.persist === true; // default false
+    if (Object.keys(settings).length === 0) {
+      return new (vscode as any).LanguageModelToolResult([
+        new (vscode as any).LanguageModelTextPart('No changes provided.'),
+      ]);
+    }
+    try {
+      const result = await httpPost(`${apiBase}/config/set`, { settings, persist }, apiKey);
+      const data = parseJsonSafe(result.body);
+      if (result.status !== 200) {
+        return new (vscode as any).LanguageModelToolResult([
+          new (vscode as any).LanguageModelTextPart(`Config not changed (${result.status}): ${formatDetail(data, result.body)}`),
+        ]);
       }
+      const applied: any[] = Array.isArray(data.applied) ? data.applied : [];
+      const lines = [`Applied ${applied.length} config change(s)${persist ? ' (saved to config.yaml)' : ' (running server only)'}:`];
+      for (const a of applied) {
+        lines.push(`  ✓ ${a.key} = ${JSON.stringify(a.new_value)} (was ${JSON.stringify(a.old_value)})`);
+      }
+      return new (vscode as any).LanguageModelToolResult([
+        new (vscode as any).LanguageModelTextPart(lines.join('\n')),
+      ]);
+    } catch (err) {
+      return new (vscode as any).LanguageModelToolResult([
+        new (vscode as any).LanguageModelTextPart(apiConnectionError(err)),
+      ]);
     }
-    const lines: string[] = [];
-    if (results.length > 0) {
-      lines.push(`Applied ${results.length} config change(s):`);
-      results.forEach(r => lines.push(`  ✓ ${r}`));
-    }
-    if (errors.length > 0) {
-      lines.push(`${errors.length} error(s):`);
-      errors.forEach(e => lines.push(`  ✗ ${e}`));
-    }
-    if (lines.length === 0) {
-      lines.push('No changes provided.');
-    }
-    return new (vscode as any).LanguageModelToolResult([
-      new (vscode as any).LanguageModelTextPart(lines.join('\n')),
-    ]);
   }
 
 }

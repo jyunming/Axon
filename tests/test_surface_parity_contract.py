@@ -4,7 +4,11 @@
 Validates that the surface capability registry is consistent with:
 
 
-- VS Code extension manifest (package.json tool declarations)
+- VS Code extension manifest (package.json tool declarations) and extension.ts
+  registrations
+
+
+- MCP tool set (mcp_server.py ``@mcp.tool()`` registrations)
 
 
 - REPL command set (via repl.py source inspection)
@@ -69,6 +73,80 @@ def _cli_source() -> str:
     return (REPO_ROOT / "src" / "axon" / "cli.py").read_text(encoding="utf-8")
 
 
+def _mcp_tool_names() -> set[str]:
+    """MCP tools as registered in source — the same regex as
+    tests/test_config_surface_parity.py, so an undecorated coroutine doesn't count."""
+    import re
+
+    src = (REPO_ROOT / "src" / "axon" / "mcp_server.py").read_text(encoding="utf-8")
+    return set(re.findall(r"@mcp\.tool\(\)\s*\nasync def (\w+)", src))
+
+
+def _manifest_tool_names() -> set[str]:
+    return {t["name"] for t in _extension_manifest()["contributes"]["languageModelTools"]}
+
+
+def _extension_registered_tool_names() -> list[str]:
+    import re
+
+    src = (_extension_root() / "src" / "extension.ts").read_text(encoding="utf-8")
+    return re.findall(r"registerTool\(\s*'([^']+)'", src)
+
+
+# Capability id -> agent tool name. Shared by MCP and the VS Code LM tools
+# (their names are identical). Several capabilities fold into one tool.
+_CAP_TO_AGENT_TOOL = {
+    "query": "query_knowledge",
+    "search": "search_knowledge",
+    "ingest_text": "ingest_knowledge",
+    "ingest_url": "ingest_knowledge",
+    "ingest_path": "ingest_knowledge",
+    "ingest_refresh": "ingest_knowledge",
+    "collection_inspect": "list_knowledge",
+    "collection_delete": "delete_documents",
+    "project_list": "list_projects",
+    "project_switch": "switch_project",
+    "project_create": "create_project",
+    "config_update": "set_config",
+    "config_read": "get_config",
+    "graph_retrieve": "graph_retrieve",
+    "graph_fact_update": "update_fact",
+    "share_generate": "share_project",
+    "share_redeem": "redeem_share",
+    "share_revoke": "revoke_share",
+    "share_list": "list_shares",
+    "share_extend": "extend_share",
+}
+
+# Agent tools that are plumbing or client-side features, not registry capabilities.
+_MCP_TOOLS_WITHOUT_CAPABILITY = {"get_job_status"}
+_VSCODE_TOOLS_WITHOUT_CAPABILITY = {"get_job_status", "show_graph", "ingest_image"}
+
+# Destructive / credential operations that must never be agent-callable.
+_HUMAN_ONLY_TOOL_NAMES = {
+    "delete_project",
+    "clear_knowledge",
+    "security_change_passphrase",
+    "security_bootstrap",
+    "security_unlock",
+    "security_lock",
+    "init_store",
+    "seal_project",
+    "pack_project",
+    "unpack_project",
+}
+
+
+def _expected_agent_tools(surface) -> set[str]:
+    from axon.surface_contract import REGISTRY
+
+    return {
+        _CAP_TO_AGENT_TOOL[c.id]
+        for c in REGISTRY
+        if surface in c.supported_surfaces and c.id in _CAP_TO_AGENT_TOOL
+    }
+
+
 # ---------------------------------------------------------------------------
 
 # Registry shape tests
@@ -100,6 +178,39 @@ class TestRegistryShape:
             if cap.tier == Tier.ONE:
                 assert cap.api_route, f"Tier 1 capability {cap.id} has no api_route"
 
+    def test_tier1_is_on_every_human_surface(self):
+        """Tier 1 means "required on every human surface" (API, REPL, CLI)."""
+        from axon.surface_contract import HUMAN_SURFACES, REGISTRY, Tier
+
+        for cap in REGISTRY:
+            if cap.tier == Tier.ONE:
+                assert HUMAN_SURFACES <= cap.supported_surfaces, cap.id
+
+    def test_every_capability_has_a_human_surface(self):
+        """Nothing may be agent-only: a human can always reach every capability."""
+        from axon.surface_contract import HUMAN_SURFACES, REGISTRY
+
+        for cap in REGISTRY:
+            assert cap.supported_surfaces & HUMAN_SURFACES, cap.id
+
+    def test_agent_gaps_have_reasons(self):
+        """A capability kept off MCP/VS Code must say why (and, for human-only
+        operations, where a human does it)."""
+        from axon.surface_contract import AGENT_SURFACES, REGISTRY
+
+        for cap in REGISTRY:
+            for surface in AGENT_SURFACES - cap.supported_surfaces:
+                reason = cap.intentional_exceptions.get(surface, "")
+                assert reason, f"{cap.id} missing {surface} exception"
+
+    def test_human_only_reasons_name_a_route(self):
+        from axon.surface_contract import REGISTRY, Surface
+
+        for cap in REGISTRY:
+            reason = cap.intentional_exceptions.get(Surface.MCP, "")
+            if "human-only" in reason:
+                assert "REST" in reason, f"{cap.id}: human-only reason names no route"
+
     def test_intentional_exceptions_only_for_non_supported(self):
         from axon.surface_contract import REGISTRY
 
@@ -125,63 +236,152 @@ class TestVsCodeManifestContract:
             pytest.skip("VS Code extension directory not found")
 
     def test_manifest_tool_count(self):
-        """Extension manifest should declare 41 tools (39 prior + pack_project + unpack_project)."""
-        manifest = _extension_manifest()
-        tools = manifest["contributes"]["languageModelTools"]
+        """0.5.0: the Copilot LM tool set is the 18 MCP tools + show_graph + ingest_image."""
+        tools = _extension_manifest()["contributes"]["languageModelTools"]
         assert (
-            len(tools) == 41
-        ), f"Expected 41 tools, got {len(tools)}: {[t['name'] for t in tools]}"
+            len(tools) == 20
+        ), f"Expected 20 tools, got {len(tools)}: {[t['name'] for t in tools]}"
 
-    def test_tier1_vscode_capabilities_in_manifest(self):
-        """Every Tier 1 capability with VS Code support has a corresponding manifest tool."""
+    def test_manifest_matches_vscode_capabilities(self):
+        """The manifest declares exactly the tools of the VS Code-supported
+        capabilities, plus the client-side extras — nothing more, nothing less."""
+        from axon.surface_contract import Surface
+
+        expected = _expected_agent_tools(Surface.VSCODE) | _VSCODE_TOOLS_WITHOUT_CAPABILITY
+        actual = _manifest_tool_names()
+        assert (
+            actual == expected
+        ), f"missing: {sorted(expected - actual)}  extra: {sorted(actual - expected)}"
+
+    def test_every_vscode_capability_has_a_tool_mapping(self):
         from axon.surface_contract import REGISTRY, Surface, Tier
 
-        manifest = _extension_manifest()
-        tool_names = {t["name"] for t in manifest["contributes"]["languageModelTools"]}
-        # Tool names are now identical to MCP (snake_case, no axon_ prefix)
-        _CAP_TO_TOOL = {
-            "query": "query_knowledge",
-            "search": "search_knowledge",
-            "ingest_text": "ingest_text",
-            "ingest_url": "ingest_url",
-            "ingest_path": "ingest_path",
-            "ingest_refresh": "refresh_ingest",
-            "ingest_stale": "get_stale_docs",
-            "collection_inspect": "list_knowledge",
-            "collection_delete": "delete_documents",
-            "collection_clear": "clear_knowledge",
-            "project_list": "list_projects",
-            "project_switch": "switch_project",
-            "project_create": "create_project",
-            "project_delete": "delete_project",
-            "config_update": "update_settings",
-            "config_read": "get_current_settings",
-            "store_status": "get_store_status",
-            "store_init": "init_store",
-            "share_generate": "share_project",
-            "share_redeem": "redeem_share",
-            "share_revoke": "revoke_share",
-            "share_list": "list_shares",
-            "graph_status": "graph_status",
-            "graph_finalize": "graph_finalize",
-            "active_leases": "get_active_leases",
-        }
-        for cap in REGISTRY:
-            if cap.tier not in (Tier.ONE, Tier.TWO) or Surface.VSCODE not in cap.supported_surfaces:
-                continue
-            expected_tool = _CAP_TO_TOOL.get(cap.id)
-            if expected_tool:
-                assert expected_tool in tool_names, (
-                    f"Tier 1 capability '{cap.id}' requires VS Code tool '{expected_tool}' "
-                    f"but it is missing from manifest"
-                )
+        unmapped = [
+            c.id
+            for c in REGISTRY
+            if c.tier in (Tier.ONE, Tier.TWO)
+            and Surface.VSCODE in c.supported_surfaces
+            and c.id not in _CAP_TO_AGENT_TOOL
+        ]
+        assert not unmapped, f"VS Code capabilities with no LM tool mapping: {unmapped}"
 
-    def test_get_settings_and_finalize_in_manifest(self):
-        """get_current_settings and graph_finalize should be in manifest."""
+    def test_manifest_shares_mcp_tool_names(self):
+        """Where a tool exists on both agent surfaces it has the same name."""
+        shared = _manifest_tool_names() - _VSCODE_TOOLS_WITHOUT_CAPABILITY
+        assert shared <= _mcp_tool_names(), sorted(shared - _mcp_tool_names())
+
+    def test_old_settings_and_admin_tools_removed_from_manifest(self):
+        names = _manifest_tool_names()
+        for gone in (
+            "get_current_settings",
+            "update_settings",
+            "graph_finalize",
+            "graph_status",
+            "axonConfigSet",
+            "axonConfigValidate",
+            "get_active_leases",
+        ):
+            assert gone not in names, gone
+
+    def test_extension_registrations_match_manifest(self):
+        """registerTool() names == manifest languageModelTools ==
+        onLanguageModelTool activation events. A registered-but-undeclared tool
+        is dead code; a declared-but-unregistered tool errors when Copilot calls it."""
+        registered = _extension_registered_tool_names()
+        assert len(registered) == len(set(registered)), f"duplicate registerTool: {registered}"
         manifest = _extension_manifest()
-        tool_names = {t["name"] for t in manifest["contributes"]["languageModelTools"]}
-        assert "get_current_settings" in tool_names
-        assert "graph_finalize" in tool_names
+        declared = _manifest_tool_names()
+        events = {
+            e.split(":", 1)[1]
+            for e in manifest.get("activationEvents", [])
+            if e.startswith("onLanguageModelTool:")
+        }
+        assert set(registered) == declared, (
+            f"registered-only: {sorted(set(registered) - declared)}  "
+            f"declared-only: {sorted(declared - set(registered))}"
+        )
+        assert (
+            events == declared
+        ), f"event-only: {sorted(events - declared)}  no-event: {sorted(declared - events)}"
+
+    def test_governance_panel_removed(self):
+        manifest = _extension_manifest()
+        commands = {c["command"] for c in manifest["contributes"].get("commands", [])}
+        assert "axon.showGovernancePanel" not in commands
+        src = (_extension_root() / "src" / "extension.ts").read_text(encoding="utf-8")
+        assert "governance" not in src.lower()
+        assert not (_extension_root() / "src" / "governance" / "panel.ts").exists()
+
+
+# ---------------------------------------------------------------------------
+# MCP surface contract
+# ---------------------------------------------------------------------------
+class TestMcpSurfaceContract:
+
+    """The MCP tool set is exactly the tools of the MCP-supported capabilities."""
+
+    def test_mcp_tools_match_mcp_capabilities(self):
+        from axon.surface_contract import Surface
+
+        expected = _expected_agent_tools(Surface.MCP) | _MCP_TOOLS_WITHOUT_CAPABILITY
+        actual = _mcp_tool_names()
+        assert (
+            actual == expected
+        ), f"missing: {sorted(expected - actual)}  extra: {sorted(actual - expected)}"
+
+    def test_every_mcp_capability_has_a_tool_mapping(self):
+        from axon.surface_contract import REGISTRY, Surface, Tier
+
+        unmapped = [
+            c.id
+            for c in REGISTRY
+            if c.tier in (Tier.ONE, Tier.TWO)
+            and Surface.MCP in c.supported_surfaces
+            and c.id not in _CAP_TO_AGENT_TOOL
+        ]
+        assert not unmapped, f"MCP capabilities with no tool mapping: {unmapped}"
+
+    def test_mcp_tool_count(self):
+        assert len(_mcp_tool_names()) == 18
+
+    def test_agent_surfaces_carry_the_same_capabilities(self):
+        from axon.surface_contract import REGISTRY, Surface
+
+        mcp = {c.id for c in REGISTRY if Surface.MCP in c.supported_surfaces}
+        vscode = {c.id for c in REGISTRY if Surface.VSCODE in c.supported_surfaces}
+        assert mcp == vscode
+
+
+class TestDestructiveOpsAbsentFromAgentSurfaces:
+    def test_destructive_ops_absent_from_agent_surfaces(self):
+        leaked_mcp = sorted(_HUMAN_ONLY_TOOL_NAMES & _mcp_tool_names())
+        assert not leaked_mcp, f"human-only ops exposed over MCP: {leaked_mcp}"
+        if _extension_root().exists():
+            leaked_vs = sorted(_HUMAN_ONLY_TOOL_NAMES & _manifest_tool_names())
+            assert not leaked_vs, f"human-only ops in the VS Code manifest: {leaked_vs}"
+            registered = set(_extension_registered_tool_names())
+            leaked_reg = sorted(_HUMAN_ONLY_TOOL_NAMES & registered)
+            assert not leaked_reg, f"human-only ops registered as LM tools: {leaked_reg}"
+
+    def test_no_agent_tool_takes_rotate(self):
+        """Share-key rotation (hard revoke) is human-only on every agent tool."""
+        import inspect
+
+        import axon.mcp_server as mod
+
+        for name in _mcp_tool_names():
+            params = inspect.signature(getattr(mod, name)).parameters
+            assert "rotate" not in params, f"MCP tool {name} exposes rotate"
+        if _extension_root().exists():
+            for tool in _extension_manifest()["contributes"]["languageModelTools"]:
+                props = tool.get("inputSchema", {}).get("properties", {})
+                assert "rotate" not in props, f"VS Code tool {tool['name']} exposes rotate"
+
+    def test_vscode_revoke_share_never_sends_rotate(self):
+        if not _extension_root().exists():
+            pytest.skip("VS Code extension directory not found")
+        src = (_extension_root() / "src" / "tools" / "shares.ts").read_text(encoding="utf-8")
+        assert "rotate" not in src
 
 
 # ---------------------------------------------------------------------------
@@ -190,6 +390,11 @@ class TestVsCodeManifestContract:
 class TestCliSurfaceContract:
 
     """CLI source must expose all Tier 1 capabilities mapped to CLI."""
+
+    def test_clear_requires_yes(self):
+        cli_src = _cli_source()
+        assert '"--clear"' in cli_src
+        assert '"--yes"' in cli_src
 
     def test_tier1_cli_capabilities_in_source(self):
         """Every Tier 1 CLI capability has a corresponding argparse flag."""
@@ -206,7 +411,7 @@ class TestCliSurfaceContract:
             "ingest_refresh": "--refresh",
             "ingest_stale": "--list-stale",
             "collection_inspect": "--list",
-            "collection_clear": None,  # CLI clear not yet wired — intentional exception
+            "collection_clear": "--clear",
             "project_list": "--project-list",
             "project_switch": "--project",
             "project_create": "--project-new",
@@ -417,14 +622,15 @@ class TestB1ParitySweep:
         for flag in ("--share-extend", "--store-whoami", "--mount-refresh"):
             assert flag in cli_src, f"Missing CLI flag: {flag}"
 
-    def test_new_vscode_tools_in_manifest(self):
-        """seal_project, extend_share, store_whoami tools are in package.json."""
+    def test_b1_vscode_tools_in_manifest(self):
+        """extend_share stays an LM tool; seal_project and store_whoami became
+        human-only in 0.5.0 (CLI/REPL/REST)."""
         if not _extension_root().exists():
             pytest.skip("VS Code extension directory not found")
-        manifest = _extension_manifest()
-        tool_names = {t["name"] for t in manifest["contributes"]["languageModelTools"]}
-        for tool in ("seal_project", "extend_share", "store_whoami"):
-            assert tool in tool_names, f"VS Code manifest missing tool: {tool}"
+        tool_names = _manifest_tool_names()
+        assert "extend_share" in tool_names
+        for tool in ("seal_project", "store_whoami"):
+            assert tool not in tool_names, f"{tool} is human-only since 0.5.0"
 
     def test_share_extend_in_repl(self):
         """/share extend handler is present in repl.py."""
@@ -440,8 +646,7 @@ class TestB1ParitySweep:
 # ---------------------------------------------------------------------------
 class TestGraphFactUpdateContract:
     """graph_fact_update is registered and actually wired on every surface it
-    claims (API route, CLI flag, REPL sub-command); VS Code/MCP arrive with the
-    agent-surface consolidation and must carry a documented exception."""
+    claims (API route, CLI flag, REPL sub-command, MCP tool, VS Code LM tool)."""
 
     def _cap(self):
         from axon.surface_contract import REGISTRY
@@ -456,8 +661,14 @@ class TestGraphFactUpdateContract:
         assert cap.tier == Tier.TWO
         assert cap.category == "graph"
         assert cap.api_route == "/graph/facts"
-        assert cap.supported_surfaces == frozenset({Surface.API, Surface.REPL, Surface.CLI})
-        assert cap.intentional_exceptions.get(Surface.VSCODE)
+        assert cap.supported_surfaces == frozenset(Surface)
+        assert not cap.intentional_exceptions
+
+    def test_agent_tools_exist(self):
+        assert "update_fact" in _mcp_tool_names()
+        if _extension_root().exists():
+            assert "update_fact" in _manifest_tool_names()
+            assert "update_fact" in _extension_registered_tool_names()
 
     def test_api_route_exists(self):
         from axon.api_routes import graph

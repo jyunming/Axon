@@ -165,6 +165,19 @@ def remote_project_delete(base: str, name: str, headers: dict[str, str]) -> Any:
     return _request("POST", f"{base}/project/delete/{name}", headers, {})
 
 
+def remote_clear(base: str, headers: dict[str, str], project: str | None = None) -> Any:
+    """Wipe the server's active project (``POST /clear``).
+
+    *project* is sent as an assertion: if another client switched the server
+    to a different project since the caller's switch, the server answers 409
+    and clears nothing — so a clear can never land on the wrong project.
+    """
+    body: dict = {}
+    if project:
+        body["project"] = project
+    return _request("POST", f"{base}/clear", headers, body)
+
+
 def remote_project_pack(
     base: str, name: str, headers: dict[str, str], *, out_path: str | None = None
 ) -> Any:
@@ -194,6 +207,7 @@ def remote_ingest(
     path: str,
     headers: dict[str, str],
     *,
+    project: str | None = None,
     on_progress: Callable[[dict], None] | None = None,
     poll_interval: float = 2.0,
     max_wait_s: float = 3600.0,
@@ -203,10 +217,14 @@ def remote_ingest(
     POSTs the absolute path to ``/ingest`` (the server reads it locally — same
     machine), then polls ``/ingest/status/{job_id}`` until ``completed`` or
     ``failed``. Returns the final job dict. Raises ``RuntimeError`` on a failed
-    job or if the job doesn't finish within ``max_wait_s``.
+    job or if the job doesn't finish within ``max_wait_s``. *project* is sent
+    as an assertion (409 if the server is serving a different project).
     """
     abs_path = os.path.abspath(path)
-    started = _request("POST", f"{base}/ingest", headers, {"path": abs_path})
+    body: dict = {"path": abs_path}
+    if project:
+        body["project"] = project
+    started = _request("POST", f"{base}/ingest", headers, body)
     job_id = started.get("job_id")
     if not job_id:
         # Some deployments ingest synchronously; treat a body without a job_id

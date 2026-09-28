@@ -257,7 +257,7 @@ class TestRestRevokeSealedRouting:
 
 
 # ---------------------------------------------------------------------------
-# MCP: revoke_share forwards rotate + project flags
+# MCP: revoke_share is a soft revoke only — rotation is human-only (0.5.0)
 # ---------------------------------------------------------------------------
 
 
@@ -275,27 +275,9 @@ class TestMcpRevokeShare:
 
         asyncio.run(_run())
 
-    def test_sealed_revoke_with_project_and_rotate(self):
-        from axon.mcp_server import revoke_share
-
-        async def _run():
-            mock = AsyncMock(return_value={"status": "hard_revoked"})
-            with patch("axon.mcp_server._post", mock):
-                await revoke_share(key_id="ssk_x", project="research", rotate=True)
-            args, _ = mock.call_args
-            body = args[1]
-            assert body == {
-                "key_id": "ssk_x",
-                "project": "research",
-                "rotate": True,
-            }
-
-        asyncio.run(_run())
-
-    def test_sealed_revoke_default_rotate_false_omits_field(self):
-        """When rotate=False (default), we omit it from the body so the
-        wire format stays minimal — matches the legacy revoke_share
-        omits-when-default convention used elsewhere."""
+    def test_sealed_soft_revoke_forwards_project(self):
+        """A sealed (ssk_) revoke needs ``project`` to locate the wrap file —
+        the REST route 400s without it — so the agent tool keeps it."""
         from axon.mcp_server import revoke_share
 
         async def _run():
@@ -303,26 +285,50 @@ class TestMcpRevokeShare:
             with patch("axon.mcp_server._post", mock):
                 await revoke_share(key_id="ssk_x", project="research")
             args, _ = mock.call_args
-            body = args[1]
-            assert body == {"key_id": "ssk_x", "project": "research"}
+            assert args[1] == {"key_id": "ssk_x", "project": "research"}
+
+        asyncio.run(_run())
+
+    def test_agent_revoke_cannot_rotate(self):
+        """Hard revoke (DEK rotation, invalidates every share) is human-only:
+        the MCP tool has no ``rotate`` parameter and never sends one."""
+        import inspect
+
+        import pytest
+
+        from axon.mcp_server import revoke_share
+
+        assert "rotate" not in inspect.signature(revoke_share).parameters
+
+        async def _run():
+            with pytest.raises(TypeError):
+                await revoke_share(key_id="ssk_x", project="research", rotate=True)
 
         asyncio.run(_run())
 
 
 # ---------------------------------------------------------------------------
-# Surface registration: revoke_share is still in EXPECTED_MCP_TOOL_NAMES
-# (the existing test_mcp_server.py contract test)
+# Surface registration: the sharing tools stay on the agent surface
 # ---------------------------------------------------------------------------
 
 
 class TestMcpToolRegistration:
-    def test_revoke_share_still_registered(self):
+    def test_share_tools_still_registered(self):
         from axon.mcp_server import mcp
 
         async def _run():
             tools_resp = await mcp.list_tools()
             tools = tools_resp.tools if hasattr(tools_resp, "tools") else tools_resp
-            names = [t.name for t in tools]
-            assert "revoke_share" in names
+            by_name = {t.name: t for t in tools}
+            for name in (
+                "share_project",
+                "redeem_share",
+                "list_shares",
+                "revoke_share",
+                "extend_share",
+            ):
+                assert name in by_name, name
+            schema = by_name["revoke_share"].inputSchema
+            assert "rotate" not in schema.get("properties", {})
 
         asyncio.run(_run())

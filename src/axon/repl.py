@@ -74,7 +74,7 @@ _SLASH_COMMANDS = [
 
 _SLASH_CMD_DESC: dict[str, str] = {
     "/agent": "Toggle agent mode (LLM calls Axon tools)",
-    "/clear": "Clear conversation history",
+    "/clear": "Wipe the current project's knowledge base (asks to confirm)",
     "/compact": "Summarize and compact chat history",
     "/config": "Show current configuration",
     "/context": "Show or clear attached context files",

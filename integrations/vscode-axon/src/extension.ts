@@ -11,6 +11,7 @@
  *   tools/projects.ts  — project management LM tools + commands
  *   tools/shares.ts    — share LM tools + commands
  *   tools/graph.ts     — graph LM tools + commands
+ *   tools/config.ts    — config LM tools + setup wizard command
  */
 
 import * as vscode from 'vscode';
@@ -26,9 +27,7 @@ import { showGraphForQuery, showGraphForSelection } from './graph/panel';
 import { makeChatHandler, AxonSearchTool, AxonQueryTool } from './tools/query';
 
 import {
-  AxonIngestTextTool, AxonIngestUrlTool, AxonIngestPathTool,
-  AxonGetIngestStatusTool, AxonIngestImageTool, AxonRefreshIngestTool,
-  AxonGetStaleDocsTool, AxonClearKnowledgeTool, AxonIngestTextsTool,
+  AxonIngestKnowledgeTool, AxonGetIngestStatusTool, AxonIngestImageTool,
   ingestCurrentFile, ingestWorkspaceFolder, ingestPickedFolder,
   refreshIngest, listStaleDocs, clearKnowledgeBase,
 
@@ -36,38 +35,25 @@ import {
 
 import {
   AxonListProjectsTool, AxonSwitchProjectTool, AxonCreateProjectTool,
-  AxonDeleteProjectTool, AxonDeleteDocumentsTool, AxonListKnowledgeTool,
-  AxonUpdateSettingsTool, AxonGetCurrentSettingsTool,
-  AxonListSessionsTool, AxonGetSessionTool,
-  AxonPackProjectTool, AxonUnpackProjectTool,
+  AxonDeleteDocumentsTool, AxonListKnowledgeTool,
   switchProject, createNewProject,
 
 } from './tools/projects';
 
 import {
   AxonShareProjectTool, AxonRedeemShareTool, AxonRevokeShareTool,
-  AxonListSharesTool, AxonInitStoreTool, AxonGetStoreStatusTool,
-  AxonExtendShareTool, AxonStoreWhoamiTool,
+  AxonListSharesTool, AxonExtendShareTool,
   initStore, shareProject, redeemShare, revokeShare, listShares,
 
 } from './tools/shares';
 
 import {
-  AxonGraphStatusTool, AxonShowGraphTool, AxonGraphFinalizeTool,
-  AxonGraphDataTool, AxonGetActiveLeasesTool,
-  AxonGraphConflictsTool, AxonGraphRetrieveTool,
+  AxonShowGraphTool, AxonGraphRetrieveTool, AxonUpdateFactTool,
   showGraphStatus,
 
 } from './tools/graph';
 
-import { AxonConfigValidateTool, AxonConfigSetTool, runConfigSetupWizard } from './tools/config';
-
-import {
-  AxonSecurityStatusTool, AxonSecurityBootstrapTool, AxonSecurityUnlockTool,
-  AxonSecurityLockTool, AxonSecurityChangePassphraseTool, AxonSealProjectTool,
-} from './tools/security';
-
-import { showGovernancePanel } from './governance/panel';
+import { AxonConfigGetTool, AxonConfigSetTool, runConfigSetupWizard } from './tools/config';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   state.outputChannel = vscode.window.createOutputChannel('Axon');
@@ -129,66 +115,40 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (query) { await showGraphForQuery(context, query); }
     }),
     vscode.commands.registerCommand('axon.showGraphForSelection', () => showGraphForSelection(context)),
-    vscode.commands.registerCommand('axon.showGovernancePanel', () => showGovernancePanel(context)),
     vscode.commands.registerCommand('axon.configSetup', async () => {
       const cfg = vscode.workspace.getConfiguration('axon');
       const apiKey = cfg.get<string>('apiKey', '');
       await runConfigSetupWizard(resolveApiBase(), apiKey);
     }),
   );
-  // Register Language Model Tools (for Copilot Agent toolset)
+  // Register Language Model Tools (for the Copilot agent toolset). Exactly the
+  // tools declared in package.json contributes.languageModelTools — the 18 MCP
+  // tools plus show_graph and ingest_image (0.5.0). Destructive and admin
+  // operations stay human-only: they are the commands registered above.
   try {
     if ('lm' in vscode && (vscode as any).lm.registerTool) {
       state.outputChannel.appendLine('Registering Axon Language Model Tools...');
       context.subscriptions.push(
         (vscode as any).lm.registerTool('search_knowledge', new AxonSearchTool(context)),
         (vscode as any).lm.registerTool('query_knowledge', new AxonQueryTool(context)),
-        (vscode as any).lm.registerTool('ingest_text', new AxonIngestTextTool()),
-        (vscode as any).lm.registerTool('ingest_texts', new AxonIngestTextsTool()),
-        (vscode as any).lm.registerTool('ingest_url', new AxonIngestUrlTool()),
-        (vscode as any).lm.registerTool('ingest_path', new AxonIngestPathTool()),
+        (vscode as any).lm.registerTool('ingest_knowledge', new AxonIngestKnowledgeTool()),
         (vscode as any).lm.registerTool('get_job_status', new AxonGetIngestStatusTool()),
-        (vscode as any).lm.registerTool('refresh_ingest', new AxonRefreshIngestTool()),
+        (vscode as any).lm.registerTool('list_knowledge', new AxonListKnowledgeTool()),
+        (vscode as any).lm.registerTool('delete_documents', new AxonDeleteDocumentsTool()),
         (vscode as any).lm.registerTool('list_projects', new AxonListProjectsTool()),
         (vscode as any).lm.registerTool('switch_project', new AxonSwitchProjectTool()),
         (vscode as any).lm.registerTool('create_project', new AxonCreateProjectTool()),
-        (vscode as any).lm.registerTool('delete_project', new AxonDeleteProjectTool()),
-        (vscode as any).lm.registerTool('delete_documents', new AxonDeleteDocumentsTool()),
-        (vscode as any).lm.registerTool('list_knowledge', new AxonListKnowledgeTool()),
-        (vscode as any).lm.registerTool('clear_knowledge', new AxonClearKnowledgeTool()),
-        (vscode as any).lm.registerTool('get_stale_docs', new AxonGetStaleDocsTool()),
-        (vscode as any).lm.registerTool('update_settings', new AxonUpdateSettingsTool()),
-        (vscode as any).lm.registerTool('get_current_settings', new AxonGetCurrentSettingsTool()),
-        (vscode as any).lm.registerTool('list_sessions', new AxonListSessionsTool()),
-        (vscode as any).lm.registerTool('get_session', new AxonGetSessionTool()),
+        (vscode as any).lm.registerTool('get_config', new AxonConfigGetTool()),
+        (vscode as any).lm.registerTool('set_config', new AxonConfigSetTool()),
+        (vscode as any).lm.registerTool('graph_retrieve', new AxonGraphRetrieveTool()),
+        (vscode as any).lm.registerTool('update_fact', new AxonUpdateFactTool()),
         (vscode as any).lm.registerTool('share_project', new AxonShareProjectTool()),
         (vscode as any).lm.registerTool('redeem_share', new AxonRedeemShareTool()),
-        (vscode as any).lm.registerTool('revoke_share', new AxonRevokeShareTool()),
         (vscode as any).lm.registerTool('list_shares', new AxonListSharesTool()),
-        (vscode as any).lm.registerTool('init_store', new AxonInitStoreTool()),
-        (vscode as any).lm.registerTool('get_store_status', new AxonGetStoreStatusTool()),
-        (vscode as any).lm.registerTool('ingest_image', new AxonIngestImageTool()),
-        (vscode as any).lm.registerTool('graph_status', new AxonGraphStatusTool()),
-        (vscode as any).lm.registerTool('show_graph', new AxonShowGraphTool(context)),
-        (vscode as any).lm.registerTool('graph_finalize', new AxonGraphFinalizeTool()),
-        (vscode as any).lm.registerTool('graph_data', new AxonGraphDataTool()),
-        (vscode as any).lm.registerTool('graph_conflicts', new AxonGraphConflictsTool()),
-        (vscode as any).lm.registerTool('graph_retrieve', new AxonGraphRetrieveTool()),
-        (vscode as any).lm.registerTool('get_active_leases', new AxonGetActiveLeasesTool()),
-        (vscode as any).lm.registerTool('axon_config_validate', new AxonConfigValidateTool()),
-        (vscode as any).lm.registerTool('axonConfigValidate', new AxonConfigValidateTool()),
-        (vscode as any).lm.registerTool('axon_config_set', new AxonConfigSetTool()),
-        (vscode as any).lm.registerTool('axonConfigSet', new AxonConfigSetTool()),
-        (vscode as any).lm.registerTool('security_status', new AxonSecurityStatusTool()),
-        (vscode as any).lm.registerTool('security_bootstrap', new AxonSecurityBootstrapTool()),
-        (vscode as any).lm.registerTool('security_unlock', new AxonSecurityUnlockTool()),
-        (vscode as any).lm.registerTool('security_lock', new AxonSecurityLockTool()),
-        (vscode as any).lm.registerTool('security_change_passphrase', new AxonSecurityChangePassphraseTool()),
-        (vscode as any).lm.registerTool('seal_project', new AxonSealProjectTool()),
+        (vscode as any).lm.registerTool('revoke_share', new AxonRevokeShareTool()),
         (vscode as any).lm.registerTool('extend_share', new AxonExtendShareTool()),
-        (vscode as any).lm.registerTool('store_whoami', new AxonStoreWhoamiTool()),
-        (vscode as any).lm.registerTool('pack_project', new AxonPackProjectTool()),
-        (vscode as any).lm.registerTool('unpack_project', new AxonUnpackProjectTool()),
+        (vscode as any).lm.registerTool('show_graph', new AxonShowGraphTool(context)),
+        (vscode as any).lm.registerTool('ingest_image', new AxonIngestImageTool()),
       );
       state.outputChannel.appendLine('Successfully registered all Axon tools.');
     } else {

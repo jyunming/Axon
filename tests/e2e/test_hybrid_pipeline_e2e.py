@@ -20,7 +20,7 @@ async def test_hybrid_graphrag_pipeline(live_api_server, make_brain, monkeypatch
     await mcp_server.switch_project("hybrid_lab")
 
     # 2. Ingest mix of documents
-    job = await mcp_server.ingest_path(str(sample_docs_dir))
+    job = await mcp_server.ingest_knowledge(path=str(sample_docs_dir))
     assert job["status"] == "processing"
 
     # Wait for ingestion to complete

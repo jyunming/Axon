@@ -6,7 +6,7 @@ sufficient — a knob is only usable if some surface can set it. The write paths
 * REST ``POST /config/set``  — dot alias or field name, persists via save()
 * REST ``POST /config/update`` — curated subset for live RAG tuning
 * REPL ``/config set``       — shares the resolver with /config/set
-* VS Code LM tool            — calls /config/set per key
+* MCP / VS Code ``set_config`` — one batched POST /config/set ``{settings}``
 * Web GUI settings panel     — calls the REST routes
 
 Before ``resolve_config_key`` existed, ``_DOT_TO_FLAT`` covered 101 of 240
@@ -94,14 +94,16 @@ class TestCrossSurfaceParity:
 
 
 class TestMcpConfigTools:
-    """MCP was the one surface with no config access at all.
+    """MCP was once the one surface with no config access at all.
 
-    `surface_contract.py` already declared `config_read` and `config_update` as
-    supported on ALL_SURFACES, so the contract asserted a parity that did not
-    exist — nothing checked that the MCP server actually exposed the tools.
+    `surface_contract.py` declared `config_read` and `config_update` as
+    supported everywhere, so the contract asserted a parity that did not exist
+    — nothing checked that the MCP server actually exposed the tools. Since
+    0.5.0 the agent surface has exactly two config tools: ``get_config``
+    (optionally with validation) and ``set_config`` (a batch of keys).
     """
 
-    EXPECTED = ("get_config", "set_config", "update_config", "validate_config")
+    EXPECTED = ("get_config", "set_config")
 
     def _tool_names(self):
         import inspect
@@ -129,5 +131,10 @@ class TestMcpConfigTools:
         paths = {
             r.path for router in (config_routes.router, projects.router) for r in router.routes
         }
-        for path in ("/config", "/config/set", "/config/update", "/config/validate"):
+        for path in ("/config", "/config/set", "/config/validate"):
             assert path in paths, f"{path} missing; MCP tool would 404"
+
+    def test_old_config_tool_names_are_gone(self):
+        names = self._tool_names()
+        for old in ("update_config", "validate_config", "update_settings", "get_current_settings"):
+            assert old not in names, old
