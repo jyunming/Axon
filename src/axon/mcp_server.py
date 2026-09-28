@@ -1,45 +1,36 @@
 """
-
-
 src/axon/mcp_server.py
 
+MCP stdio server for Axon — exposes a deliberately small set of the Axon REST
+API as MCP tools so Copilot, Claude or any other agent can call them from
+agent mode.
 
-MCP stdio server for Axon — exposes the Axon REST API as MCP tools so
+The tool set (18 tools, 0.5.0) covers what an agent needs to *use* a knowledge
+base: ask, search, ingest, inspect, delete individual documents, pick or create
+a project, read and tune config, read and write the graph, and share projects.
+Destructive, credential and administrative operations (clear, delete project,
+store / sealed-store / pack / unpack, sessions, graph admin, hard revoke with
+key rotation) are human-only — REST, CLI, REPL — see
+``axon.surface_contract`` for the human route of each.
 
-
-Copilot (or any other agent) can call them from agent mode.
-
+``project`` parameters are *assertions*: the server answers 409 when the brain
+is serving a different project. Tools never switch projects implicitly — call
+switch_project first.
 
 Tool names here are deliberately shorter than the OpenAI-format names in
-
-
 tools.py; do not conflate the two sets.
 
-
 Environment variables
-
-
 ---------------------
-
-
 RAG_API_BASE  : Base URL of the running Axon API  (default: http://localhost:8420)
-
-
 RAG_API_KEY   : API key for X-API-Key header      (default: empty — auth disabled)
 
-
 Usage
-
-
 -----
-
-
 Run as a stdio process (used by .vscode/mcp.json):
     python -m axon.mcp_server
     # or after pip install -e .:
     axon-mcp
-
-
 """
 
 
@@ -50,11 +41,7 @@ import httpx
 from mcp.server.fastmcp import FastMCP
 
 # ---------------------------------------------------------------------------
-
-
 # Configuration
-
-
 # ---------------------------------------------------------------------------
 
 
@@ -75,141 +62,60 @@ def _headers() -> dict[str, str]:
     return h
 
 
+class AxonAPIError(RuntimeError):
+    """An Axon REST call failed. The message carries the HTTP status and the
+    server's ``detail`` (e.g. the unknown config keys, the active project on a
+    409, "project is required for sealed shares") so the agent can act on it —
+    ``httpx``'s own message only names the status and URL."""
+
+    def __init__(self, status: int, detail: str, method: str, path: str):
+        self.status = status
+        self.detail = detail
+        super().__init__(f"Axon API {method} {path} failed ({status}): {detail}")
+
+
+def _raise_for_status(resp: httpx.Response, method: str, path: str) -> None:
+    if resp.is_success:
+        return
+    detail: Any = None
+    try:
+        data = resp.json()
+        detail = data.get("detail", data) if isinstance(data, dict) else data
+    except Exception:
+        detail = None
+    if detail is None or detail == "":
+        detail = resp.text or resp.reason_phrase
+    if not isinstance(detail, str):
+        import json
+
+        detail = json.dumps(detail)
+    raise AxonAPIError(resp.status_code, detail, method, path)
+
+
 async def _get(path: str, params: dict | None = None) -> Any:
     async with httpx.AsyncClient(timeout=60.0) as client:
         resp = await client.get(f"{API_BASE}{path}", headers=_headers(), params=params)
-        resp.raise_for_status()
+        _raise_for_status(resp, "GET", path)
         return resp.json()
 
 
 async def _post(path: str, body: dict) -> Any:
     async with httpx.AsyncClient(timeout=60.0) as client:
         resp = await client.post(f"{API_BASE}{path}", json=body, headers=_headers())
-        resp.raise_for_status()
+        _raise_for_status(resp, "POST", path)
         return resp.json()
 
 
+def _with_project(body: dict, project: str | None) -> dict:
+    """Add the ``project`` assertion to *body* when the caller gave one."""
+    if project:
+        body["project"] = project
+    return body
+
+
 # ---------------------------------------------------------------------------
-
-# Tools
-
+# Retrieval
 # ---------------------------------------------------------------------------
-
-
-@mcp.tool()
-async def ingest_text(text: str, metadata: dict | None = None, project: str | None = None) -> Any:
-    """Ingest a single text document into the Axon knowledge base.
-    Prefer ingest_texts for multiple documents — it uses one embedding call.
-    Always set metadata.source so the collection can be audited.
-    Duplicate content (same SHA-256) is silently skipped; status will be 'skipped'.
-    Args:
-        text: The text content to store.
-        metadata: Optional dict, e.g. {"source": "https://...", "topic": "react"}.
-        project: Target project. Omit to use the active project.
-    """
-    body: dict = {"text": text}
-    if metadata:
-        body["metadata"] = metadata
-    if project:
-        body["project"] = project
-    return await _post("/add_text", body)
-
-
-@mcp.tool()
-async def ingest_texts(docs: list[dict], project: str | None = None) -> Any:
-    """Ingest multiple documents in a single batched embedding call.
-    Each item must have at least a "text" key. Optional keys: "doc_id", "metadata".
-    This is the preferred ingest tool — never call ingest_text in a loop.
-    Args:
-        docs: List of dicts, each with "text" and optional "doc_id"/"metadata".
-        project: Target project applied to all docs.
-    """
-    body: dict = {"docs": docs}
-    if project:
-        body["project"] = project
-    return await _post("/add_texts", body)
-
-
-@mcp.tool()
-async def ingest_url(url: str, metadata: dict | None = None, project: str | None = None) -> Any:
-    """Fetch an HTTP/HTTPS URL and ingest its text content.
-    HTML is stripped automatically. Private/internal URLs (127.x, 10.x,
-    192.168.x, 169.254.x, 172.16-31.x) are blocked server-side.
-    Args:
-        url: The HTTP or HTTPS URL to fetch.
-        metadata: Optional extra metadata merged with the page's source metadata.
-        project: Target project.
-    """
-    body: dict = {"url": url}
-    if metadata:
-        body["metadata"] = metadata
-    if project:
-        body["project"] = project
-    return await _post("/ingest_url", body)
-
-
-@mcp.tool()
-async def ingest_path(path: str) -> Any:
-    """Ingest a local file or directory into the knowledge base (async).
-    Returns immediately with a job_id. Poll get_job_status(job_id) until
-    status is 'completed' or 'failed'. Path must be within RAG_INGEST_BASE.
-    Args:
-        path: Absolute or relative path to a file or directory.
-    """
-    return await _post("/ingest", {"path": path})
-
-
-@mcp.tool()
-async def refresh_ingest(project: str | None = None) -> Any:
-    """Re-ingest all sources that have changed on disk since they were last indexed.
-    Compares SHA-256 hashes of previously indexed files against their current
-    on-disk content. Changed files are re-chunked and re-embedded; unchanged
-    files are skipped.  Returns a job_id for async polling via get_job_status.
-    Args:
-        project: Target project. Omit to use the active project.
-    """
-    if project:
-        await _post("/project/switch", {"project_name": project})
-    return await _post("/ingest/refresh", {})
-
-
-@mcp.tool()
-async def get_job_status(job_id: str) -> Any:
-    """Poll the status of an async ingest job started by ingest_path.
-    Returns a dict with: job_id, status (processing|completed|failed),
-    started_at, completed_at, path, error.
-    Args:
-        job_id: The job_id returned by ingest_path.
-    """
-    return await _get(f"/ingest/status/{job_id}")
-
-
-@mcp.tool()
-async def search_knowledge(
-    query: str,
-    top_k: int = 5,
-    filters: dict | None = None,
-    project: str | None = None,
-) -> Any:
-    """Retrieve raw document chunks from the knowledge base.
-    Best for multi-step reasoning where you want to inspect individual chunks
-    before synthesising an answer. Use query_knowledge for direct answers.
-    Args:
-        query: The search query string.
-        top_k: Number of chunks to return (default 5).
-        filters: Optional metadata filters, e.g. {"source": "https://..."}.
-        project: Expected active project. Returns 409 if it does not match
-            the brain's current active project. Use switch_project to change
-            the active project before calling this tool.
-    """
-    if top_k < 1:
-        raise ValueError("top_k must be >= 1")
-    body: dict = {"query": query, "top_k": top_k}
-    if filters:
-        body["filters"] = filters
-    if project:
-        body["project"] = project
-    return await _post("/search", body)
 
 
 @mcp.tool()
@@ -226,9 +132,9 @@ async def query_knowledge(
         query: The question to ask.
         top_k: Number of chunks to retrieve for context (overrides global setting).
         filters: Optional metadata filters for retrieval.
-        project: Expected active project. Returns 409 if it does not match
-            the brain's current active project. Use switch_project to change
-            the active project before calling this tool.
+        project: Expected active project (an assertion, not a switch). Returns
+            409 if it does not match the brain's active project — call
+            switch_project first.
     """
     if top_k is not None and top_k < 1:
         raise ValueError("top_k must be >= 1")
@@ -237,9 +143,127 @@ async def query_knowledge(
         body["top_k"] = top_k
     if filters:
         body["filters"] = filters
-    if project:
-        body["project"] = project
-    return await _post("/query", body)
+    return await _post("/query", _with_project(body, project))
+
+
+@mcp.tool()
+async def search_knowledge(
+    query: str,
+    top_k: int = 5,
+    filters: dict | None = None,
+    project: str | None = None,
+) -> Any:
+    """Retrieve raw document chunks from the knowledge base.
+    Best for multi-step reasoning where you want to inspect individual chunks
+    before synthesising an answer. Use query_knowledge for direct answers.
+    Args:
+        query: The search query string.
+        top_k: Number of chunks to return (default 5).
+        filters: Optional metadata filters, e.g. {"source": "https://..."}.
+        project: Expected active project (an assertion, not a switch). Returns
+            409 if it does not match the brain's active project — call
+            switch_project first.
+    """
+    if top_k < 1:
+        raise ValueError("top_k must be >= 1")
+    body: dict = {"query": query, "top_k": top_k}
+    if filters:
+        body["filters"] = filters
+    return await _post("/search", _with_project(body, project))
+
+
+# ---------------------------------------------------------------------------
+# Ingest
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def ingest_knowledge(
+    text: str | None = None,
+    docs: list[dict] | None = None,
+    url: str | None = None,
+    path: str | None = None,
+    refresh: bool = False,
+    metadata: dict | None = None,
+    doc_id: str | None = None,
+    project: str | None = None,
+) -> Any:
+    """Add knowledge to the active project. Give exactly ONE source:
+    - text: one text document (set metadata.source so it can be audited).
+    - docs: many documents in one batched embedding call — a list of
+      {"text": ..., "doc_id"?: ..., "metadata"?: {...}}. Prefer this over
+      calling ingest_knowledge(text=...) in a loop.
+    - url: an HTTP/HTTPS page; HTML is stripped. Private/internal addresses
+      are blocked server-side.
+    - path: a local file or directory (must be within RAG_INGEST_BASE and on
+      the machine running axon-api). Asynchronous — returns a job_id; poll
+      get_job_status(job_id) until 'completed' or 'failed'.
+    - refresh=True: re-ingest previously indexed files whose content changed
+      on disk. Asynchronous — returns a job_id.
+    Duplicate content (same SHA-256) is skipped with status 'skipped'.
+    Args:
+        text: Text content to store.
+        docs: Batch of documents (see above).
+        url: URL to fetch and ingest.
+        path: File or directory path to ingest.
+        refresh: Re-ingest changed files instead of adding new content.
+        metadata: Metadata for text/url ingest, e.g. {"source": "...", "topic": "react"}.
+        doc_id: Optional stable ID for text ingest (delete_documents accepts it).
+        project: Expected active project (an assertion, not a switch). Returns
+            409 if it does not match the active project — call switch_project
+            first.
+    """
+    sources = [
+        name
+        for name, given in (
+            ("text", text is not None),
+            ("docs", docs is not None),
+            ("url", url is not None),
+            ("path", path is not None),
+            ("refresh", bool(refresh)),
+        )
+        if given
+    ]
+    if len(sources) != 1:
+        raise ValueError(
+            "ingest_knowledge needs exactly one of text, docs, url, path or refresh=True "
+            f"(got {', '.join(sources) if sources else 'none'})"
+        )
+    source = sources[0]
+    if source == "text":
+        body: dict = {"text": text}
+        if metadata:
+            body["metadata"] = metadata
+        if doc_id:
+            body["doc_id"] = doc_id
+        return await _post("/add_text", _with_project(body, project))
+    if source == "docs":
+        return await _post("/add_texts", _with_project({"docs": docs}, project))
+    if source == "url":
+        body = {"url": url}
+        if metadata:
+            body["metadata"] = metadata
+        return await _post("/ingest_url", _with_project(body, project))
+    if source == "path":
+        return await _post("/ingest", _with_project({"path": path}, project))
+    return await _post("/ingest/refresh", _with_project({}, project))
+
+
+@mcp.tool()
+async def get_job_status(job_id: str) -> Any:
+    """Poll an async ingest job started by ingest_knowledge(path=...) or
+    ingest_knowledge(refresh=True).
+    Returns a dict with: job_id, status (processing|completed|failed),
+    started_at, completed_at, error and job-specific counters.
+    Args:
+        job_id: The job_id returned by ingest_knowledge.
+    """
+    return await _get(f"/ingest/status/{job_id}")
+
+
+# ---------------------------------------------------------------------------
+# Collection
+# ---------------------------------------------------------------------------
 
 
 @mcp.tool()
@@ -252,32 +276,21 @@ async def list_knowledge() -> Any:
 
 
 @mcp.tool()
-async def switch_project(project_name: str) -> Any:
-    """Switch the knowledge base to a different project.
-    WARNING: This mutates global server state. Do not call from concurrent
-    request handlers. Prefer passing 'project' directly to ingest tools instead.
-    Args:
-        project_name: The project name to activate, e.g. "react-docs".
-    """
-    return await _post("/project/switch", {"project_name": project_name})
-
-
-# NOTE: refresh_mount() was removed in 0.5.0. It posted to /mount/refresh with
-# no arguments, which mount_refresh(project=None) already does — mount_refresh
-# is a strict superset (it can switch to the target project first). Two tools
-# for one operation cost agents context and tool-selection accuracy for nothing.
-
-
-@mcp.tool()
 async def delete_documents(doc_ids: list[str]) -> Any:
-    """Remove documents or chunks from the knowledge base by their IDs.
+    """Remove documents or chunks from the active project by their IDs.
     Deletes from the vector store, the BM25 index and the graph, and clears the
     dedup records, so the same text can be ingested again afterwards.
+    (Wiping a whole project is human-only: REPL /clear, `axon --clear --yes`.)
     Args:
-        doc_ids: Chunk IDs, or document IDs (the doc_id given to ingest_text /
-            ingest_texts / ingest_url); a document ID deletes all its chunks.
+        doc_ids: Chunk IDs, or document IDs (the doc_id given to
+            ingest_knowledge); a document ID deletes all its chunks.
     """
     return await _post("/delete", {"doc_ids": doc_ids})
+
+
+# ---------------------------------------------------------------------------
+# Projects
+# ---------------------------------------------------------------------------
 
 
 @mcp.tool()
@@ -291,15 +304,15 @@ async def list_projects() -> Any:
 
 
 @mcp.tool()
-async def get_stale_docs(days: int = 7) -> Any:
-    """Return documents that have not been re-ingested within *days* calendar days.
-    Use this to identify outdated knowledge that should be refreshed.  Only
-    documents ingested during the current server process lifetime are tracked —
-    restart tracking begins fresh after each server restart.
+async def switch_project(project_name: str) -> Any:
+    """Switch the knowledge base to a different project.
+    WARNING: This mutates global server state — every later call (from any
+    client) runs against the new project.
     Args:
-        days: Flag documents not re-ingested within this many days (default 7).
+        project_name: The project name to activate, e.g. "react-docs" or
+            "mounts/alice_research" for a redeemed share.
     """
-    return await _get(f"/collection/stale?days={days}")
+    return await _post("/project/switch", {"project_name": project_name})
 
 
 @mcp.tool()
@@ -318,97 +331,135 @@ async def create_project(name: str, description: str = "", graph_backend: str | 
     return await _post("/project/new", body)
 
 
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+
 @mcp.tool()
-async def delete_project(name: str) -> Any:
-    """Delete a knowledge base project and all its data.
-    DANGER: This action is irreversible. It deletes all vectors and local files
-    associated with the project.
+async def get_config(validate: bool = False) -> Any:
+    """Return the active Axon configuration.
+
+    Secrets (API keys, tokens) are masked as ``***`` by the server — this tool
+    can never read a credential back out. Use it to discover the exact field
+    names accepted by set_config().
+
     Args:
-        name: Name of the project to delete.
+        validate: Also check the on-disk config for errors, unknown keys and
+            risky combinations (e.g. GraphRAG + a slow local LLM). Returns
+            {"config": ..., "validation": ...} instead of the bare config.
     """
-    return await _post(f"/project/delete/{name}", {})
+    config = await _get("/config")
+    if not validate:
+        return config
+    return {"config": config, "validation": await _get("/config/validate")}
 
 
 @mcp.tool()
-async def clear_knowledge() -> Any:
-    """Wipe all data from the active project's vector store and index.
-    Use this to reset a project without deleting the namespace itself.
+async def set_config(settings: dict, persist: bool = False) -> Any:
+    """Set one or more Axon configuration fields in a single call.
+
+    ``settings`` maps keys to values. A key is a dot-notation alias
+    (``chunk.strategy``, ``llm.model``, ``rag.top_k``) or any ``AxonConfig``
+    field name (``graph_rag_depth``, ``chunk_size``, ``hybrid_search``). Call
+    get_config() to see every field. All keys are checked first: one unknown
+    key rejects the whole batch (400) and nothing is applied.
+
+    Changing ``llm_provider`` / ``llm_model`` / ``embedding_*`` / ``rerank``
+    reinitialises the affected component once, so the next query uses it
+    immediately. If that reinitialisation fails (e.g. a provider whose extra is
+    not installed) every key in the batch is rolled back, nothing is saved,
+    and the call fails with the reason. Switching the embedding model
+    invalidates existing vectors — re-ingest after.
+
+    Args:
+        settings: {key: value} map, e.g. {"top_k": 8, "rerank": true}.
+        persist: Also write the changes to config.yaml so they survive a
+            restart. Default False (running server only).
     """
-    return await _post("/clear", {})
+    return await _post("/config/set", {"settings": settings, "persist": persist})
+
+
+# ---------------------------------------------------------------------------
+# Graph
+# ---------------------------------------------------------------------------
 
 
 @mcp.tool()
-async def get_current_settings() -> Any:
-    """Return the active Axon RAG and model configuration.
-    Call this to check current top_k, threshold, and strategy settings.
-    """
-    return await _get("/config")
-
-
-@mcp.tool()
-async def update_settings(
+async def graph_retrieve(
+    query: str,
     top_k: int | None = None,
-    similarity_threshold: float | None = None,
-    hybrid_search: bool | None = None,
-    rerank: bool | None = None,
-    hyde: bool | None = None,
-    multi_query: bool | None = None,
-    step_back: bool | None = None,
-    query_decompose: bool | None = None,
-    compress_context: bool | None = None,
-    graph_rag: bool | None = None,
-    raptor: bool | None = None,
-    truth_grounding: bool | None = None,
-    discussion_fallback: bool | None = None,
-    sentence_window: bool | None = None,
-    sentence_window_size: int | None = None,
-    crag_lite: bool | None = None,
-    code_graph: bool | None = None,
-    graph_rag_mode: str | None = None,
-    cite: bool | None = None,
-    persist: bool = False,
+    point_in_time: str | None = None,
+    federation_weights: dict[str, float] | None = None,
+    project: str | None = None,
 ) -> Any:
-    """Update global Axon RAG and retrieval settings for the current session.
+    """Run the active graph backend's retrieve() and return graph contexts only.
+    Surfaces point-in-time historical queries and per-query federation weight
+    overrides without going through the full /query LLM pipeline.
     Args:
-        top_k: Number of chunks to retrieve (1-50).
-        similarity_threshold: Minimum match score (0.0-1.0).
-        hybrid_search: Toggle hybrid BM25 + Vector search.
-        rerank: Toggle cross-encoder reranking.
-        hyde: Toggle Hypothetical Document Embeddings.
-        multi_query: Toggle multi-query retrieval (3 rephrased queries merged).
-        step_back: Toggle step-back prompting (abstract query before retrieval).
-        query_decompose: Toggle query decomposition into atomic sub-questions.
-        compress_context: Toggle LLM context compression before generation.
-        raptor: Toggle RAPTOR hierarchical summaries.
-        graph_rag: Toggle GraphRAG entity expansion.
-        truth_grounding: Toggle truth-grounding enforcement on retrieved chunks.
-        discussion_fallback: Allow general-knowledge fallback when no chunks found.
-        sentence_window: Toggle sentence-window retrieval (expands chunks with context sentences).
-        sentence_window_size: Number of surrounding sentences per side (1-10, default 2).
-        crag_lite: Toggle CRAG-lite corrective retrieval on low-confidence chunks.
-        code_graph: Toggle code-graph retrieval for code-related queries.
-        graph_rag_mode: GraphRAG query mode — "local", "global", or "hybrid".
-        cite: Include inline source citations in generated answers.
-        persist: Save these settings to config.yaml so they survive restarts.
-            Defaults to False (session-only changes).
+        query: The query string.
+        top_k: Maximum graph contexts to return (default 10, max 200).
+        point_in_time: ISO-8601 timestamp; return facts valid at that instant.
+            Honoured only by bi-temporal backends (``dynamic_graph``); ignored
+            elsewhere.
+        federation_weights: Per-query RRF weights for the federated backend.
+            Keys: ``graphrag``, ``dynamic_graph``. Ignored by other backends.
+        project: Expected active project (an assertion, not a switch). Returns
+            409 if it does not match the active project.
     """
-    body = {k: v for k, v in locals().items() if v is not None and k != "body"}
-    return await _post("/config/update", body)
+    body: dict[str, Any] = {"query": query}
+    if top_k is not None:
+        body["top_k"] = int(top_k)
+    if point_in_time is not None:
+        body["point_in_time"] = point_in_time
+    if federation_weights is not None:
+        body["federation_weights"] = federation_weights
+    return await _post("/graph/retrieve", _with_project(body, project))
 
 
 @mcp.tool()
-async def list_sessions() -> Any:
-    """List all saved chat sessions for the active project."""
-    return await _get("/sessions")
-
-
-@mcp.tool()
-async def get_session(session_id: str) -> Any:
-    """Retrieve a specific chat session by its ID.
+async def update_fact(
+    subject: str,
+    relation: str,
+    object: str,  # noqa: A002 — mirrors the REST field name
+    description: str = "",
+    confidence: float = 1.0,
+    replace: bool | None = None,
+    project: str | None = None,
+) -> Any:
+    """Assert or correct one fact (subject, relation, object) in the active
+    project's knowledge graph. Stored with bi-temporal history: a replaced fact
+    is superseded, not deleted, so graph_retrieve(point_in_time=...) still sees it.
+    Only ``dynamic_graph`` and ``federated`` projects store facts; ``graphrag``
+    and ``none`` answer status ``not_applicable``.
     Args:
-        session_id: The ID of the session to load.
+        subject: Subject entity, e.g. "Alice".
+        relation: Relation, e.g. "WORKS_FOR" or "works for" (normalised to
+            upper snake case).
+        object: Object entity, e.g. "Acme Corp".
+        description: Optional free-text note stored with the fact.
+        confidence: 0.0-1.0 (default 1.0).
+        replace: True = make this the only current fact for (subject,
+            relation), superseding the others; False = add alongside them;
+            None (default) = replace for exclusive relations (IS_CEO_OF,
+            MARRIED_TO, ...), add otherwise.
+        project: Expected active project (an assertion, not a switch).
+    Returns ``{status: created|superseded|unchanged|conflicted|not_applicable,
+    fact_id, superseded_ids, conflicted_ids, backend_id, detail}``.
     """
-    return await _get(f"/session/{session_id}")
+    body: dict[str, Any] = {"subject": subject, "relation": relation, "object": object}
+    if description:
+        body["description"] = description
+    if confidence != 1.0:
+        body["confidence"] = confidence
+    if replace is not None:
+        body["replace"] = replace
+    return await _post("/graph/facts", _with_project(body, project))
+
+
+# ---------------------------------------------------------------------------
+# Sharing
+# ---------------------------------------------------------------------------
 
 
 @mcp.tool()
@@ -417,22 +468,18 @@ async def share_project(
     grantee: str,
     ttl_days: int | None = None,
 ) -> Any:
-    """Generate a share key allowing another user to access one of your projects.
+    """Generate a share key allowing another user to read one of your projects.
     The returned share_string should be transmitted to the grantee out-of-band
     (e.g. Slack, email). The grantee then calls redeem_share to mount the project.
     All shares are read-only; write access is not supported.
-    Sealed-share auto-detection: if the project has been encrypted at rest
-    via ``seal_project``, this returns a SEALED1: envelope (Phase 3). The
-    sealed-store must be unlocked (``security_unlock``) — otherwise the
-    server returns a 409 telling you to unlock first.
+    Sealed projects (encrypted at rest) get a SEALED envelope automatically;
+    the sealed store must be unlocked by the user first (409 otherwise).
     Args:
         project: Name of the project to share (must exist).
         grantee: OS username of the recipient.
         ttl_days: Optional time-to-live in days. When set, the share
             automatically expires after this many days; owners can renew
-            with extend_share. None (default) means no expiry. Sealed
-            shares record the TTL too but enforcement lives in the
-            legacy manifest layer.
+            with extend_share. None (default) means no expiry.
     """
     body: dict[str, Any] = {"project": project, "grantee": grantee}
     if ttl_days is not None:
@@ -444,14 +491,11 @@ async def share_project(
 async def redeem_share(share_string: str) -> Any:
     """Redeem a share string, creating a mount descriptor in your mounts/ directory.
     After redemption, the shared project appears as mounts/{owner}_{project}
-    and can be queried normally.
-    Sealed-share auto-detection: a share_string starting with the
-    SEALED1: prefix (post-base64 decode) is routed through the
-    encryption-at-rest redeem path (Phase 3). The unwrapped DEK is
-    persisted in your OS keyring at ``axon.share.<key_id>``; the
-    AxonBrain reads it from there at switch-project time.
+    and can be queried after switch_project.
+    Sealed shares are detected automatically; their key is stored in the OS
+    keyring.
     Args:
-        share_string: The base64 share string generated by share_project() on the owner's machine.
+        share_string: The share string generated by share_project() on the owner's machine.
     """
     return await _post("/share/redeem", {"share_string": share_string})
 
@@ -467,33 +511,23 @@ async def list_shares() -> Any:
 
 
 @mcp.tool()
-async def revoke_share(
-    key_id: str,
-    project: str | None = None,
-    rotate: bool = False,
-) -> Any:
-    """Revoke a previously generated share key, cutting off the grantee's access.
-    For legacy plaintext-mount shares (key_id starting with ``sk_``):
-    cuts off access on the next project-list or switch attempt.
-    For sealed shares (key_id starting with ``ssk_``, Phase 4):
-    - Soft (default): deletes the wrap file. Fresh redeems fail. Caveat:
-      a grantee who already redeemed and cached the DEK in their OS
-      keyring CAN keep decrypting files synced before the revocation.
-    - Hard (``rotate=True``): rotates the project DEK + re-encrypts every
-      content file + invalidates ALL share wraps (not just this one).
-      Surviving grantees must re-issue + re-redeem. Requires the
-      ``project`` arg so the wrap file can be located.
+async def revoke_share(key_id: str, project: str | None = None) -> Any:
+    """Revoke a previously generated share key (soft revoke).
+    - Plaintext shares (key_id ``sk_...``): the grantee loses access on their
+      next project-list or switch.
+    - Sealed shares (key_id ``ssk_...``): deletes the share's key wrap so it
+      can no longer be redeemed; ``project`` is required. A grantee who
+      already redeemed keeps the key they cached. Hard revoke — rotating the
+      project key and re-encrypting it — is human-only: `axon --share-rotate`,
+      REPL ``/share revoke <ssk_id> --project <name> --rotate``.
     Args:
         key_id: The key ID of the share to revoke (from list_shares output).
-        project: Project name — required for sealed shares. Ignored for
-            legacy shares.
-        rotate: Hard revoke for sealed shares. Default False (soft).
+        project: Project name — required for sealed (``ssk_``) shares,
+            ignored for plaintext ones.
     """
     body: dict[str, Any] = {"key_id": key_id}
     if project is not None:
         body["project"] = project
-    if rotate:
-        body["rotate"] = True
     return await _post("/share/revoke", body)
 
 
@@ -511,457 +545,8 @@ async def extend_share(key_id: str, ttl_days: int | None = None) -> Any:
     return await _post("/share/extend", {"key_id": key_id, "ttl_days": ttl_days})
 
 
-@mcp.tool()
-async def get_store_status() -> Any:
-    """Check whether the AxonStore has been initialised.
-    Returns store metadata (path, version, creation date) when the store
-    exists, or ``{"initialized": false}`` on a fresh install.  Clients should
-    call this on startup before any other tool to decide whether to prompt the
-    user to run ``init_store``.
-    """
-    return await _get("/store/status")
-
-
-@mcp.tool()
-async def init_store(base_path: str, persist: bool = False) -> Any:
-    """Initialise AxonStore multi-user mode at the given base directory.
-    Must be called once before any share-related tools (list_shares,
-    share_project, redeem_share, revoke_share) will work. Safe to call
-    repeatedly — subsequent calls update the base path and reinitialise
-    the brain.
-    Args:
-        base_path: Absolute path to the directory where the AxonStore/
-                   folder will be created (e.g. '/data' creates
-                   '/data/AxonStore/<username>/').
-        persist: Write the new store path to config.yaml so it survives
-                 server restarts. Defaults to False so that test or
-                 temporary calls do not permanently alter the user config.
-                 Pass True only when you intend to switch to AxonStore
-                 mode permanently.
-    """
-    return await _post("/store/init", {"base_path": base_path, "persist": persist})
-
-
 # ---------------------------------------------------------------------------
-# Sealed-store tools (Phase 2 of #SEALED).
-# Mirror the /security/* REST endpoints so MCP clients can manage the
-# encryption-at-rest store without poking the HTTP API directly.
-# ---------------------------------------------------------------------------
-
-
-@mcp.tool()
-async def security_status() -> Any:
-    """Return current sealed-store status (initialized + unlocked flags).
-    Use this on startup to decide whether to prompt for ``security_bootstrap``
-    (first-time setup) or ``security_unlock`` (existing user). Returns
-    ``initialized: false`` on a fresh install, ``initialized: true,
-    unlocked: false`` after bootstrap until the next unlock.
-    """
-    return await _get("/security/status")
-
-
-@mcp.tool()
-async def wipe_sealed_cache() -> Any:
-    """Wipe the active sealed-project plaintext cache.
-
-    v0.4.0 Item 3. Manual companion to ``security.seal_cache_ephemeral``.
-    No-op when no sealed cache is mounted. Idempotent.
-
-    Returns ``{"wiped": bool}`` — the cache re-materialises on the next
-    sealed-project query.
-    """
-    return await _post("/security/wipe-sealed-cache", {})
-
-
-@mcp.tool()
-async def set_keyring_mode(mode: str) -> Any:
-    """Change the keyring DEK storage mode for the running API server.
-
-    v0.4.0 Item 2. Modes:
-      persistent  - DEK in OS keyring (default; survives restart)
-      session     - DEK in process memory only; wiped at exit
-      never       - DEK not cached anywhere; re-redeem every mount
-
-    Caveat: previously stored secrets are NOT migrated. For permanent
-    change, set ``security.keyring_mode`` in config.yaml and restart.
-
-    Args:
-        mode: One of ``persistent``, ``session``, ``never``.
-    """
-    return await _post("/security/keyring-mode", {"mode": mode})
-
-
-@mcp.tool()
-async def suggest_passphrase(words: int = 6, separator: str = "-") -> Any:
-    """Suggest a strong Diceware passphrase from the bundled EFF wordlist.
-
-    Pure helper — does not touch the store. Useful before
-    ``security_bootstrap`` (first-time setup) or as a UX hint when
-    rotating via ``security_change_passphrase``.
-
-    Args:
-        words: Number of words to draw (4-12, default 6 ≈ 77 bits).
-        separator: String joined between words (default "-").
-
-    Returns ``{passphrase, n_words, entropy_bits, separator, source}``.
-    """
-    return await _get(
-        "/suggestions/passphrase",
-        params={"words": words, "separator": separator},
-    )
-
-
-@mcp.tool()
-async def security_bootstrap(passphrase: str) -> Any:
-    """Initialise the sealed-store with a passphrase (one-time setup).
-    Generates a fresh master key, wraps it under a passphrase-derived
-    KEK, and stores the wrapped record in the OS keyring. After this
-    succeeds the store is automatically unlocked for the rest of this
-    process; the passphrase is required for every subsequent unlock.
-    Args:
-        passphrase: The user's chosen passphrase. Cannot be empty.
-            There is NO recovery — losing this passphrase means losing
-            access to every project sealed under this master.
-    """
-    return await _post("/security/bootstrap", {"passphrase": passphrase})
-
-
-@mcp.tool()
-async def security_unlock(passphrase: str) -> Any:
-    """Unlock the sealed-store so sealed projects can be queried.
-    Required after every process restart before ``project_seal`` or any
-    sealed-project switch will work. Rate-limited: 5 wrong attempts
-    inside 5 minutes triggers a 429 lockout per client IP.
-    Args:
-        passphrase: The passphrase supplied at ``security_bootstrap``
-            time (or the current passphrase after a rotation).
-    """
-    return await _post("/security/unlock", {"passphrase": passphrase})
-
-
-@mcp.tool()
-async def security_lock() -> Any:
-    """Clear the in-process master key cache.
-    Subsequent sealed-project queries will fail with a "store is locked"
-    error until ``security_unlock`` is called again. Use before walking
-    away from the machine; the orphan-cleanup hook will wipe any
-    plaintext mount caches on next process boot.
-    """
-    return await _post("/security/lock", {})
-
-
-@mcp.tool()
-async def security_change_passphrase(old_passphrase: str, new_passphrase: str) -> Any:
-    """Re-wrap the master key under a new passphrase.
-    Project DEKs are not touched (they're wrapped under the master, not
-    the passphrase), so this is O(1) regardless of how many sealed
-    projects you have. The new passphrase is required for every future
-    ``security_unlock`` call.
-    Args:
-        old_passphrase: The current passphrase. Required to unwrap the
-            existing master before re-wrapping.
-        new_passphrase: The new passphrase. Cannot be empty.
-    """
-    return await _post(
-        "/security/change-passphrase",
-        {"old_passphrase": old_passphrase, "new_passphrase": new_passphrase},
-    )
-
-
-@mcp.tool()
-async def seal_project(project_name: str, migration_mode: str = "in_place") -> Any:
-    """Encrypt every content file in a project in place (one-shot).
-    Walks the project directory and rewrites ``meta.json`` plus every
-    file under ``bm25_index/`` and ``vector_store_data/`` as AXSL-sealed
-    AES-256-GCM ciphertext. Each file is replaced atomically (tempfile
-    + os.replace), so a crash mid-seal leaves the original or the new
-    sealed version on disk but never a partial write.
-    Idempotent — re-sealing an already-sealed project is a no-op
-    (returns ``status="already_sealed"``).
-    Requires the sealed-store to be unlocked (see ``security_unlock``).
-    The active project switches to "default" during the operation and
-    switches back when done.
-    Args:
-        project_name: Name of the open project to seal. Must exist.
-        migration_mode: Reserved for future variants; only ``"in_place"``
-            is implemented in v1.
-    """
-    return await _post(
-        "/project/seal",
-        {"project_name": project_name, "migration_mode": migration_mode},
-    )
-
-
-@mcp.tool()
-async def pack_project(project_name: str, out_path: str | None = None) -> Any:
-    """Pack a project's entire on-disk footprint into a zip archive at a
-    server-side filesystem path (requires the MCP client and axon-api to
-    share a filesystem — same colocation assumption as ingest_path).
-    Args:
-        project_name: Name of the project to pack.
-        out_path: Optional server-side output path. Defaults to
-            ~/.axon/packs/<name>-<timestamp>.axonpack.zip.
-    """
-    return await _post("/project/pack", {"project_name": project_name, "out_path": out_path})
-
-
-@mcp.tool()
-async def unpack_project(zip_path: str, as_name: str | None = None, force: bool = False) -> Any:
-    """Unpack a .axonpack.zip (server-side filesystem path) into AxonStore
-    as a project. Refuses if the target project already exists unless
-    force=True.
-    Args:
-        zip_path: Server-side filesystem path to a pack produced by pack_project.
-        as_name: Target project name. Defaults to the pack's original project name.
-        force: Overwrite an existing project directory at the target name.
-    """
-    return await _post(
-        "/project/unpack", {"zip_path": zip_path, "as_name": as_name, "force": force}
-    )
-
-
-@mcp.tool()
-async def graph_status() -> Any:
-    """Return current GraphRAG knowledge-graph status.
-    Reports entity count, edge count, community summary count, whether a
-    community rebuild is in progress, and whether the graph is ready for
-    graph-augmented retrieval.  Use before running graph_finalize() to check
-    whether a rebuild is actually needed.
-    """
-    return await _get("/graph/status")
-
-
-@mcp.tool()
-async def graph_finalize() -> Any:
-    """Trigger an explicit GraphRAG community detection rebuild.
-    Rebuilds community summaries from the current entity graph.  Call this
-    after a large ingest batch when you want graph-augmented answers to
-    reflect the latest knowledge without waiting for the automatic rebuild.
-    Returns the number of community summaries produced.
-    """
-    return await _post("/graph/finalize", {})
-
-
-@mcp.tool()
-async def graph_data() -> Any:
-    """Return the full entity/relation knowledge-graph payload as JSON.
-    Returns a dict with 'nodes' and 'links' arrays describing every entity
-    and relation currently in the graph.  Useful for inspection, export, or
-    building custom visualisations.  Returns empty arrays when no graph has
-    been built yet.
-    """
-    return await _get("/graph/data")
-
-
-@mcp.tool()
-async def graph_backend_status() -> Any:
-    """Return the active graph backend's status dict.
-    Reports which backend is active (graphrag or dynamic), whether it is
-    ready, and backend-specific health metrics (entity count, edge count,
-    node counts, etc.).  Use this to distinguish between the GraphRAG
-    community-graph backend and the dynamic SQLite graph backend.
-    """
-    return await _get("/graph/backend/status")
-
-
-@mcp.tool()
-async def graph_conflicts(limit: int = 100) -> Any:
-    """List facts whose status is ``conflicted`` (incompatible exclusive relations).
-    Conflicts arise when two exclusive-relation facts (e.g. ``MARRIED_TO``,
-    ``IS_CEO_OF``) for the same subject overlap in time. Both are kept and
-    surfaced here so a human or agent can prompt the user to resolve.
-    Returns ``{"backend", "supported", "conflicts": [...]}``. Backends that
-    don't track conflicts (e.g. ``graphrag``) return ``supported: false``.
-    Args:
-        limit: Maximum conflicts to return (1-1000, default 100).
-    """
-    from urllib.parse import urlencode
-
-    qs = urlencode({"limit": int(limit)})
-    return await _get(f"/graph/conflicts?{qs}")
-
-
-@mcp.tool()
-async def graph_retrieve(
-    query: str,
-    top_k: int | None = None,
-    point_in_time: str | None = None,
-    federation_weights: dict[str, float] | None = None,
-) -> Any:
-    """Run the active graph backend's retrieve() and return graph contexts only.
-    Surfaces point-in-time historical queries and per-query federation weight
-    overrides without going through the full /query LLM pipeline.
-    Args:
-        query: The query string.
-        top_k: Maximum graph contexts to return (default 10, max 200).
-        point_in_time: ISO-8601 timestamp; return facts valid at that instant.
-            Honoured only by bi-temporal backends (``dynamic_graph``); ignored
-            elsewhere.
-        federation_weights: Per-query RRF weights for the federated backend.
-            Keys: ``graphrag``, ``dynamic_graph``. Ignored by other backends.
-    """
-    body: dict[str, Any] = {"query": query}
-    if top_k is not None:
-        body["top_k"] = int(top_k)
-    if point_in_time is not None:
-        body["point_in_time"] = point_in_time
-    if federation_weights is not None:
-        body["federation_weights"] = federation_weights
-    return await _post("/graph/retrieve", body)
-
-
-@mcp.tool()
-async def get_active_leases() -> Any:
-    """Return active write-lease counts for all projects currently tracked by the server.
-    Operator tool — shows which projects have in-flight write operations,
-    whether they are draining, and their epoch counter.  Use this to check
-    whether it is safe to put a project into 'readonly' or 'offline' maintenance
-    state (wait for active_leases to reach 0 first).
-    """
-    return await _get("/registry/leases")
-
-
-# ---------------------------------------------------------------------------
-# Streaming query (SP-B1 parity sweep — previously REST/CLI only)
-# ---------------------------------------------------------------------------
-
-
-@mcp.tool()
-async def query_stream(
-    query: str,
-    top_k: int | None = None,
-    filters: dict | None = None,
-    project: str | None = None,
-) -> Any:
-    """Ask a question and receive a full streamed answer accumulated into one response.
-    Internally calls the ``/query/stream`` SSE endpoint and collects all tokens
-    before returning, so MCP clients that do not support incremental delivery still
-    receive the complete answer in a single tool result.
-    Use ``query_knowledge`` for a blocking single-round-trip query; use this tool
-    when the server response is expected to be long (> 1000 tokens) or when the
-    LLM provider has a long first-token latency and you want a progress signal.
-    Args:
-        query: The question to ask.
-        top_k: Number of chunks to retrieve for context (overrides global setting).
-        filters: Optional metadata filters for retrieval.
-        project: Expected active project. Returns 409 if it does not match
-            the brain's current active project. Use switch_project first.
-    """
-    if top_k is not None and top_k < 1:
-        raise ValueError("top_k must be >= 1")
-    body: dict = {"query": query}
-    if top_k is not None:
-        body["top_k"] = top_k
-    if filters:
-        body["filters"] = filters
-    if project:
-        body["project"] = project
-    # Use a longer timeout for streaming; accumulate SSE chunks.
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        accumulated: list[str] = []
-        async with client.stream(
-            "POST", f"{API_BASE}/query/stream", json=body, headers=_headers()
-        ) as resp:
-            resp.raise_for_status()
-            async for line in resp.aiter_lines():
-                if line.startswith("data:"):
-                    chunk = line[5:].strip()
-                    if chunk and chunk != "[DONE]":
-                        accumulated.append(chunk)
-    return {"answer": "".join(accumulated), "streamed": True}
-
-
-# ---------------------------------------------------------------------------
-# Mount refresh with project targeting (SP-B1 parity sweep)
-# ---------------------------------------------------------------------------
-
-
-@mcp.tool()
-async def mount_refresh(project: str | None = None) -> Any:
-    """Re-read the owner's version marker for a mounted share project.
-    If *project* is supplied and the active project differs, switches to *project*
-    first. No-op when the target project is not a mount (``mounts/<name>``).
-    Use after the owner has re-ingested content and synced the share directory,
-    to make queries reflect the latest knowledge without restarting the server.
-    Args:
-        project: The mount project to refresh, e.g. ``"mounts/alice_research"``.
-            Omit to refresh the currently active project (must already be a mount).
-    """
-    if project:
-        await _post("/project/switch", {"project_name": project})
-    return await _post("/mount/refresh", {})
-
-
-# ---------------------------------------------------------------------------
-
-# Configuration
-
-# ---------------------------------------------------------------------------
-
-
-@mcp.tool()
-async def get_config() -> Any:
-    """Return the active Axon configuration.
-
-    Secrets (API keys, tokens) are masked as ``***`` by the server — this tool
-    can never read a credential back out. Use it to discover the exact field
-    names accepted by set_config().
-    """
-    return await _get("/config")
-
-
-@mcp.tool()
-async def set_config(key: str, value: Any, persist: bool = True) -> Any:
-    """Set a single Axon configuration field.
-
-    ``key`` accepts either a dot-notation alias (``chunk.strategy``,
-    ``llm.model``, ``rag.top_k``) or any ``AxonConfig`` field name directly
-    (``graph_rag_depth``, ``chunk_size``, ``llm_temperature``). Call
-    get_config() to see every available field.
-
-    ``persist=True`` also writes the change to config.yaml so it survives a
-    restart; ``persist=False`` applies it to the running brain only.
-
-    Changing ``llm_provider`` / ``llm_model`` / ``embedding_*`` reinitialises the
-    affected component, so the next query uses the new setting immediately.
-    Switching the embedding model invalidates existing vectors — re-ingest after.
-    """
-    return await _post("/config/set", {"key": key, "value": value, "persist": persist})
-
-
-@mcp.tool()
-async def update_config(settings: dict, persist: bool = False) -> Any:
-    """Update several live retrieval settings in one call.
-
-    Covers the curated RAG-tuning subset — ``top_k``, ``rerank``, ``hyde``,
-    ``multi_query``, ``step_back``, ``graph_rag``, ``raptor``, ``cite`` and
-    similar. Storage paths and credentials are deliberately NOT settable here;
-    use set_config() for those.
-
-    The response carries an ``ignored`` list naming any key outside that subset:
-    those are reported rather than applied, so a typo or an unsupported field
-    cannot look like it succeeded.
-    """
-    body = dict(settings)
-    body["persist"] = persist
-    return await _post("/config/update", body)
-
-
-@mcp.tool()
-async def validate_config() -> Any:
-    """Check the on-disk config for errors, unknown keys, and risky combinations.
-
-    Returns findings by severity. Includes the warning raised when GraphRAG is
-    enabled with a local LLM and LLM-based entity extraction, which makes one
-    model call per chunk and is impractical on a slow local model.
-    """
-    return await _get("/config/validate")
-
-
-# ---------------------------------------------------------------------------
-
 # Entry point
-
 # ---------------------------------------------------------------------------
 
 

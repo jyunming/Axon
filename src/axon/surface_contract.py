@@ -1,22 +1,31 @@
 """Surface capability registry for Axon.
 
-
 Defines which capabilities exist and which surfaces support them.
 
+Surfaces split into two groups (0.5.0):
 
-Tier 1 = required on every supported surface.
+* **Human surfaces** — REST API, REPL, CLI. Every capability that has a human
+  use lives on at least one of these.
+* **Agent surfaces** — the MCP server (``axon-mcp``) and the VS Code Copilot
+  Language Model tools. ``Surface.VSCODE`` means the LM tools *only*; the
+  extension's own commands and webviews are human UI, not an agent surface.
+  Agent surfaces carry a deliberately small tool set: destructive, credential
+  and administrative operations are human-only, and every such gap names the
+  human route in its intentional-exception reason (see :func:`_human_only`).
 
+Tier 1 = required on every human surface (``HUMAN_SURFACES``); agent support
+is decided per capability.
 
-Tier 2 = required where practical; intentional exceptions are noted.
+Tier 2 = required where practical; every unsupported surface carries an
+intentional-exception reason.
 
+API-only = intentionally REST-only administration.
 
 Usage::
 
     from axon.surface_contract import REGISTRY, Tier, Surface
     tier1 = [c for c in REGISTRY if c.tier == Tier.ONE]
-    repl_caps = [c for c in REGISTRY if Surface.REPL in c.supported_surfaces]
-
-
+    mcp_caps = [c for c in REGISTRY if Surface.MCP in c.supported_surfaces]
 """
 
 
@@ -27,7 +36,7 @@ from enum import Enum
 
 
 class Tier(str, Enum):
-    ONE = "tier1"  # required everywhere
+    ONE = "tier1"  # required on every human surface
     TWO = "tier2"  # required where practical
     API_ONLY = "api_only"  # intentionally API-only
 
@@ -36,16 +45,28 @@ class Surface(str, Enum):
     API = "api"
     REPL = "repl"
     CLI = "cli"
-    VSCODE = "vscode"
+    VSCODE = "vscode"  # Copilot Language Model tools only
+    MCP = "mcp"
 
 
 ALL_SURFACES = frozenset(Surface)
 
 
-NO_VSCODE = frozenset({Surface.API, Surface.REPL, Surface.CLI})
+HUMAN_SURFACES = frozenset({Surface.API, Surface.REPL, Surface.CLI})
 
 
-PRIMARY_SURFACES = frozenset({Surface.API, Surface.REPL, Surface.CLI, Surface.VSCODE})
+AGENT_SURFACES = frozenset({Surface.MCP, Surface.VSCODE})
+
+
+def _human_only(reason: str, routes: str) -> dict[Surface, str]:
+    """Intentional-exception reasons for a capability kept off the agent surfaces.
+
+    *reason* says why (e.g. "Destructive"), *routes* names where a human does
+    it instead, so an agent (or its user) reading the registry knows the
+    operation still exists and how to reach it.
+    """
+    msg = f"{reason} — human-only (0.5.0): {routes}"
+    return {Surface.MCP: msg, Surface.VSCODE: msg}
 
 
 @dataclass(frozen=True)
@@ -93,9 +114,17 @@ REGISTRY: list[Capability] = [
         category="query",
         tier=Tier.TWO,
         description="Stream a grounded answer token-by-token.",
-        supported_surfaces=frozenset({Surface.API, Surface.CLI, Surface.VSCODE}),
+        supported_surfaces=frozenset({Surface.API, Surface.CLI}),
         intentional_exceptions={
             Surface.REPL: "REPL renders tokens incrementally via print; no separate mode needed",
+            Surface.VSCODE: (
+                "LM tool results are single-shot; query_knowledge returns the whole answer "
+                "(the @axon chat participant streams for humans)"
+            ),
+            Surface.MCP: (
+                "MCP tool results are single-shot, so a streaming tool only re-implemented "
+                "query_knowledge; removed in 0.5.0"
+            ),
         },
         api_route="/query/stream",
     ),
@@ -117,11 +146,14 @@ REGISTRY: list[Capability] = [
         supported_surfaces=frozenset({Surface.API, Surface.CLI}),
         intentional_exceptions={
             Surface.REPL: "Available via /query --dry-run equivalent",
-            Surface.VSCODE: "Not exposed as a tool; requires explicit decision to add",
+            Surface.VSCODE: "Retrieval-tuning diagnostics for humans; agents use search_knowledge",
+            Surface.MCP: "Retrieval-tuning diagnostics for humans; agents use search_knowledge",
         },
         api_route="/search/raw",
     ),
     # ── Ingest ───────────────────────────────────────────────────────────────
+    # On the agent surfaces all four ingest capabilities are one tool,
+    # ``ingest_knowledge`` (text | docs | url | path | refresh — exactly one).
     Capability(
         id="ingest_text",
         name="Ingest text",
@@ -164,7 +196,12 @@ REGISTRY: list[Capability] = [
         category="ingest",
         tier=Tier.ONE,
         description="List documents that have not been re-ingested within a configurable window.",
-        supported_surfaces=ALL_SURFACES,
+        supported_surfaces=HUMAN_SURFACES,
+        intentional_exceptions=_human_only(
+            "Collection maintenance",
+            "REPL /stale, `axon --list-stale`, REST GET /collection/stale, "
+            "VS Code command axon.listStaleDocs",
+        ),
         api_route="/collection/stale",
     ),
     # ── Collection ───────────────────────────────────────────────────────────
@@ -183,8 +220,7 @@ REGISTRY: list[Capability] = [
         category="collection",
         tier=Tier.ONE,
         description="Remove chunks or whole documents by ID, clearing their dedup records.",
-        supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={},
+        supported_surfaces=ALL_SURFACES,
         api_route="/delete",
     ),
     Capability(
@@ -193,8 +229,12 @@ REGISTRY: list[Capability] = [
         category="collection",
         tier=Tier.ONE,
         description="Delete all documents in the current project.",
-        supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={},
+        supported_surfaces=HUMAN_SURFACES,
+        intentional_exceptions=_human_only(
+            "Destructive",
+            "REPL /clear, `axon --clear --yes`, REST POST /clear, "
+            "VS Code command axon.clearKnowledgeBase",
+        ),
         api_route="/clear",
     ),
     # ── Project ──────────────────────────────────────────────────────────────
@@ -231,11 +271,17 @@ REGISTRY: list[Capability] = [
         category="project",
         tier=Tier.ONE,
         description="Delete a project and all its stored knowledge.",
-        supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={},
+        supported_surfaces=HUMAN_SURFACES,
+        intentional_exceptions=_human_only(
+            "Destructive",
+            "REPL /project delete <name>, `axon --project-delete <name>`, "
+            "REST POST /project/delete/{name}",
+        ),
         api_route="/project/delete/{name}",
     ),
     # ── Config ───────────────────────────────────────────────────────────────
+    # Agent surfaces: set_config(settings: dict, persist=False) -> POST /config/set
+    # (batch form); get_config(validate=False) -> GET /config (+ /config/validate).
     Capability(
         id="config_update",
         name="Update settings",
@@ -261,10 +307,11 @@ REGISTRY: list[Capability] = [
         category="store",
         tier=Tier.TWO,
         description="Check whether the AxonStore is initialised and return its metadata.",
-        supported_surfaces=frozenset({Surface.API, Surface.VSCODE}),
+        supported_surfaces=frozenset({Surface.API}),
         intentional_exceptions={
             Surface.REPL: "REPL always launches with an initialised store — startup guarantees it",
             Surface.CLI: "CLI always launches with an initialised store — startup guarantees it",
+            **_human_only("Store administration", "REST GET /store/status"),
         },
         api_route="/store/status",
     ),
@@ -274,8 +321,12 @@ REGISTRY: list[Capability] = [
         category="store",
         tier=Tier.ONE,
         description="Move the AxonStore to a different base path (e.g. a shared drive).",
-        supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={},
+        supported_surfaces=HUMAN_SURFACES,
+        intentional_exceptions=_human_only(
+            "Store administration (moves every project)",
+            "REPL /store init <path>, `axon --store-init <path>`, REST POST /store/init, "
+            "VS Code command axon.initStore",
+        ),
         api_route="/store/init",
     ),
     Capability(
@@ -284,8 +335,7 @@ REGISTRY: list[Capability] = [
         category="share",
         tier=Tier.ONE,
         description="Create an HMAC share token for a grantee.",
-        supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={},
+        supported_surfaces=ALL_SURFACES,
         api_route="/share/generate",
     ),
     Capability(
@@ -294,8 +344,7 @@ REGISTRY: list[Capability] = [
         category="share",
         tier=Tier.ONE,
         description="Mount a shared project using a share token.",
-        supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={},
+        supported_surfaces=ALL_SURFACES,
         api_route="/share/redeem",
     ),
     Capability(
@@ -303,9 +352,13 @@ REGISTRY: list[Capability] = [
         name="Revoke share",
         category="share",
         tier=Tier.ONE,
-        description="Revoke an active share grant.",
-        supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={},
+        description=(
+            "Revoke an active share grant. The agent tools (MCP, VS Code) do a soft "
+            "revoke only; hard revoke with DEK rotation is human-only: REPL "
+            "/share revoke <ssk_id> --project <name> --rotate, `axon --share-rotate`, "
+            "REST POST /share/revoke {rotate: true}."
+        ),
+        supported_surfaces=ALL_SURFACES,
         api_route="/share/revoke",
     ),
     Capability(
@@ -314,8 +367,7 @@ REGISTRY: list[Capability] = [
         category="share",
         tier=Tier.ONE,
         description="List active shares granted and received.",
-        supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={},
+        supported_surfaces=ALL_SURFACES,
         api_route="/share/list",
     ),
     # ── Graph ────────────────────────────────────────────────────────────────
@@ -325,7 +377,12 @@ REGISTRY: list[Capability] = [
         category="graph",
         tier=Tier.ONE,
         description="Show entity count, code node count, and community build state.",
-        supported_surfaces=ALL_SURFACES,
+        supported_surfaces=HUMAN_SURFACES,
+        intentional_exceptions=_human_only(
+            "Graph administration",
+            "REPL /graph status, `axon --graph-status`, REST GET /graph/status, "
+            "VS Code command axon.showGraphStatus",
+        ),
         api_route="/graph/status",
     ),
     Capability(
@@ -334,8 +391,11 @@ REGISTRY: list[Capability] = [
         category="graph",
         tier=Tier.TWO,
         description="Rebuild community summaries and finalize the knowledge graph.",
-        supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={},
+        supported_surfaces=HUMAN_SURFACES,
+        intentional_exceptions=_human_only(
+            "Graph administration (long-running LLM rebuild)",
+            "REPL /graph finalize, `axon --graph-finalize`, REST POST /graph/finalize",
+        ),
         api_route="/graph/finalize",
     ),
     Capability(
@@ -344,10 +404,14 @@ REGISTRY: list[Capability] = [
         category="graph",
         tier=Tier.TWO,
         description="Return the full entity/relation knowledge-graph as a JSON nodes+links payload.",
-        supported_surfaces=frozenset({Surface.API, Surface.VSCODE}),
+        supported_surfaces=frozenset({Surface.API}),
         intentional_exceptions={
             Surface.REPL: "Raw JSON payload not useful in interactive REPL; use graph_viz instead",
             Surface.CLI: "Raw JSON payload not useful in CLI; use graph_viz instead",
+            **_human_only(
+                "Whole-graph dump (too large for agent context; agents use graph_retrieve)",
+                "REST GET /graph/data, VS Code graph panel (axon.showGraphForQuery)",
+            ),
         },
         api_route="/graph/data",
     ),
@@ -360,6 +424,7 @@ REGISTRY: list[Capability] = [
         supported_surfaces=frozenset({Surface.API, Surface.REPL, Surface.CLI}),
         intentional_exceptions={
             Surface.VSCODE: "Graph panel exists but uses /graph/data; separate from viz export",
+            Surface.MCP: "HTML visualisation is for humans; agents use graph_retrieve",
         },
         api_route="/graph/visualize",
     ),
@@ -373,8 +438,11 @@ REGISTRY: list[Capability] = [
             "facts in the same scope). Returns supported=false on backends that do "
             "not track conflicts (e.g. graphrag)."
         ),
-        supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={},
+        supported_surfaces=HUMAN_SURFACES,
+        intentional_exceptions=_human_only(
+            "Graph administration (conflicts are resolved by a human)",
+            "REPL /graph conflicts, `axon --graph-conflicts`, REST GET /graph/conflicts",
+        ),
         api_route="/graph/conflicts",
     ),
     Capability(
@@ -387,8 +455,7 @@ REGISTRY: list[Capability] = [
             "RetrievalConfig — surfaces point_in_time historical queries and "
             "per-query federation_weights overrides without an LLM call."
         ),
-        supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={},
+        supported_surfaces=ALL_SURFACES,
         api_route="/graph/retrieve",
     ),
     Capability(
@@ -402,13 +469,7 @@ REGISTRY: list[Capability] = [
             "dynamic_graph and federated projects store it; graphrag and none "
             "answer status='not_applicable'."
         ),
-        supported_surfaces=frozenset({Surface.API, Surface.REPL, Surface.CLI}),
-        intentional_exceptions={
-            Surface.VSCODE: (
-                "Added to the agent surfaces (MCP + VS Code LM tools) with the "
-                "MCP/VS Code tool consolidation (PR5c)"
-            ),
-        },
+        supported_surfaces=ALL_SURFACES,
         api_route="/graph/facts",
     ),
     # ── Session ──────────────────────────────────────────────────────────────
@@ -421,6 +482,10 @@ REGISTRY: list[Capability] = [
         supported_surfaces=frozenset({Surface.API, Surface.REPL, Surface.CLI}),
         intentional_exceptions={
             Surface.VSCODE: "Session management is a REPL/CLI workflow; extension focuses on single-turn tool calls",
+            Surface.MCP: (
+                "Saved sessions are the human REPL/CLI's chat history; agents keep their "
+                "own context. Human routes: REPL /sessions, `axon --session-list`, REST GET /sessions"
+            ),
         },
         api_route="/sessions",
     ),
@@ -429,15 +494,13 @@ REGISTRY: list[Capability] = [
         id="active_leases",
         name="Active leases",
         category="maintenance",
-        # Tier.TWO (not API_ONLY) while VS Code still registers the
-        # get_active_leases LM tool, so TestVsCodeManifestContract keeps
-        # checking it; the agent-surface slim-down removes it from VS Code.
-        tier=Tier.TWO,
+        tier=Tier.API_ONLY,
         description="List active write-lease counts per project; used to confirm it is safe to enter maintenance state.",
-        supported_surfaces=frozenset({Surface.API, Surface.VSCODE}),
+        supported_surfaces=frozenset({Surface.API}),
         intentional_exceptions={
             Surface.REPL: "Operator diagnostic paired with API-only maintenance state control",
             Surface.CLI: "Operator diagnostic paired with API-only maintenance state control",
+            **_human_only("Operator diagnostic", "REST GET /registry/leases"),
         },
         api_route="/registry/leases",
     ),
@@ -452,6 +515,7 @@ REGISTRY: list[Capability] = [
             Surface.REPL: "API-only administrative operation",
             Surface.CLI: "API-only administrative operation",
             Surface.VSCODE: "API-only administrative operation",
+            Surface.MCP: "API-only administrative operation",
         },
         api_route="/project/maintenance",
     ),
@@ -462,8 +526,7 @@ REGISTRY: list[Capability] = [
         category="share",
         tier=Tier.TWO,
         description="Renew or clear a share key's TTL so it stays valid without revoking and re-issuing.",
-        supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={},
+        supported_surfaces=ALL_SURFACES,
         api_route="/share/extend",
     ),
     # ── Store whoami (SP-B1 parity sweep) ────────────────────────────────────
@@ -473,8 +536,11 @@ REGISTRY: list[Capability] = [
         category="store",
         tier=Tier.TWO,
         description="Return the current user's OS identity, store path, user directory, and active project.",
-        supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={},
+        supported_surfaces=HUMAN_SURFACES,
+        intentional_exceptions=_human_only(
+            "Store administration",
+            "REPL /store whoami, `axon --store-whoami`, REST GET /store/whoami",
+        ),
         api_route="/store/whoami",
     ),
     # ── Seal project (SP-B1 parity sweep) ────────────────────────────────────
@@ -484,8 +550,11 @@ REGISTRY: list[Capability] = [
         category="security",
         tier=Tier.TWO,
         description="Encrypt every content file in a project at rest using AES-256-GCM.",
-        supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={},
+        supported_surfaces=HUMAN_SURFACES,
+        intentional_exceptions=_human_only(
+            "Credential / encryption-at-rest operation",
+            "REPL /project seal <name>, `axon --project-seal <name>`, REST POST /project/seal",
+        ),
         api_route="/project/seal",
     ),
     # ── Pack / unpack project ─────────────────────────────────────────────────
@@ -498,8 +567,11 @@ REGISTRY: list[Capability] = [
             "Zip a project's entire on-disk footprint (index files, sessions, "
             "sub-projects, and .security/ if sealed) for backup, restore, or relocation."
         ),
-        supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={},
+        supported_surfaces=HUMAN_SURFACES,
+        intentional_exceptions=_human_only(
+            "Backup / filesystem operation",
+            "REPL /project pack <name>, `axon --project-pack <name>`, REST POST /project/pack",
+        ),
         api_route="/project/pack",
     ),
     Capability(
@@ -508,8 +580,11 @@ REGISTRY: list[Capability] = [
         category="project",
         tier=Tier.TWO,
         description="Restore a project from a zip archive produced by pack_project into AxonStore.",
-        supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={},
+        supported_surfaces=HUMAN_SURFACES,
+        intentional_exceptions=_human_only(
+            "Restore / filesystem operation (can overwrite a project)",
+            "REPL /project unpack <path>, `axon --project-unpack <path>`, REST POST /project/unpack",
+        ),
         api_route="/project/unpack",
     ),
     # ── Mount refresh (SP-B1 parity sweep) ───────────────────────────────────
@@ -519,8 +594,11 @@ REGISTRY: list[Capability] = [
         category="project",
         tier=Tier.TWO,
         description="Re-read the owner's version marker for an active mounted share and reopen project handles.",
-        supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={},
+        supported_surfaces=HUMAN_SURFACES,
+        intentional_exceptions=_human_only(
+            "Mount administration",
+            "REPL /mount-refresh, `axon --mount-refresh`, REST POST /mount/refresh",
+        ),
         api_route="/mount/refresh",
     ),
 ]

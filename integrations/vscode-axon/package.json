@@ -16,36 +16,24 @@
     "onStartupFinished",
     "onLanguageModelTool:search_knowledge",
     "onLanguageModelTool:query_knowledge",
-    "onLanguageModelTool:ingest_text",
-    "onLanguageModelTool:ingest_url",
-    "onLanguageModelTool:ingest_path",
+    "onLanguageModelTool:ingest_knowledge",
     "onLanguageModelTool:get_job_status",
+    "onLanguageModelTool:list_knowledge",
+    "onLanguageModelTool:delete_documents",
     "onLanguageModelTool:list_projects",
     "onLanguageModelTool:switch_project",
     "onLanguageModelTool:create_project",
-    "onLanguageModelTool:delete_project",
-    "onLanguageModelTool:delete_documents",
-    "onLanguageModelTool:list_knowledge",
-    "onLanguageModelTool:update_settings",
+    "onLanguageModelTool:get_config",
+    "onLanguageModelTool:set_config",
+    "onLanguageModelTool:graph_retrieve",
+    "onLanguageModelTool:update_fact",
     "onLanguageModelTool:share_project",
     "onLanguageModelTool:redeem_share",
-    "onLanguageModelTool:revoke_share",
     "onLanguageModelTool:list_shares",
-    "onLanguageModelTool:init_store",
-    "onLanguageModelTool:get_store_status",
-    "onLanguageModelTool:ingest_image",
-    "onLanguageModelTool:refresh_ingest",
-    "onLanguageModelTool:clear_knowledge",
+    "onLanguageModelTool:revoke_share",
+    "onLanguageModelTool:extend_share",
     "onLanguageModelTool:show_graph",
-    "onLanguageModelTool:graph_status",
-    "onLanguageModelTool:graph_finalize",
-    "onLanguageModelTool:ingest_texts",
-    "onLanguageModelTool:list_sessions",
-    "onLanguageModelTool:get_session",
-    "onLanguageModelTool:graph_data",
-    "onLanguageModelTool:get_active_leases",
-    "onLanguageModelTool:get_current_settings",
-    "onLanguageModelTool:get_stale_docs"
+    "onLanguageModelTool:ingest_image"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -86,7 +74,7 @@
             },
             "project": {
               "type": "string",
-              "description": "Optional. Target project name. Omit to use the active project. Use switch_project to change projects first."
+              "description": "Optional. Expected active project - an assertion, not a switch: the call fails (409) if Axon is serving a different project. Use switch_project to change projects first."
             }
           },
           "required": [
@@ -117,7 +105,7 @@
             },
             "project": {
               "type": "string",
-              "description": "Optional. Target project name. Omit to use the active project. Use switch_project to change projects first."
+              "description": "Optional. Expected active project - an assertion, not a switch: the call fails (409) if Axon is serving a different project. Use switch_project to change projects first."
             }
           },
           "required": [
@@ -126,78 +114,70 @@
         }
       },
       {
-        "name": "ingest_text",
-        "displayName": "Axon: Ingest Text",
-        "modelDescription": "Ingest a raw text snippet into the Axon knowledge base.",
+        "name": "ingest_knowledge",
+        "displayName": "Axon: Ingest Knowledge",
+        "modelDescription": "Add knowledge to the active Axon project. Give exactly ONE source: 'text' (one document; set metadata.source), 'docs' (many documents in one batched call - prefer this over repeated text calls), 'url' (an HTTP/HTTPS page), 'path' (a local file or directory; asynchronous - returns a job_id, poll get_job_status), or refresh=true (re-ingest previously indexed files that changed on disk; asynchronous). Duplicate content is skipped.",
         "canBeReferencedInPrompt": true,
-        "toolReferenceName": "axonIngestText",
+        "toolReferenceName": "axonIngest",
         "inputSchema": {
           "type": "object",
           "properties": {
             "text": {
               "type": "string",
-              "description": "The content to ingest"
+              "description": "Text content to ingest as one document."
             },
-            "source": {
-              "type": "string",
-              "description": "Label for the source (e.g. filename)"
+            "docs": {
+              "type": "array",
+              "description": "Batch of documents: [{\"text\": ..., \"doc_id\"?: ..., \"metadata\"?: {...}}].",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  },
+                  "doc_id": {
+                    "type": "string"
+                  },
+                  "metadata": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "text"
+                ]
+              }
             },
-            "project": {
-              "type": "string",
-              "description": "Optional. Target project name. Omit to use the active project."
-            }
-          },
-          "required": [
-            "text"
-          ]
-        }
-      },
-      {
-        "name": "ingest_url",
-        "displayName": "Axon: Ingest URL",
-        "modelDescription": "Fetch and ingest a web page into the Axon knowledge base.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "axonIngestUrl",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
             "url": {
               "type": "string",
-              "description": "The HTTP/HTTPS URL to ingest"
+              "description": "HTTP/HTTPS URL to fetch and ingest."
+            },
+            "path": {
+              "type": "string",
+              "description": "Absolute path to a local file or directory on the machine running axon-api."
+            },
+            "refresh": {
+              "type": "boolean",
+              "description": "true = re-ingest changed files instead of adding new content."
+            },
+            "metadata": {
+              "type": "object",
+              "description": "Metadata for text/url ingest, e.g. {\"source\": \"notes.md\", \"topic\": \"react\"}."
+            },
+            "doc_id": {
+              "type": "string",
+              "description": "Optional stable ID for text ingest (delete_documents accepts it)."
             },
             "project": {
               "type": "string",
-              "description": "Optional. Target project name. Omit to use the active project."
+              "description": "Optional. Expected active project - an assertion, not a switch: the call fails (409) if Axon is serving a different project. Use switch_project to change projects first."
             }
-          },
-          "required": [
-            "url"
-          ]
-        }
-      },
-      {
-        "name": "ingest_path",
-        "displayName": "Axon: Ingest Local Path",
-        "modelDescription": "Ingest a local directory or file into the Axon knowledge base. Returns a job_id immediately  -- ingestion runs in the background. Always call axon_getIngestStatus with the returned job_id and wait until status is 'completed' before searching. Accepts any absolute path on the local machine (e.g. /home/user/docs or C:\\Users\\user\\docs) or a path relative to the workspace root.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "axonIngestPath",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "path": {
-              "type": "string",
-              "description": "The local file or directory path to ingest"
-            }
-          },
-          "required": [
-            "path"
-          ]
+          }
         }
       },
       {
         "name": "get_job_status",
         "displayName": "Axon: Get Ingest Job Status",
-        "modelDescription": "Poll the status of a background ingest job started by ingest_path. Returns 'processing', 'completed', or 'failed'. Always call this after ingest_path and wait for 'completed' before running searches.",
+        "modelDescription": "Poll the status of a background ingest job started by ingest_knowledge with 'path' or refresh=true. Returns 'processing', 'completed', or 'failed'. Wait for 'completed' before searching the new content.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "axonIngestStatus",
         "inputSchema": {
@@ -205,11 +185,44 @@
           "properties": {
             "job_id": {
               "type": "string",
-              "description": "The job_id returned by ingest_path"
+              "description": "The job_id returned by ingest_knowledge"
             }
           },
           "required": [
             "job_id"
+          ]
+        }
+      },
+      {
+        "name": "list_knowledge",
+        "displayName": "Axon: List All Indexed Sources",
+        "modelDescription": "List all indexed sources in the active project with chunk counts.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "axonCollection",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "delete_documents",
+        "displayName": "Axon: Delete Documents",
+        "modelDescription": "Remove specific document(s) from the active project using their IDs. Accepts both chunk IDs and document IDs (e.g. the doc_id given to ingest_knowledge) - a document ID deletes all its chunks. Wiping a whole project is not available to agents.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "axonDeleteDocs",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "doc_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "List of chunk or document IDs to delete"
+            }
+          },
+          "required": [
+            "doc_ids"
           ]
         }
       },
@@ -233,13 +246,13 @@
         "inputSchema": {
           "type": "object",
           "properties": {
-            "name": {
+            "project_name": {
               "type": "string",
-              "description": "The project name to switch to (e.g. 'engineering', 'research', 'default')"
+              "description": "The project name to switch to (e.g. 'engineering', 'research', 'default', 'mounts/alice_docs')"
             }
           },
           "required": [
-            "name"
+            "project_name"
           ]
         }
       },
@@ -259,6 +272,15 @@
             "description": {
               "type": "string",
               "description": "Optional description"
+            },
+            "graph_backend": {
+              "type": "string",
+              "enum": [
+                "graphrag",
+                "dynamic_graph",
+                "none"
+              ],
+              "description": "Graph backend for the project (default graphrag). Immutable once set. Use dynamic_graph for projects agents will write facts into with update_fact."
             }
           },
           "required": [
@@ -267,459 +289,43 @@
         }
       },
       {
-        "name": "delete_project",
-        "displayName": "Axon: Delete Project",
-        "modelDescription": "Delete an existing Axon project and all its stored data.",
+        "name": "get_config",
+        "displayName": "Axon: Get Config",
+        "modelDescription": "Read the active Axon configuration: retrieval flags (top_k, rerank, hybrid_search, hyde, ...), RAG modes, and LLM/embedding settings. Secrets are masked. Use it to find the exact keys set_config accepts. validate=true also checks config.yaml for errors and risky combinations.",
         "canBeReferencedInPrompt": true,
-        "toolReferenceName": "axonDeleteProj",
+        "toolReferenceName": "axonGetConfig",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "name": {
-              "type": "string",
-              "description": "The name of the project to delete"
-            }
-          },
-          "required": [
-            "name"
-          ]
-        }
-      },
-      {
-        "name": "delete_documents",
-        "displayName": "Axon: Delete Documents",
-        "modelDescription": "Remove specific document(s) from the active project using their IDs. Accepts both chunk IDs and source doc IDs (e.g. the doc_id returned by ingest_text) \u2014 source IDs are automatically expanded to all their chunks before deletion.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "axonDeleteDocs",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "docIds": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              },
-              "description": "List of document IDs to delete"
-            }
-          },
-          "required": [
-            "docIds"
-          ]
-        }
-      },
-      {
-        "name": "list_knowledge",
-        "displayName": "Axon: List All Indexed Sources",
-        "modelDescription": "List all indexed sources in the active project with chunk counts.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "axonCollection",
-        "inputSchema": {
-          "type": "object",
-          "properties": {}
-        }
-      },
-      {
-        "name": "update_settings",
-        "displayName": "Axon: Update Settings",
-        "modelDescription": "Change Axon settings for this session (not saved to disk). Supports: top_k, similarity_threshold, hybrid_search, rerank, hyde, multi_query, step_back, query_decompose, compress_context, raptor, graph_rag, graph_rag_mode, graph_rag_community, graph_rag_relations, graph_rag_ner_backend, graph_rag_depth, graph_rag_budget, graph_rag_relation_budget, code_graph, code_graph_bridge, sentence_window, sentence_window_size, crag_lite, discussion_fallback, cite.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "axonSettings",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "top_k": {
-              "type": "number",
-              "description": "Number of chunks to retrieve (1-50)"
-            },
-            "similarity_threshold": {
-              "type": "number",
-              "description": "Minimum similarity score (0.0-1.0)"
-            },
-            "hybrid_search": {
+            "validate": {
               "type": "boolean",
-              "description": "Enable hybrid BM25 + vector search"
-            },
-            "rerank": {
-              "type": "boolean",
-              "description": "Enable cross-encoder reranking of retrieved chunks"
-            },
-            "hyde": {
-              "type": "boolean",
-              "description": "Enable Hypothetical Document Embeddings (HyDE)"
-            },
-            "multi_query": {
-              "type": "boolean",
-              "description": "Enable multi-query retrieval (3 rephrased queries merged)"
-            },
-            "step_back": {
-              "type": "boolean",
-              "description": "Enable step-back prompting (abstract query before retrieval)"
-            },
-            "query_decompose": {
-              "type": "boolean",
-              "description": "Enable query decomposition into atomic sub-questions"
-            },
-            "compress_context": {
-              "type": "boolean",
-              "description": "Enable LLM context compression before generation"
-            },
-            "raptor": {
-              "type": "boolean",
-              "description": "Enable RAPTOR hierarchical summary nodes during retrieval"
-            },
-            "graph_rag": {
-              "type": "boolean",
-              "description": "Enable GraphRAG entity-graph expansion during retrieval"
-            },
-            "sentence_window": {
-              "type": "boolean",
-              "description": "Enable sentence-window retrieval (expands chunks with surrounding sentences)"
-            },
-            "sentence_window_size": {
-              "type": "number",
-              "description": "Number of surrounding sentences to include on each side (default 2)"
-            },
-            "crag_lite": {
-              "type": "boolean",
-              "description": "Enable CRAG-lite corrective retrieval (re-queries on low-confidence chunks)"
-            },
-            "code_graph": {
-              "type": "boolean",
-              "description": "Enable code graph retrieval (uses code symbol graph for code-related queries)"
-            },
-            "graph_rag_mode": {
-              "type": "string",
-              "description": "GraphRAG query mode: \"local\" (entity neighbourhood), \"global\" (community summaries), or \"hybrid\""
-            },
-            "discussion_fallback": {
-              "type": "boolean",
-              "description": "Allow general-knowledge fallback when no relevant chunks are found (default false for tools)"
-            },
-            "cite": {
-              "type": "boolean",
-              "description": "Include inline source citations in generated answers"
-            },
-            "graph_rag_community": {
-              "type": "boolean",
-              "description": "Enable community detection on the entity graph (Louvain clustering)"
-            },
-            "graph_rag_relations": {
-              "type": "boolean",
-              "description": "Extract subject-relation-object triples during ingest (builds graph edges)"
-            },
-            "graph_rag_ner_backend": {
-              "type": "string",
-              "description": "NER backend for entity extraction: \"llm\" (default) or \"gliner\" (fast local model)"
-            },
-            "graph_rag_depth": {
-              "type": "string",
-              "description": "GraphRAG extraction depth: \"light\" (entities only), \"standard\" (entities + relations), or \"deep\" (+ claims)"
-            },
-            "graph_rag_budget": {
-              "type": "number",
-              "description": "Max entity-graph hops to expand per query (default 3)"
-            },
-            "graph_rag_relation_budget": {
-              "type": "number",
-              "description": "Max chunks to extract relations from per ingest batch (default 30)"
-            },
-            "code_graph_bridge": {
-              "type": "boolean",
-              "description": "Link code symbols to prose chunks that mention them"
+              "description": "Also validate config.yaml and return the issues (default false)."
             }
           }
         }
       },
       {
-        "name": "share_project",
-        "displayName": "Axon: Share Project",
-        "modelDescription": "Generate an HMAC share key that lets another user access one of your projects. Returns a share_string to send to the grantee out-of-band (email, Slack, etc.) and a key_id for future revocation.",
+        "name": "set_config",
+        "displayName": "Axon: Set Config",
+        "modelDescription": "Set one or more Axon config fields in one call. Keys are dot-notation aliases (chunk.strategy, llm.model, rag.top_k) or any config field name (top_k, rerank, graph_rag_depth). All keys are checked first - one unknown key rejects the whole batch. Applies to the running server only unless persist=true. If reinitialising a component fails (e.g. a provider whose extra is not installed), every key is rolled back and nothing is saved.",
         "canBeReferencedInPrompt": true,
-        "toolReferenceName": "axonShareProject",
+        "toolReferenceName": "axonSetConfig",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "project": {
-              "type": "string",
-              "description": "Name of the project to share (must exist in your AxonStore)"
-            },
-            "grantee": {
-              "type": "string",
-              "description": "OS username of the recipient on the shared filesystem"
-            }
-          },
-          "required": [
-            "project",
-            "grantee"
-          ]
-        }
-      },
-      {
-        "name": "redeem_share",
-        "displayName": "Axon: Redeem Share",
-        "modelDescription": "Redeem a share string received from another user to create a mount descriptor in your mounts/ directory. After redemption the shared project appears in your project list as mounts/{owner}_{project} and can be queried.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "axonRedeemShare",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "share_string": {
-              "type": "string",
-              "description": "The base64-encoded share string received from the project owner"
-            }
-          },
-          "required": [
-            "share_string"
-          ]
-        }
-      },
-      {
-        "name": "revoke_share",
-        "displayName": "Axon: Revoke Share",
-        "modelDescription": "Revoke a previously issued share key by key_id. The grantee's mount will be removed on their next access. Use list_shares to find the key_id to revoke.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "axonRevokeShare",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "key_id": {
-              "type": "string",
-              "description": "The key_id of the share to revoke (e.g. sk_a1b2c3d4). Get it from list_shares."
-            }
-          },
-          "required": [
-            "key_id"
-          ]
-        }
-      },
-      {
-        "name": "list_shares",
-        "displayName": "Axon: List Active Shares",
-        "modelDescription": "List all active shares for the current user. Returns 'sharing' (projects this user has shared with others, with revocation status) and 'shared' (projects others have shared with this user, with mount names). Use to audit access or troubleshoot missing shared projects.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "axonListShares",
-        "inputSchema": {
-          "type": "object",
-          "properties": {}
-        }
-      },
-      {
-        "name": "init_store",
-        "displayName": "Axon: Initialize AxonStore",
-        "modelDescription": "Change the store base path (e.g. to move data to a shared drive). By default (persist=false) the change is in-memory only and config.yaml is NOT modified. Pass persist=true to write the new path to config.yaml so it survives restarts.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "axonInitStore",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "base_path": {
-              "type": "string",
-              "description": "Absolute path to the directory where AxonStore/ will be created (e.g. '/data' creates '/data/AxonStore/<username>/')"
+            "settings": {
+              "type": "object",
+              "description": "Map of key to new value, e.g. {\"rag.top_k\": 8, \"rerank\": true}",
+              "additionalProperties": true
             },
             "persist": {
               "type": "boolean",
-              "description": "Set true to write the new store path to config.yaml so it survives server restarts. Defaults to false \u2014 omit this for test or temporary AxonStore sessions to avoid permanently modifying the user config."
+              "description": "Also save the changes to config.yaml so they survive a restart (default false)."
             }
           },
           "required": [
-            "base_path"
+            "settings"
           ]
-        }
-      },
-      {
-        "name": "get_store_status",
-        "displayName": "Axon: Get Store Status",
-        "modelDescription": "Check whether the AxonStore has been initialised. Returns store metadata (path, version, creation date) when ready, or {\"initialized\": false} on a fresh install. Call this on startup before any other Axon tool.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "axonGetStoreStatus",
-        "inputSchema": {
-          "type": "object",
-          "properties": {}
-        }
-      },
-      {
-        "name": "show_graph",
-        "displayName": "Axon: Show Graph Panel",
-        "modelDescription": "Open the Axon graph panel for a query. Shows the answer, source citations, and the entity/relationship graph. Use when the user asks to 'show the graph', 'visualise', or 'see connections' for a topic.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "axonGraph",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "query": {
-              "type": "string",
-              "description": "The question or topic to visualise"
-            }
-          },
-          "required": [
-            "query"
-          ]
-        }
-      },
-      {
-        "name": "ingest_image",
-        "displayName": "Axon: Ingest Image via Copilot",
-        "modelDescription": "Describe an image file (PNG, JPG, JPEG, BMP, TIFF, WEBP) using Copilot's multimodal vision model, then ingest the description into the Axon knowledge base. Requires a Copilot model with image support (e.g. GPT-4o, Claude 3.x). The image path must be an absolute local path accessible to VS Code.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "axonIngestImage",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "imagePath": {
-              "type": "string",
-              "description": "Absolute path to the image file (PNG, JPG, JPEG, BMP, TIFF, or WEBP)"
-            },
-            "project": {
-              "type": "string",
-              "description": "Target project namespace. Omit to use the active project."
-            }
-          },
-          "required": [
-            "imagePath"
-          ]
-        }
-      },
-      {
-        "name": "refresh_ingest",
-        "displayName": "Axon: Refresh Ingest",
-        "modelDescription": "Re-ingest tracked files whose content has changed since the last ingest. Returns a job_id immediately \u2014 poll with axon_getIngestStatus until status is 'completed', then check reingested/skipped/missing/errors counts. Use after editing source files to keep the knowledge base current without re-ingesting everything.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "axonRefreshIngest",
-        "inputSchema": {
-          "type": "object",
-          "properties": {}
-        }
-      },
-      {
-        "name": "get_stale_docs",
-        "displayName": "Axon: List Stale Documents",
-        "modelDescription": "Return documents that have not been re-ingested within N calendar days. Use to identify which parts of the knowledge base are outdated and may need refreshing. Pair with refresh_ingest to update stale sources.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "axonListStaleDocs",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "days": {
-              "type": "integer",
-              "description": "Age threshold in days. Documents older than this are returned. Default: 7.",
-              "default": 7
-            }
-          }
-        }
-      },
-      {
-        "name": "clear_knowledge",
-        "displayName": "Axon: Clear Knowledge Base",
-        "modelDescription": "Clear the entire vector store and BM25 index for the current project. This is destructive and cannot be undone  -- all ingested documents for the active project are removed. Use only when a full re-ingest is intended.",
-        "canBeReferencedInPrompt": false,
-        "inputSchema": {
-          "type": "object",
-          "properties": {}
-        }
-      },
-      {
-        "name": "graph_status",
-        "displayName": "Axon: Graph Status",
-        "modelDescription": "Return the current GraphRAG community build status: community_build_in_progress (bool) and community_summary_count (int). Use to check whether community summaries are ready before running a global-mode query.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "axonShowGraphStatus",
-        "inputSchema": {
-          "type": "object",
-          "properties": {}
-        }
-      },
-      {
-        "name": "get_current_settings",
-        "displayName": "Axon: Get Current Settings",
-        "modelDescription": "Read the current active Axon configuration: retrieval flags (top_k, rerank, hybrid, hyde, etc.), RAG mode settings (sentence_window, crag_lite, graph_rag_mode), and generation settings (llm_provider, llm_model, temperature). Use when the user asks what settings are active or wants to inspect before changing them.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "axonGetSettings",
-        "inputSchema": {
-          "type": "object",
-          "properties": {}
-        }
-      },
-      {
-        "name": "graph_finalize",
-        "displayName": "Axon: Graph Finalize",
-        "modelDescription": "Trigger a community rebuild on the Axon knowledge graph. Rebuilds community summaries used for global-mode GraphRAG queries. Returns the number of community summaries generated. Run after ingesting a large batch of documents or when community_summary_count is 0.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "axonFinalizeGraph",
-        "inputSchema": {
-          "type": "object",
-          "properties": {}
-        }
-      },
-      {
-        "name": "ingest_texts",
-        "displayName": "Axon: Ingest Multiple Texts",
-        "modelDescription": "Ingest multiple text documents into Axon in one batch call. Use when you have more than one text to add. Input: docs (array of {text, metadata} objects), project (optional).",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "docs": {
-              "type": "array",
-              "description": "Array of {text, metadata} objects to ingest"
-            },
-            "project": {
-              "type": "string",
-              "description": "Target project name (optional)"
-            }
-          },
-          "required": [
-            "docs"
-          ]
-        }
-      },
-      {
-        "name": "list_sessions",
-        "displayName": "Axon: List Sessions",
-        "modelDescription": "List all saved chat sessions for the active project. Returns session IDs and metadata.",
-        "inputSchema": {
-          "type": "object",
-          "properties": {}
-        }
-      },
-      {
-        "name": "get_session",
-        "displayName": "Axon: Get Session",
-        "modelDescription": "Retrieve a specific chat session by its ID. Input: session_id (string, required).",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "session_id": {
-              "type": "string",
-              "description": "The session ID to retrieve"
-            }
-          },
-          "required": [
-            "session_id"
-          ]
-        }
-      },
-      {
-        "name": "graph_data",
-        "displayName": "Axon: Graph Data",
-        "modelDescription": "Return the full entity/relation knowledge-graph as JSON (nodes and links). Use to inspect or export the graph. Returns empty arrays when no graph has been built.",
-        "inputSchema": {
-          "type": "object",
-          "properties": {}
-        }
-      },
-      {
-        "name": "graph_conflicts",
-        "displayName": "Axon: Graph Conflicts",
-        "modelDescription": "List facts whose status is 'conflicted' (incompatible exclusive-relation facts in the same scope). Backends without conflict tracking (e.g. graphrag) return supported=false.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "axonGraphConflicts",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "limit": {
-              "type": "number",
-              "description": "Maximum conflicts to return (1-1000, default 100)."
-            }
-          }
         }
       },
       {
@@ -756,6 +362,10 @@
                   "minimum": 0
                 }
               }
+            },
+            "project": {
+              "type": "string",
+              "description": "Optional. Expected active project - an assertion, not a switch: the call fails (409) if Axon is serving a different project. Use switch_project to change projects first."
             }
           },
           "required": [
@@ -764,74 +374,131 @@
         }
       },
       {
-        "name": "get_active_leases",
-        "displayName": "Axon: Get Active Leases",
-        "modelDescription": "Return active write-lease counts for all projects. Operator tool \u2014 use to check whether it is safe to put a project into maintenance mode (wait for active_leases to reach 0 first).",
-        "inputSchema": {
-          "type": "object",
-          "properties": {}
-        }
-      },
-      {
-        "name": "axonConfigValidate",
-        "tags": [
-          "axon",
-          "config"
-        ],
-        "toolReferenceName": "axonConfigValidate",
-        "displayName": "Axon: Validate Config",
-        "modelDescription": "Validates the Axon config.yaml file and returns a list of issues (errors, warnings, and info).",
-        "inputSchema": {
-          "type": "object",
-          "properties": {}
-        }
-      },
-      {
-        "name": "axonConfigSet",
-        "tags": [
-          "axon",
-          "config"
-        ],
-        "toolReferenceName": "axonConfigSet",
-        "displayName": "Axon: Set Config Fields",
-        "modelDescription": "Sets one or more Axon config fields using dot-notation keys (e.g. chunk.strategy, llm.model, rag.top_k).",
+        "name": "update_fact",
+        "displayName": "Axon: Update Graph Fact",
+        "modelDescription": "Assert or correct one fact (subject, relation, object) in the active project's knowledge graph, with bi-temporal history (a replaced fact is superseded, not deleted). Only dynamic_graph and federated projects store facts; others answer status 'not_applicable'. replace=true makes this the only current fact for (subject, relation); false adds it alongside; omit to let Axon decide (replace for exclusive relations like IS_CEO_OF).",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "axonUpdateFact",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "changes": {
-              "type": "object",
-              "description": "Map of dot-notation key to new value, e.g. {\"chunk.strategy\": \"markdown\", \"rag.top_k\": 15}",
-              "additionalProperties": true
+            "subject": {
+              "type": "string",
+              "description": "Subject entity, e.g. 'Alice'"
             },
-            "persist": {
+            "relation": {
+              "type": "string",
+              "description": "Relation, e.g. 'WORKS_FOR' or 'works for' (normalised to upper snake case)"
+            },
+            "object": {
+              "type": "string",
+              "description": "Object entity, e.g. 'Acme Corp'"
+            },
+            "description": {
+              "type": "string",
+              "description": "Optional note stored with the fact"
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "description": "Confidence 0.0-1.0 (default 1.0)"
+            },
+            "replace": {
               "type": "boolean",
-              "description": "Whether to save changes to config.yaml on disk (default: true)"
+              "description": "true = supersede other current facts for (subject, relation); false = add alongside"
+            },
+            "project": {
+              "type": "string",
+              "description": "Optional. Expected active project - an assertion, not a switch: the call fails (409) if Axon is serving a different project. Use switch_project to change projects first."
             }
           },
           "required": [
-            "changes"
+            "subject",
+            "relation",
+            "object"
           ]
         }
       },
       {
-        "name": "seal_project",
-        "displayName": "Axon: Seal Project",
-        "modelDescription": "Encrypt every content file in a project at rest (one-shot). Idempotent \u2014 re-sealing an already-sealed project is a no-op. Requires the sealed-store to be unlocked first (security_unlock).",
+        "name": "share_project",
+        "displayName": "Axon: Share Project",
+        "modelDescription": "Generate a read-only share key that lets another user access one of your projects. Returns a share_string to send to the grantee out-of-band (email, Slack, etc.) and a key_id for later revocation. Optional ttl_days makes the share expire.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "axonShareProject",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "project_name": {
+            "project": {
               "type": "string",
-              "description": "Name of the open project to seal. Must exist."
+              "description": "Name of the project to share (must exist in your AxonStore)"
             },
-            "migration_mode": {
+            "grantee": {
               "type": "string",
-              "description": "Reserved for future variants; only 'in_place' is implemented.",
-              "default": "in_place"
+              "description": "OS username of the recipient on the shared filesystem"
+            },
+            "ttl_days": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Optional time-to-live in days; the share expires afterwards (renew with extend_share)."
             }
           },
           "required": [
-            "project_name"
+            "project",
+            "grantee"
+          ]
+        }
+      },
+      {
+        "name": "redeem_share",
+        "displayName": "Axon: Redeem Share",
+        "modelDescription": "Redeem a share string received from another user to create a mount descriptor in your mounts/ directory. After redemption the shared project appears in your project list as mounts/{owner}_{project} and can be queried.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "axonRedeemShare",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "share_string": {
+              "type": "string",
+              "description": "The base64-encoded share string received from the project owner"
+            }
+          },
+          "required": [
+            "share_string"
+          ]
+        }
+      },
+      {
+        "name": "list_shares",
+        "displayName": "Axon: List Active Shares",
+        "modelDescription": "List all active shares for the current user. Returns 'sharing' (projects this user has shared with others, with revocation status) and 'shared' (projects others have shared with this user, with mount names). Use to audit access or troubleshoot missing shared projects.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "axonListShares",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "revoke_share",
+        "displayName": "Axon: Revoke Share",
+        "modelDescription": "Revoke a previously issued share key by key_id (soft revoke). Plaintext shares (sk_...) lose access on the grantee's next access; sealed shares (ssk_...) need 'project' and can no longer be redeemed. Rotating the project key (hard revoke) is human-only. Use list_shares to find the key_id.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "axonRevokeShare",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "key_id": {
+              "type": "string",
+              "description": "The key_id of the share to revoke (e.g. sk_a1b2c3d4). Get it from list_shares."
+            },
+            "project": {
+              "type": "string",
+              "description": "Project name - required for sealed (ssk_) shares, ignored for plaintext ones."
+            }
+          },
+          "required": [
+            "key_id"
           ]
         }
       },
@@ -860,58 +527,44 @@
         }
       },
       {
-        "name": "store_whoami",
-        "displayName": "Axon: Store Whoami",
-        "modelDescription": "Show current user identity and AxonStore path. Returns username, store_path, user_dir, and active_project.",
-        "inputSchema": {
-          "type": "object",
-          "properties": {}
-        }
-      },
-      {
-        "name": "pack_project",
-        "displayName": "Axon: Pack Project",
-        "modelDescription": "Zip a project's entire on-disk footprint (index files, sessions, sub-projects, and .security/ if sealed) for backup, restore, or relocation. Returns the path to the created zip.",
+        "name": "show_graph",
+        "displayName": "Axon: Show Graph Panel",
+        "modelDescription": "Open the Axon graph panel for a query. Shows the answer, source citations, and the entity/relationship graph. Use when the user asks to 'show the graph', 'visualise', or 'see connections' for a topic.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "axonGraph",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "project_name": {
+            "query": {
               "type": "string",
-              "description": "Name of the project to pack."
-            },
-            "out_path": {
-              "type": "string",
-              "description": "Optional server-side output path. Defaults to ~/.axon/packs/<name>-<timestamp>.axonpack.zip."
+              "description": "The question or topic to visualise"
             }
           },
           "required": [
-            "project_name"
+            "query"
           ]
         }
       },
       {
-        "name": "unpack_project",
-        "displayName": "Axon: Unpack Project",
-        "modelDescription": "Restore a project from a zip archive produced by pack_project into AxonStore. Refuses if the target project already exists unless force is set.",
+        "name": "ingest_image",
+        "displayName": "Axon: Ingest Image via Copilot",
+        "modelDescription": "Describe an image file (PNG, JPG, JPEG, BMP, TIFF, WEBP) using Copilot's multimodal vision model, then ingest the description into the Axon knowledge base. Requires a Copilot model with image support (e.g. GPT-4o, Claude 3.x). The image path must be an absolute local path accessible to VS Code.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "axonIngestImage",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "zip_path": {
+            "imagePath": {
               "type": "string",
-              "description": "Server-side filesystem path to a .axonpack.zip produced by pack_project."
+              "description": "Absolute path to the image file (PNG, JPG, JPEG, BMP, TIFF, or WEBP)"
             },
-            "as_name": {
+            "project": {
               "type": "string",
-              "description": "Target project name. Defaults to the pack manifest's original project name."
-            },
-            "force": {
-              "type": "boolean",
-              "description": "Overwrite an existing project directory at the target name.",
-              "default": false
+              "description": "Optional. Expected active project - an assertion, not a switch: the call fails (409) if Axon is serving a different project. Use switch_project to change projects first."
             }
           },
           "required": [
-            "zip_path"
+            "imagePath"
           ]
         }
       }
@@ -992,10 +645,6 @@
       {
         "command": "axon.configSetup",
         "title": "Axon: Config Setup Wizard"
-      },
-      {
-        "command": "axon.showGovernancePanel",
-        "title": "Axon: Open Governance Panel"
       }
     ],
     "configuration": {

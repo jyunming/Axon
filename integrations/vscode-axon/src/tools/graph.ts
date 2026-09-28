@@ -6,31 +6,9 @@ import * as vscode from 'vscode';
 
 import { state, resolveApiBase } from '../shared';
 
-import { httpGet, httpPost, formatDetail, apiConnectionError } from '../client/http';
+import { httpGet, httpPost, formatDetail, parseJsonSafe, apiConnectionError } from '../client/http';
 
 import { showGraphForQuery } from '../graph/panel';
-
-export class AxonGraphStatusTool implements vscode.LanguageModelTool<any> {
-  async prepareInvocation(_options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
-    return { invocationMessage: 'Fetching GraphRAG status…' };
-  }
-  async invoke(_options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
-    const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = resolveApiBase();
-    const apiKey = config.get<string>('apiKey', '');
-    try {
-      const result = await httpGet(`${apiBase}/graph/status`, apiKey);
-      const data = JSON.parse(result.body);
-      if (result.status !== 200) {
-        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Graph status error: ${formatDetail(data, result.body)}`)]);
-      }
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(JSON.stringify(data, null, 2))]);
-    } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
-    }
-  }
-
-}
 
 export class AxonShowGraphTool implements vscode.LanguageModelTool<any> {
   constructor(private readonly context: vscode.ExtensionContext) {}
@@ -53,65 +31,6 @@ export class AxonShowGraphTool implements vscode.LanguageModelTool<any> {
 
 }
 
-export class AxonGraphFinalizeTool implements vscode.LanguageModelTool<any> {
-  async prepareInvocation(_options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
-    return { invocationMessage: 'Finalizing Axon knowledge graph (community rebuild)…' };
-  }
-  async invoke(_options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
-    const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = resolveApiBase();
-    const apiKey = config.get<string>('apiKey', '');
-    try {
-      const result = await httpPost(`${apiBase}/graph/finalize`, {}, apiKey);
-      const data = JSON.parse(result.body);
-      if (result.status !== 200) {
-        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Graph finalize error: ${formatDetail(data, result.body)}`)]);
-      }
-      const status = data.status ?? 'ok';
-      const summaries = data.community_summary_count ?? data.summaries ?? 0;
-      const detail = data.detail ?? '';
-      const backendId = data.backend_id ?? '';
-      let msg: string;
-      if (status === 'not_applicable') {
-        msg = `Graph finalize not applicable on backend '${backendId || 'unknown'}'${detail ? ` — ${detail}` : ''}.`;
-      } else {
-        msg = `Graph finalized. Community summaries: ${summaries}.`;
-      }
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(msg)]);
-    } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
-    }
-  }
-
-}
-
-export class AxonGraphConflictsTool implements vscode.LanguageModelTool<any> {
-  async prepareInvocation(_options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
-    return { invocationMessage: 'Listing conflicted graph facts…' };
-  }
-  async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
-    const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = resolveApiBase();
-    const apiKey = config.get<string>('apiKey', '');
-    const limit = (options.input && typeof options.input.limit === 'number') ? options.input.limit : 100;
-    try {
-      const result = await httpGet(`${apiBase}/graph/conflicts?limit=${encodeURIComponent(String(limit))}`, apiKey);
-      const data = JSON.parse(result.body);
-      if (result.status !== 200) {
-        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Graph conflicts error: ${formatDetail(data, result.body)}`)]);
-      }
-      if (data.supported === false) {
-        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Backend '${data.backend ?? 'unknown'}' does not track conflicted facts.`)]);
-      }
-      const conflicts = Array.isArray(data.conflicts) ? data.conflicts : [];
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Backend '${data.backend ?? 'unknown'}' — ${conflicts.length} conflict(s):\n${JSON.stringify(conflicts, null, 2)}`)]);
-    } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
-    }
-  }
-
-}
-
 export class AxonGraphRetrieveTool implements vscode.LanguageModelTool<any> {
   async prepareInvocation(options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
     const q = options.input && options.input.query ? String(options.input.query) : '';
@@ -127,6 +46,8 @@ export class AxonGraphRetrieveTool implements vscode.LanguageModelTool<any> {
     if (options.input?.federation_weights && typeof options.input.federation_weights === 'object') {
       body.federation_weights = options.input.federation_weights;
     }
+    // Assertion, not a switch: 409 if Axon is serving a different project.
+    if (typeof options.input?.project === 'string' && options.input.project) { body.project = options.input.project; }
     try {
       const result = await httpPost(`${apiBase}/graph/retrieve`, body, apiKey);
       const data = JSON.parse(result.body);
@@ -142,55 +63,38 @@ export class AxonGraphRetrieveTool implements vscode.LanguageModelTool<any> {
 
 }
 
-export class AxonGraphDataTool implements vscode.LanguageModelTool<any> {
-  async prepareInvocation(_options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
-    return { invocationMessage: 'Fetching Axon knowledge graph data…' };
+/**
+ * update_fact — assert or correct one graph fact (mirrors the MCP tool and
+ * POST /graph/facts). Only the fields the model supplied are sent: the REST
+ * body is extra=forbid, and omitted `replace` means "backend default".
+ */
+export class AxonUpdateFactTool implements vscode.LanguageModelTool<any> {
+  async prepareInvocation(options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
+    const { subject, relation, object } = options.input ?? {};
+    return { invocationMessage: `Recording fact: ${subject} ${relation} ${object}…` };
   }
-  async invoke(_options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
+  async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
     const apiBase = resolveApiBase();
     const apiKey = config.get<string>('apiKey', '');
+    const input = options.input ?? {};
+    const body: any = { subject: input.subject, relation: input.relation, object: input.object };
+    if (typeof input.description === 'string' && input.description) { body.description = input.description; }
+    if (typeof input.confidence === 'number') { body.confidence = input.confidence; }
+    if (typeof input.replace === 'boolean') { body.replace = input.replace; }
+    if (typeof input.project === 'string' && input.project) { body.project = input.project; }
     try {
-      const result = await httpGet(`${apiBase}/graph/data`, apiKey);
-      const data = JSON.parse(result.body);
+      const result = await httpPost(`${apiBase}/graph/facts`, body, apiKey);
+      const data = parseJsonSafe(result.body);
       if (result.status !== 200) {
-        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Graph data error: ${formatDetail(data, result.body)}`)]);
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Update fact error (${result.status}): ${formatDetail(data, result.body)}`)]);
       }
-      const MAX_NODES = 500;
-      const MAX_LINKS = 1000;
-      const originalNodes = Array.isArray(data.nodes) ? data.nodes : [];
-      const originalLinks = Array.isArray(data.links) ? data.links : [];
-      const nodeCount = originalNodes.length;
-      const linkCount = originalLinks.length;
-      const truncatedNodes = originalNodes.slice(0, MAX_NODES);
-      const truncatedLinks = originalLinks.slice(0, MAX_LINKS);
-      const truncated =
-        truncatedNodes.length < originalNodes.length ||
-        truncatedLinks.length < originalLinks.length;
-      const responsePayload = { ...data, nodes: truncatedNodes, links: truncatedLinks, truncated };
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Graph: ${nodeCount} nodes, ${linkCount} edges.\n${JSON.stringify(responsePayload, null, 2)}`)]);
-    } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
-    }
-  }
-
-}
-
-export class AxonGetActiveLeasesTool implements vscode.LanguageModelTool<any> {
-  async prepareInvocation(_options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
-    return { invocationMessage: 'Fetching active write leases…' };
-  }
-  async invoke(_options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
-    const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = resolveApiBase();
-    const apiKey = config.get<string>('apiKey', '');
-    try {
-      const result = await httpGet(`${apiBase}/registry/leases`, apiKey);
-      const data = JSON.parse(result.body);
-      if (result.status !== 200) {
-        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Leases error: ${formatDetail(data, result.body)}`)]);
-      }
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(JSON.stringify(data, null, 2))]);
+      let msg = `Fact ${data.status ?? 'updated'}`;
+      if (data.fact_id) { msg += ` (fact_id ${data.fact_id})`; }
+      if (Array.isArray(data.superseded_ids) && data.superseded_ids.length) { msg += `; superseded ${data.superseded_ids.length}`; }
+      if (Array.isArray(data.conflicted_ids) && data.conflicted_ids.length) { msg += `; conflicts with ${data.conflicted_ids.length}`; }
+      if (data.detail) { msg += ` — ${data.detail}`; }
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(msg)]);
     } catch (err) {
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
     }

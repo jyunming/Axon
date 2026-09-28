@@ -9,7 +9,7 @@ import tempfile
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Body, File, Form, HTTPException, Request, UploadFile
 
 from axon.api_routes import _enforce_write_access
 from axon.api_routes import enforce_project as _enforce_project
@@ -18,6 +18,7 @@ from axon.api_schemas import (
     BatchTextIngestRequest,
     DeleteRequest,
     IngestRequest,
+    RefreshRequest,
     TextIngestRequest,
     URLIngestRequest,
     _validate_ingest_path,
@@ -62,10 +63,15 @@ def _normalise_uploaded_filename(filename: str | None, index: int) -> str:
 
 
 @router.post("/ingest/refresh")
-async def refresh_docs(background_tasks: BackgroundTasks):
+async def refresh_docs(
+    background_tasks: BackgroundTasks,
+    request: RefreshRequest | None = Body(default=None),
+):
     """Re-ingest tracked files whose content has changed.
     Returns a job_id immediately; the refresh runs in the background.
     Poll ``GET /ingest/status/{job_id}`` until ``status == "completed"``.
+    The body is optional; ``{"project": "<name>"}`` asserts the active project
+    (409 on mismatch) — it never switches projects.
     """
     import functools
     import hashlib as _hashlib
@@ -76,6 +82,7 @@ async def refresh_docs(background_tasks: BackgroundTasks):
     brain = _api.brain
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
+    _enforce_project(request.project if request is not None else None, brain)
     _enforce_write_access(brain, "refresh")
     job_id = uuid.uuid4().hex[:12]
     now = datetime.now(timezone.utc)
@@ -172,6 +179,7 @@ async def ingest_data(
     brain = _api.brain
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
+    _enforce_project(request.project, brain)
     validated_path = _validate_ingest_path(request.path)
     try:
         requested_path = pathlib.Path(os.path.realpath(validated_path))

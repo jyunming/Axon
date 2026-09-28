@@ -181,8 +181,24 @@ def resolve_config_key(key: str) -> str | None:
 
 
 class ConfigSetRequest(BaseModel):
-    key: str  # dot-notation: "chunk.strategy", "llm.model"
-    value: Any
+    """Body for ``POST /config/set`` — one key, or a batch of keys.
+
+    Single-key form (unchanged since 0.3): ``{"key": "chunk.strategy",
+    "value": "markdown", "persist": true}``.
+
+    Batch form (0.5.0, used by the MCP / VS Code ``set_config`` tools):
+    ``{"settings": {"chunk.strategy": "markdown", "top_k": 15}, "persist":
+    false}``. Every key is resolved before anything is applied, so one unknown
+    key rejects the whole batch.
+
+    Exactly one of ``key`` / ``settings`` must be given. ``persist`` defaults to
+    true here for REST back-compat; the agent tools send ``false`` unless the
+    caller asks otherwise.
+    """
+
+    key: str | None = None  # dot-notation: "chunk.strategy", "llm.model"
+    value: Any = None
+    settings: dict[str, Any] | None = None
     persist: bool = True
 
 
@@ -254,17 +270,39 @@ async def reset_config():
 
 @router.post("/config/set")
 async def set_config_field(request: ConfigSetRequest):
-    """Set a single config field using dot-notation (e.g. chunk.strategy).
-    The dot key is mapped to the flat dataclass attribute name via
-    ``_DOT_TO_FLAT``.  Pass ``persist: true`` to also save the change to
-    config.yaml on disk.
+    """Set one config field, or a batch of them.
+
+    Keys are resolved with :func:`resolve_config_key` (dot-notation alias,
+    bare ``AxonConfig`` field name, or dotted tail). Pass ``persist: true`` to
+    also save the change to config.yaml on disk.
+
+    Batch form (``settings``): all keys are resolved first and any unknown key
+    is a 400 listing every unknown key, with nothing applied; otherwise all
+    values are applied, affected runtime components are reinitialised once and
+    config.yaml is saved once (when ``persist``). The response lists each change
+    under ``applied``.
     """
     from axon import api as _api
 
     brain = _api.brain
     if brain is None:
         raise HTTPException(status_code=503, detail="Brain not initialized")
-    flat_key = resolve_config_key(request.key)
+    has_key = request.key is not None
+    has_settings = request.settings is not None
+    if has_key == has_settings:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide exactly one of 'key' (with 'value') or 'settings' (a key->value map).",
+        )
+    from axon.api_routes.projects import _mask_if_sensitive
+
+    if has_settings:
+        return _apply_config_batch(brain, request.settings or {}, request.persist)
+
+    if "value" not in request.model_fields_set:
+        raise HTTPException(status_code=400, detail="'value' is required with 'key'.")
+    key = request.key or ""  # has_key checked above
+    flat_key = resolve_config_key(key)
     if flat_key is None or not hasattr(brain.config, flat_key):
         raise HTTPException(
             status_code=400,
@@ -274,11 +312,8 @@ async def set_config_field(request: ConfigSetRequest):
                 f"or any AxonConfig field name."
             ),
         )
-    from axon.api_routes.projects import _mask_if_sensitive
-
     old_value = getattr(brain.config, flat_key)
-    setattr(brain.config, flat_key, request.value)
-    _reinitialize_runtime_components(brain, {flat_key})
+    _apply_or_roll_back(brain, [(flat_key, request.value)])
     if request.persist:
         brain.config.save()
     # Mask both old and new values when the field is a secret so the
@@ -294,3 +329,80 @@ async def set_config_field(request: ConfigSetRequest):
         "new_value": _mask_if_sensitive(flat_key, request.value),
         "persisted": request.persist,
     }
+
+
+def _apply_or_roll_back(brain, changes: list[tuple[str, Any]]) -> None:
+    """Set every ``(flat_key, value)`` on ``brain.config``, then reinitialise the
+    affected runtime components once — all or nothing.
+
+    Reinitialisation can fail after the fields are set (e.g. switching
+    ``embedding_provider`` to ``sentence_transformers`` without that extra
+    installed raises ImportError). Leaving the config mutated while the live
+    components still use the old settings is the worst of both, so on failure
+    every field is restored, the components are rebuilt for the restored values
+    (best effort — a component the failed attempt already replaced is rebuilt
+    from the old config), and a 400 names the failure. Nothing is persisted.
+    """
+    snapshot = [(flat_key, getattr(brain.config, flat_key)) for flat_key, _ in changes]
+    changed = {flat_key for flat_key, _ in changes}
+    for flat_key, value in changes:
+        setattr(brain.config, flat_key, value)
+    try:
+        _reinitialize_runtime_components(brain, changed)
+    except Exception as exc:
+        for flat_key, old in reversed(snapshot):
+            setattr(brain.config, flat_key, old)
+        try:
+            _reinitialize_runtime_components(brain, changed)
+        except Exception:  # pragma: no cover - restoring the previous components failed too
+            logger.exception("Could not rebuild runtime components after a failed config change")
+        logger.warning("Config change %s rolled back: %s", sorted(changed), exc)
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Could not apply {sorted(changed)}: reinitialising the affected component "
+                f"failed ({type(exc).__name__}: {exc}). Nothing was applied or saved."
+            ),
+        ) from exc
+
+
+def _apply_config_batch(brain, settings: dict[str, Any], persist: bool) -> dict:
+    """Validate-then-apply a ``{key: value}`` batch for ``POST /config/set``.
+
+    All-or-nothing on key resolution: every key is resolved before the first
+    ``setattr`` so an unknown key can never leave the config half-updated.
+    """
+    from axon.api_routes.projects import _mask_if_sensitive
+
+    if not settings:
+        raise HTTPException(status_code=400, detail="'settings' must contain at least one key.")
+    resolved: list[tuple[str, str, Any]] = []
+    unknown: list[str] = []
+    for key, value in settings.items():
+        flat_key = resolve_config_key(key)
+        if flat_key is None or not hasattr(brain.config, flat_key):
+            unknown.append(key)
+        else:
+            resolved.append((key, flat_key, value))
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unknown config key(s) {unknown}; nothing was applied. "
+                f"Accepts a dot-notation alias {sorted(_DOT_TO_FLAT.keys())} "
+                f"or any AxonConfig field name."
+            ),
+        )
+    applied: list[dict[str, Any]] = [
+        {
+            "key": key,
+            "flat_key": flat_key,
+            "old_value": _mask_if_sensitive(flat_key, getattr(brain.config, flat_key)),
+            "new_value": _mask_if_sensitive(flat_key, value),
+        }
+        for key, flat_key, value in resolved
+    ]
+    _apply_or_roll_back(brain, [(flat_key, value) for _, flat_key, value in resolved])
+    if persist:
+        brain.config.save()
+    return {"status": "success", "applied": applied, "persisted": persist}

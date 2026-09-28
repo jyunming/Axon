@@ -115,7 +115,7 @@ Files are ciphertext on disk — cloud providers see only encrypted bytes.
 ### 🛡️ Operations & Agents
 - Graceful maintenance states: `normal → draining → readonly → offline`
 - **REST API** — 68 endpoints with Swagger docs at `/docs`
-- **MCP server** — 51 tools for Claude Code, Codex, Gemini, Cursor, Copilot
+- **MCP server** — 18 focused tools for Claude Code, Codex, Gemini, Cursor, Copilot (destructive/admin operations stay human-only)
 - **`@axon`** VS Code chat participant with Graph panels
 
 </td>
@@ -234,9 +234,9 @@ Extensions panel  →  "..."  →  Install from VSIX...
 →  run `axon-ext`  (or install from VSIX manually)
 ```
 
-Or connect via MCP for Copilot agent mode — point `.vscode/mcp.json` at `axon-mcp` and all 51 tools appear in the agent hammer menu automatically.
+Or connect via MCP for Copilot agent mode — point `.vscode/mcp.json` at `axon-mcp` and all 18 tools appear in the agent hammer menu automatically.
 
-> The VS Code extension surfaces **39 LM tools** to Copilot Chat, covering core RAG operations, sealed-store security, and sharing.
+> The VS Code extension surfaces **20 LM tools** to Copilot Chat — the 18 MCP tools (query, search, ingest, config, graph facts, sharing) plus `show_graph` and `ingest_image`.
 
 **[Full setup guide →](https://github.com/jyunming/Axon/blob/main/docs/SETUP.md)**
 
@@ -286,7 +286,7 @@ Per-call overrides (e.g. force HyDE for one question): `retriever.with_overrides
 | 🔑 | **[Admin Reference](https://github.com/jyunming/Axon/blob/main/docs/ADMIN_REFERENCE.md)** | Every endpoint, REPL command, CLI flag, and config option |
 | ⚡ | **[Quick Reference](https://github.com/jyunming/Axon/blob/main/docs/QUICKREF.md)** | Commands and flags at a glance |
 | 📡 | **[API Reference](https://github.com/jyunming/Axon/blob/main/docs/API_REFERENCE.md)** | Full REST endpoint reference with request/response schemas |
-| 🔌 | **[MCP Tools](https://github.com/jyunming/Axon/blob/main/docs/MCP_TOOLS.md)** | All 55 MCP tool signatures with parameter defaults |
+| 🔌 | **[MCP Tools](https://github.com/jyunming/Axon/blob/main/docs/MCP_TOOLS.md)** | All 18 MCP tool signatures with parameter defaults, and where each human-only operation lives |
 
 **Deep dives**
 

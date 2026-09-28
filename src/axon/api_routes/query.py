@@ -7,12 +7,12 @@ import logging
 import os
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Body, HTTPException
 from fastapi.responses import StreamingResponse
 
 from axon.api_routes import _enforce_write_access
 from axon.api_routes import enforce_project as _enforce_project
-from axon.api_schemas import QueryRequest, SearchRequest, SearchResult
+from axon.api_schemas import ClearRequest, QueryRequest, SearchRequest, SearchResult
 from axon.collection_ops import clear_active_project
 
 logger = logging.getLogger("AxonAPI")
@@ -294,13 +294,21 @@ async def search_raw_endpoint(request: SearchRequest, include_trace: bool = Fals
 
 
 @router.post("/clear")
-async def clear_brain():
-    """Clear the active project's vector store, BM25 index, hash store, and entity graph."""
+async def clear_brain(request: ClearRequest | None = Body(default=None)):
+    """Clear the active project's vector store, BM25 index, hash store, and entity graph.
+
+    The body is optional. ``{"project": "<name>"}`` asserts which project the
+    caller means to wipe: if another client switched the server's active
+    project in the meantime the call is a 409 and nothing is cleared. Callers
+    that switch and then clear (e.g. ``axon --clear --project X`` against a
+    running server) should always send it.
+    """
     from axon import api as _api
 
     brain = _api.brain
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
+    _enforce_project(request.project if request is not None else None, brain)
     _enforce_write_access(brain, "clear")
     try:
         clear_active_project(brain)

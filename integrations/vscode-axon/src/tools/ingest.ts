@@ -16,70 +16,99 @@ import { httpGet, httpPost, formatDetail, parseJsonSafe, apiConnectionError } fr
 
 // ---------------------------------------------------------------------------
 
-export class AxonIngestTextTool implements vscode.LanguageModelTool<any> {
-  async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
-    const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = resolveApiBase();
-    const apiKey = config.get<string>('apiKey', '');
-    const { text, source = 'agent_input', project } = options.input;
-    try {
-      const body: any = { text, metadata: { source } };
-      if (project != null) { body.project = project; }
-      const result = await httpPost(`${apiBase}/add_text`, body, apiKey);
-      const data = JSON.parse(result.body);
-      if (result.status !== 200) {
-        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Axon Ingest Error (${result.status}): ${formatDetail(data, result.body)}`)]);
-      }
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Success: ${data.status}, ID: ${data.doc_id}`)]);
-    } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
-    }
-  }
-
+function toolText(text: string) {
+  return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(text)]);
 }
 
-export class AxonIngestUrlTool implements vscode.LanguageModelTool<any> {
-  async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
-    const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = resolveApiBase();
-    const apiKey = config.get<string>('apiKey', '');
-    const { url, project } = options.input;
-    try {
-      const body: any = { url };
-      if (project != null) { body.project = project; }
-      const result = await httpPost(`${apiBase}/ingest_url`, body, apiKey);
-      const data = JSON.parse(result.body);
-      if (result.status !== 200) {
-        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Axon URL Ingest Error (${result.status}): ${formatDetail(data, result.body)}`)]);
-      }
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Status: ${data.status}, URL: ${data.url}`)]);
-    } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
-    }
-  }
-
-}
-
-export class AxonIngestPathTool implements vscode.LanguageModelTool<any> {
+/**
+ * ingest_knowledge — one LM tool for every agent ingest path (mirrors the MCP
+ * tool of the same name). Exactly one of text | docs | url | path |
+ * refresh=true; `project` is an assertion (409 on mismatch), never a switch.
+ */
+export class AxonIngestKnowledgeTool implements vscode.LanguageModelTool<any> {
   async prepareInvocation(options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
-    return {
-      invocationMessage: `Ingesting local path into Axon: "${options.input.path}"...`
-    };
+    const input = options.input ?? {};
+    let what = 'content';
+    if (input.path != null) { what = `path "${input.path}"`; }
+    else if (input.url != null) { what = `URL ${input.url}`; }
+    else if (input.docs != null) { what = `${Array.isArray(input.docs) ? input.docs.length : '?'} documents`; }
+    else if (input.refresh === true) { what = 'changed files (refresh)'; }
+    else if (input.text != null) { what = 'text'; }
+    return { invocationMessage: `Ingesting ${what} into Axon…` };
   }
   async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
     const apiBase = resolveApiBase();
     const apiKey = config.get<string>('apiKey', '');
-    const { path: ingestPath } = options.input;
+    const { text, docs, url, path: ingestPath, refresh, metadata, doc_id, project } = options.input ?? {};
+    const given: string[] = [];
+    if (text != null) { given.push('text'); }
+    if (docs != null) { given.push('docs'); }
+    if (url != null) { given.push('url'); }
+    if (ingestPath != null) { given.push('path'); }
+    if (refresh === true) { given.push('refresh'); }
+    if (given.length !== 1) {
+      return toolText(
+        `ingest_knowledge needs exactly one of text, docs, url, path or refresh=true (got ${given.length ? given.join(', ') : 'none'}).`
+      );
+    }
+    const withProject = (body: any) => {
+      if (project != null && project !== '') { body.project = project; }
+      return body;
+    };
+    let endpoint: string;
+    let body: any;
+    switch (given[0]) {
+      case 'text':
+        endpoint = '/add_text';
+        body = { text };
+        if (metadata != null) { body.metadata = metadata; }
+        if (doc_id != null) { body.doc_id = doc_id; }
+        break;
+      case 'docs':
+        endpoint = '/add_texts';
+        body = { docs };
+        break;
+      case 'url':
+        endpoint = '/ingest_url';
+        body = { url };
+        if (metadata != null) { body.metadata = metadata; }
+        break;
+      case 'path':
+        endpoint = '/ingest';
+        body = { path: ingestPath };
+        break;
+      default:
+        endpoint = '/ingest/refresh';
+        body = {};
+    }
     try {
-      const result = await httpPost(`${apiBase}/ingest`, { path: ingestPath }, apiKey);
-      const data = JSON.parse(result.body);
+      const result = await httpPost(`${apiBase}${endpoint}`, withProject(body), apiKey);
+      const data = parseJsonSafe(result.body);
       if (result.status !== 200) {
-        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Axon Path Ingest Error (${result.status}): ${formatDetail(data, result.body)}`)]);
+        return toolText(`Axon Ingest Error (${result.status}): ${formatDetail(data, result.body)}`);
       }
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Status: ${data.status}, Message: ${data.message}, JobID: ${data.job_id}`)]);
+      switch (given[0]) {
+        case 'text':
+          return toolText(`Success: ${data.status}, ID: ${data.doc_id}`);
+        case 'docs': {
+          const count = Array.isArray(data.results) ? data.results.length : '?';
+          return toolText(`Ingested ${count} documents.`);
+        }
+        case 'url':
+          return toolText(`Status: ${data.status}, URL: ${data.url}`);
+        case 'path':
+          return toolText(
+            `Status: ${data.status}, Message: ${data.message}, JobID: ${data.job_id}. ` +
+            `Poll get_job_status with job_id="${data.job_id}" until status is "completed".`
+          );
+        default:
+          return toolText(
+            `Refresh started (job_id: ${data.job_id}). Poll get_job_status with job_id="${data.job_id}" until status is "completed".`
+          );
+      }
     } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
+      return toolText(apiConnectionError(err));
     }
   }
 
@@ -223,114 +252,6 @@ export class AxonIngestImageTool implements vscode.LanguageModelTool<any> {
       return new (vscode as any).LanguageModelToolResult([
         new (vscode as any).LanguageModelTextPart(apiConnectionError(err))
       ]);
-    }
-  }
-
-}
-
-export class AxonRefreshIngestTool implements vscode.LanguageModelTool<any> {
-  async prepareInvocation(_options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
-    return { invocationMessage: 'Re-ingesting changed files…' };
-  }
-  async invoke(_options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
-    const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = resolveApiBase();
-    const apiKey = config.get<string>('apiKey', '');
-    try {
-      const result = await httpPost(`${apiBase}/ingest/refresh`, {}, apiKey);
-      const data = parseJsonSafe(result.body);
-      if (result.status !== 200) {
-        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Refresh error: ${formatDetail(data, result.body)}`)]);
-      }
-      // Async response: server returns job_id immediately; poll for completion.
-      if (data.job_id) {
-        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(
-          `Refresh started (job_id: ${data.job_id}). Use axon_getJobStatus with job_id="${data.job_id}" to poll until status is "completed".`
-        )]);
-      }
-      // Sync fallback (small corpora may still return full results).
-      const r = (data.reingested || []).length;
-      const s = (data.skipped || []).length;
-      const m = (data.missing || []).length;
-      const e = (data.errors || []).length;
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(
-        `Refresh complete: ${r} re-ingested, ${s} unchanged, ${m} missing, ${e} errors.\n` +
-        (data.reingested?.length ? `Updated: ${data.reingested.join(', ')}` : '')
-      )]);
-    } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
-    }
-  }
-
-}
-
-export class AxonGetStaleDocsTool implements vscode.LanguageModelTool<any> {
-  async prepareInvocation(options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
-    const days = options.input?.days ?? 7;
-    return { invocationMessage: `Listing documents not refreshed in ${days} days…` };
-  }
-  async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
-    const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = resolveApiBase();
-    const apiKey = config.get<string>('apiKey', '');
-    const days = options.input?.days ?? 7;
-    try {
-      const result = await httpGet(`${apiBase}/collection/stale?days=${days}`, apiKey);
-      const data = parseJsonSafe(result.body);
-      if (result.status !== 200) {
-        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Stale list error: ${formatDetail(data, result.body)}`)]);
-      }
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(JSON.stringify(data, null, 2))]);
-    } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
-    }
-  }
-
-}
-
-export class AxonClearKnowledgeTool implements vscode.LanguageModelTool<any> {
-  async prepareInvocation(_options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
-    return { invocationMessage: 'Clearing Axon knowledge base for current project…' };
-  }
-  async invoke(_options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
-    const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = resolveApiBase();
-    const apiKey = config.get<string>('apiKey', '');
-    try {
-      const result = await httpPost(`${apiBase}/clear`, {}, apiKey);
-      const data = parseJsonSafe(result.body);
-      if (result.status !== 200) {
-        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Clear error: ${formatDetail(data, result.body)}`)]);
-      }
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart('Knowledge base cleared for current project.')]);
-    } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
-    }
-  }
-
-}
-
-export class AxonIngestTextsTool implements vscode.LanguageModelTool<any> {
-  async prepareInvocation(_options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
-    return { invocationMessage: 'Ingesting multiple text documents into Axon…' };
-  }
-  async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
-    const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = resolveApiBase();
-    const apiKey = config.get<string>('apiKey', '');
-    const { docs, project } = options.input ?? {};
-    try {
-      const body: any = { docs };
-      if (project != null) { body.project = project; }
-      const result = await httpPost(`${apiBase}/add_texts`, body, apiKey);
-      const data = parseJsonSafe(result.body);
-      if (result.status !== 200) {
-        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Ingest error: ${formatDetail(data, result.body)}`)]);
-      }
-      const count = Array.isArray(data.results) ? data.results.length : '?';
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Ingested ${count} documents.`)]);
-    } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
     }
   }
 

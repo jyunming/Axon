@@ -96,6 +96,7 @@ axon --project-new myproject                # create project + ingest
 axon --project-new myproject --graph-backend dynamic_graph  # pick a graph backend (immutable once set)
 axon --project-list                         # list all projects
 axon --project-delete myproject             # delete a project
+axon --clear --yes                          # wipe the active project's knowledge base (refuses without --yes)
 ```
 
 **@file / @folder context (REPL only):**
@@ -154,7 +155,7 @@ Supported: `.txt`, `.md`, `.py`, `.json`, `.csv`, `.html`, `.docx`, `.pdf`, imag
 | `/graph viz` | Open the interactive 3D graph — embedded webview in VS Code, default browser elsewhere |
 | `/graph-viz [path]` | Export entity–relation graph as HTML; omit path to open in browser immediately (requires `pip install axon[graphrag]`) |
 | `/retry` | Re-send the last query (useful after switching model or RAG settings) |
-| `/clear` | Clear current chat history (does not delete saved session) |
+| `/clear` | Wipe the current project's knowledge base (asks for confirmation) |
 | `/quit`, `/exit` | Exit the REPL |
 | `! <command>` | Execute a shell command directly from the REPL (e.g. `! ls docs/`). Behaviour is controlled by the `repl.shell_passthrough` config field: `always` — allow all commands; `local_only` (default) — allow commands only for local, writable projects (disabled in merged read-only scopes); `off` — disable entirely. Configure this via `config.yaml`. |
 

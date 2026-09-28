@@ -1,6 +1,6 @@
 # Axon MCP Tools Reference
 
-Axon exposes a Model Context Protocol (MCP) server (`axon-mcp`) with **51 tools**.
+Axon exposes a Model Context Protocol (MCP) server (`axon-mcp`) with **18 tools**.
 
 > **Which integration should I use?**
 > - **`@axon` chat participant** — install the VS Code extension (VSIX). Gives you a conversational `@axon` inside Copilot Chat. No `.vscode/mcp.json` needed.
@@ -8,78 +8,60 @@ Axon exposes a Model Context Protocol (MCP) server (`axon-mcp`) with **51 tools*
 
 `axon-api` must be running before any MCP client connects. See [SETUP.md § 10](SETUP.md#10-mcp-server-setup) for connection instructions per client.
 
----
+The VS Code extension's Copilot LM tools are the same 18 tools with the same names and
+parameters, plus two client-side tools: `show_graph` (opens the graph panel) and
+`ingest_image` (describes an image with a Copilot vision model, then ingests the text).
 
-## Ingestion (6)
+### What agents can and cannot do (0.5.0)
 
-### `ingest_text`
+The tool set covers what an agent needs to *use* a knowledge base: ask, search, ingest,
+inspect, delete individual documents, pick or create a project, read and tune config, read
+and write the graph, and share projects. Operations that are destructive, handle
+credentials, or administer the store are **human-only** — they stay on the REST API, CLI
+and REPL (and, where noted, VS Code commands), not on MCP:
 
-Ingest a single text document into the Axon knowledge base. Prefer `ingest_texts` for multiple documents — it uses one embedding call. Duplicate content (same SHA-256) is silently skipped.
+| Human-only operation | Where a human does it |
+|---|---|
+| Wipe a project's knowledge base | REPL `/clear`, `axon --clear --yes`, `POST /clear`, VS Code command *Axon: Clear Knowledge Base* |
+| Delete a project | REPL `/project delete <name>`, `axon --project-delete <name>`, `POST /project/delete/{name}` |
+| Hard-revoke a sealed share (rotate the project key) | REPL `/share revoke <ssk_id> --project <name> --rotate`, `axon --share-rotate`, `POST /share/revoke {"rotate": true}` |
+| Sealed store: bootstrap / unlock / lock / change passphrase / keyring mode / wipe cache | REPL `/store ...`, `axon --store-*`, `POST /security/*` |
+| Seal, pack, unpack a project | REPL `/project seal|pack|unpack`, `axon --project-seal|--project-pack|--project-unpack`, `POST /project/seal|pack|unpack` |
+| Init the store, store status / whoami | REPL `/store init|whoami`, `axon --store-init|--store-whoami`, `POST /store/init`, `GET /store/status|whoami` |
+| Refresh a mounted share | REPL `/mount-refresh`, `axon --mount-refresh`, `POST /mount/refresh` |
+| Stale-doc listing | REPL `/stale`, `axon --list-stale`, `GET /collection/stale` |
+| Chat sessions | REPL `/sessions`, `axon --session-list`, `GET /sessions` |
+| Graph status / finalize / conflicts / full dump | REPL `/graph status|finalize|conflicts`, `axon --graph-status|--graph-finalize|--graph-conflicts`, `GET /graph/status`, `POST /graph/finalize`, `GET /graph/conflicts`, `GET /graph/data` |
+| Write-lease diagnostics | `GET /registry/leases` |
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `text` | string | required | The text content to ingest |
-| `metadata` | dict | `null` | Key/value metadata; always set `"source"` so the collection can be audited |
-| `project` | string | `null` | Target project — omit to use the active project |
+`src/axon/surface_contract.py` records the human route for every capability kept off the
+agent surfaces; `tests/test_surface_parity_contract.py` keeps this tool list, the registry
+and the VS Code manifest in lockstep.
 
-**Returns:** `{"status": "ok", "chunks": N}` or `{"status": "skipped"}` for duplicate content.
+### `project` is an assertion
 
-### `ingest_texts`
-
-Batch ingest a list of documents in a single embedding call. Preferred over calling `ingest_text` in a loop.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `docs` | `[{text, metadata?}]` | required | Each item must have `"text"`; optional keys: `"doc_id"`, `"metadata"` |
-| `project` | string | `null` | Target project applied to all docs |
-
-**Returns:** `{"status": "ok", "total": N}`
-
-### `ingest_url`
-
-Fetch an HTTP/HTTPS URL and ingest its text content. HTML is stripped automatically. Private/internal addresses are blocked server-side.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `url` | string | required | Public HTTP or HTTPS URL |
-| `metadata` | dict | `null` | Extra metadata merged with page metadata |
-| `project` | string | `null` | Target project |
-
-**Returns:** `{"status": "ingested"|"skipped", "doc_id": "...", "url": "..."}` — synchronous, no polling needed.
-
-### `ingest_path`
-
-Walk and ingest a local file or directory (always async). Path must be within `RAG_INGEST_BASE`.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `path` | string | required | Absolute or relative path to a file or directory |
-
-**Returns:** `{"job_id": "..."}` — poll with `get_job_status`.
-
-### `refresh_ingest`
-
-Re-ingest all tracked sources that have changed on disk since they were last indexed. Skips files whose content hash has not changed. Always async.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `project` | string | `null` | Project to refresh; defaults to the active project |
-
-**Returns:** `{"job_id": "..."}` — poll with `get_job_status`.
-
-### `get_job_status`
-
-Poll the status of an async ingest job started by `ingest_path` or `refresh_ingest`.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `job_id` | string | required | Job ID from `ingest_path` |
-
-**Returns:** `{"job_id": "...", "status": "processing|completed|failed", "started_at": "...", "completed_at": "...", "path": "...", "error": null}`
+Tools that accept `project` treat it as an **assertion**, not a switch: if the server is
+serving a different project the call fails with **409** and nothing happens. To work in
+another project, call `switch_project` first.
 
 ---
 
-## Search & Query (3)
+## Retrieval (2)
+
+### `query_knowledge`
+
+Full RAG query — retrieval + generation in one call. Use `search_knowledge` if you need to inspect chunks first.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `query` | string | required | The question to answer |
+| `top_k` | int | `null` | Chunks to retrieve (≥ 1); null uses the configured default |
+| `filters` | dict | `null` | Optional metadata filters for retrieval |
+| `project` | string | `null` | Expected active project (assertion — 409 on mismatch) |
+
+**Returns:** `{"response": "...", "provenance": {"answer_source": "...", "retrieved_count": N}, "settings": {...}, "sources": [...], "citations": [...]}`
+
+The `sources` array (slim view of every retrieved chunk made available to the LLM, indexed 0..N-1) and `citations` array (structured spans parsed from the response, one per `[N]` / `[Document N]` marker, with character offsets) are returned by default.
 
 ### `search_knowledge`
 
@@ -90,49 +72,61 @@ Retrieve raw document chunks with scores. Best for multi-step reasoning where yo
 | `query` | string | required | The search query |
 | `top_k` | int | `5` | Number of chunks to return (must be ≥ 1) |
 | `filters` | dict | `null` | Optional metadata filters, e.g. `{"source": "https://..."}` |
-| `project` | string | `null` | Expected active project — returns 409 on mismatch; use `switch_project` to change |
+| `project` | string | `null` | Expected active project (assertion — 409 on mismatch) |
 
 **Returns:** `[{"text": "...", "score": 0.87, "metadata": {...}}]`
 
-### `query_knowledge`
+---
 
-Full RAG query — retrieval + generation in one call. Use `search_knowledge` if you need to inspect chunks first.
+## Ingest (2)
+
+### `ingest_knowledge`
+
+Add knowledge to the active project. Give **exactly one** source — zero or several raise an
+error before any request is sent.
+
+| Source parameter | Type | Route | Behaviour |
+|---|---|---|---|
+| `text` | string | `POST /add_text` | One document, synchronous. Set `metadata.source` so the collection can be audited. |
+| `docs` | `[{text, doc_id?, metadata?}]` | `POST /add_texts` | Many documents in one batched embedding call — prefer this over repeated `text` calls. |
+| `url` | string | `POST /ingest_url` | Fetch an HTTP/HTTPS page; HTML is stripped. Private/internal addresses are blocked server-side. Synchronous. |
+| `path` | string | `POST /ingest` | A file or directory on the machine running `axon-api`, within `RAG_INGEST_BASE`. **Async** — returns a `job_id`. |
+| `refresh` | bool | `POST /ingest/refresh` | `true` re-ingests previously indexed files whose content changed on disk. **Async** — returns a `job_id`. |
+
+| Other parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `metadata` | dict | `null` | Metadata for `text` / `url` ingest |
+| `doc_id` | string | `null` | Stable ID for `text` ingest (`delete_documents` accepts it) |
+| `project` | string | `null` | Expected active project (assertion — 409 on mismatch). Sent with every source, including `path` and `refresh`. |
+
+Duplicate content (same SHA-256) is skipped with status `skipped`.
+
+**Returns:** the route's response — e.g. `{"status": "success", "doc_id": "..."}` for `text`,
+`{"job_id": "...", "status": "processing"}` for `path` / `refresh`.
+
+> Replaces `ingest_text`, `ingest_texts`, `ingest_url`, `ingest_path` and `refresh_ingest`.
+> The old `refresh_ingest(project=...)` silently switched the server's active project; the
+> `project` parameter is now an assertion like everywhere else.
+
+### `get_job_status`
+
+Poll an async ingest job started by `ingest_knowledge(path=...)` or `ingest_knowledge(refresh=True)`.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `query` | string | required | The question to answer |
-| `top_k` | int | `null` | Chunks to retrieve; null uses global config default |
-| `filters` | dict | `null` | Optional metadata filters for retrieval |
-| `project` | string | `null` | Expected active project — returns 409 on mismatch; use `switch_project` to change |
+| `job_id` | string | required | Job ID returned by `ingest_knowledge` |
 
-**Returns:** `{"response": "...", "provenance": {"answer_source": "...", "retrieved_count": N}, "settings": {...}, "sources": [...], "citations": [...]}`
-
-The `sources` array (slim view of every retrieved chunk made available to the LLM, indexed 0..N-1) and `citations` array (structured spans parsed from the response, one per `[N]` / `[Document N]` marker, with character offsets) are returned by default. Set `include_citations: false` on the underlying REST request to skip both arrays.
-
-### `query_stream`
-
-Ask a question and receive a full streamed answer accumulated into one response. Internally calls the `/query/stream` SSE endpoint and collects all tokens. Use `query_knowledge` for a short blocking query; use this when the response is expected to be long (> 1000 tokens) or when the provider has high first-token latency.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `query` | string | required | The question to ask |
-| `top_k` | int | `null` | Number of chunks to retrieve (overrides global setting) |
-| `filters` | dict | `null` | Optional metadata filters for retrieval |
-| `project` | string | `null` | Expected active project — returns 409 on mismatch; use `switch_project` first |
-
-**Returns:** `{"answer": "...", "streamed": true}`
-
-> **Note:** `query_stream` returns `answer` (not `response`). Unlike `query_knowledge`, it does not return `provenance` or `settings`.
+**Returns:** `{"job_id": "...", "status": "processing|completed|failed", "started_at": "...", "completed_at": "...", "error": null, ...}`
 
 ---
 
-## Knowledge Base Management (5)
+## Collection (2)
 
 ### `list_knowledge`
 
 List indexed sources with chunk counts for the active project. No parameters.
 
-**Returns:** `[{"source": "file.md", "chunks": 12}]`
+**Returns:** `{"total_files": N, "total_chunks": N, "files": [{"source": "file.md", "chunks": 12}]}`
 
 ### `delete_documents`
 
@@ -140,51 +134,29 @@ Remove chunks or whole documents from the index. Also clears their dedup records
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `doc_ids` | `[string]` | required | Chunk IDs, or document IDs (the `doc_id` given to `ingest_text` / `ingest_texts` / `ingest_url`); a document ID deletes all its chunks |
+| `doc_ids` | `[string]` | required | Chunk IDs, or document IDs (the `doc_id` given to `ingest_knowledge`); a document ID deletes all its chunks |
 
 **Returns:** `{"status": "success", "deleted": N, "doc_ids": [<chunk ids deleted>], "not_found": [...]}`
 
-### `clear_knowledge`
-
-Wipe the active project's vector store and BM25 index entirely. No parameters. **Irreversible.**
-
-**Returns:** `{"status": "cleared"}`
-
-### `get_stale_docs`
-
-List documents not re-ingested within N days. Only tracks documents seen in the current server process — staleness resets on server restart.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `days` | int | `7` | Staleness threshold in days |
-
-**Returns:** `[{"source": "...", "last_seen": "...", "days_old": N}]`
-
-### `get_active_leases`
-
-List active write-lease counts per project. Use to check whether it is safe to put a project into maintenance state (wait for `active_leases` to reach 0 first). No parameters.
-
-**Returns:** `{"project_name": {"active_leases": N, "draining": false, "epoch": 1}}`
-
 ---
 
-## Project Management (7)
+## Projects (3)
 
 ### `list_projects`
 
 List all local projects and mounted shares. No parameters.
 
-**Returns:** `[{"name": "...", "path": "...", "chunk_count": N, "graph_backend": "graphrag"|"dynamic_graph"|"none"}]`
+**Returns:** `{"projects": [{"name": "...", "graph_backend": "graphrag"|"dynamic_graph"|"none", ...}], ...}`
 
 ### `switch_project`
 
-Switch the active project. **Warning:** mutates global server state — do not call from concurrent handlers. Prefer passing `project` directly to ingest/query tools instead.
+Switch the active project. **Warning:** mutates global server state — every later call, from any client, runs against the new project.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `project_name` | string | required | Name of the project to activate |
+| `project_name` | string | required | Name of the project to activate (e.g. `mounts/alice_research` for a redeemed share) |
 
-**Returns:** `{"active_project": "..."}`
+**Returns:** `{"status": "success", "active_project": "..."}`
 
 ### `create_project`
 
@@ -194,159 +166,108 @@ Create a new named project with an isolated knowledge base.
 |-----------|------|---------|-------------|
 | `name` | string | required | Project name (max 5 slash-separated segments) |
 | `description` | string | `""` | Optional human-readable description |
-| `graph_backend` | string | `"graphrag"` | Graph backend: `graphrag`, `dynamic_graph`, or `none`. Immutable once set — omit to accept the default. |
+| `graph_backend` | string | `"graphrag"` | `graphrag`, `dynamic_graph`, or `none`. Immutable once set. Use `dynamic_graph` for a project agents will write facts into with `update_fact`. |
 
-**Returns:** `{"name": "..."}`
-
-### `delete_project`
-
-Delete a project and all its stored data permanently. **Irreversible.**
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `name` | string | required | Project name to delete |
-
-**Returns:** `{"status": "deleted"}`
-
-### `seal_project`
-
-Encrypt every content file in a project in place (one-shot migration). Walks the project directory and rewrites all index files as AXSL-sealed AES-256-GCM ciphertext. Each file is replaced atomically. Idempotent — re-sealing an already-sealed project returns `status="already_sealed"`. Requires the sealed-store to be unlocked first (`security_unlock`).
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `project_name` | string | required | Name of the open project to seal (must exist). Note: this parameter is named `project_name`, not `project`, unlike most other tools. |
-| `migration_mode` | string | `"in_place"` | Reserved for future variants; only `"in_place"` is implemented |
-
-**Returns:** `{"status": "sealed"|"already_sealed"}`
-
-### `pack_project`
-
-Zip a project's entire on-disk footprint (index files, sessions, sub-projects, and `.security/` if sealed) for backup, restore, or relocation. Requires the MCP client and `axon-api` to share a filesystem — same colocation assumption as `ingest_path`.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `project_name` | string | required | Name of the project to pack |
-| `out_path` | string | `null` | Server-side output path. Defaults to `~/.axon/packs/<name>-<timestamp>.axonpack.zip` |
-
-**Returns:** `{"status": "packed", "project", "out_path", "sealed", "file_count", "bytes"}`
-
-### `unpack_project`
-
-Restore a project from a zip archive produced by `pack_project` into AxonStore. Refuses if the target project already exists unless `force=True`.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `zip_path` | string | required | Server-side filesystem path to a `.axonpack.zip` |
-| `as_name` | string | `null` | Target project name. Defaults to the pack manifest's original project name |
-| `force` | bool | `false` | Overwrite an existing project directory at the target name |
-
-**Returns:** `{"status": "unpacked", "project", "sealed", "file_count", "manifest"}`
+**Returns:** `{"status": "success", "project": "..."}`
 
 ---
 
-## Settings (2)
+## Configuration (2)
 
-### `get_current_settings`
+### `get_config`
 
-Return active RAG flags, model config, and runtime settings. No parameters.
-
-**Returns:** `{"provider": "ollama", "model": "llama3.1:8b", "top_k": 10, "hyde": false, ...}`
-
-### `update_settings`
-
-Toggle RAG flags and model settings at runtime. Changes are session-scoped and not persisted to `config.yaml` unless `persist=True`.
+Return the active configuration. Secrets are masked as `***` by the server, so this tool can never read a credential back out. Use it to discover the exact field names `set_config` accepts.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `top_k` | int | `null` | Retrieved chunk count (1–50) |
-| `similarity_threshold` | float | `null` | Minimum match score (0.0–1.0) |
-| `hybrid_search` | bool | `null` | BM25 + vector hybrid search |
-| `rerank` | bool | `null` | Cross-encoder reranking |
-| `hyde` | bool | `null` | Hypothetical Document Embeddings |
-| `multi_query` | bool | `null` | Multi-query retrieval (3 rephrased queries merged) |
-| `step_back` | bool | `null` | Step-back prompting (abstract query before retrieval) |
-| `query_decompose` | bool | `null` | Query decomposition into sub-questions |
-| `compress_context` | bool | `null` | LLM context compression before generation |
-| `raptor` | bool | `null` | RAPTOR hierarchical summaries |
-| `graph_rag` | bool | `null` | GraphRAG entity-graph retrieval |
-| `graph_rag_mode` | string | `null` | GraphRAG query mode: `"local"`, `"global"`, or `"hybrid"` |
-| `code_graph` | bool | `null` | Code-graph retrieval for code queries |
-| `sentence_window` | bool | `null` | Sentence-window retrieval |
-| `sentence_window_size` | int | `null` | Surrounding sentences per side (1–10) |
-| `crag_lite` | bool | `null` | CRAG-lite corrective retrieval on low-confidence chunks |
-| `truth_grounding` | bool | `null` | Truth-grounding enforcement on retrieved chunks |
-| `discussion_fallback` | bool | `null` | Allow general-knowledge fallback when no chunks found |
-| `cite` | bool | `null` | Inline source citations in generated answers |
-| `persist` | bool | `false` | Save settings to `config.yaml` so they survive restarts |
+| `validate` | bool | `false` | Also check `config.yaml` for errors, unknown keys and risky combinations (e.g. GraphRAG with a slow local LLM) |
 
-**Returns:** `{"status": "updated"}`
+**Returns:** the config as JSON (sensitive fields masked). With `validate=true`: `{"config": {...}, "validation": {"valid": bool, "issue_count": N, "issues": [...]}}`.
 
----
+> Replaces `get_current_settings` and `validate_config`.
 
-## Sessions (2)
+### `set_config`
 
-### `list_sessions`
-
-List saved conversation sessions for the active project. Returns up to 20 most recent. No parameters.
-
-**Returns:** `[{"id": "20260326_120000", "timestamp": "...", "turns": 5}]`
-
-### `get_session`
-
-Retrieve a full session transcript by ID.
+Set one or more configuration fields in a single call (`POST /config/set` batch form).
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `session_id` | string | required | Session ID from `list_sessions` |
+| `settings` | dict | required | `{key: value}`. A key is a dot-notation alias (`chunk.strategy`, `llm.model`, `rag.top_k`) **or** any `AxonConfig` field name (`graph_rag_depth`, `chunk_size`, `hybrid_search`) |
+| `persist` | bool | `false` | Also write the changes to `config.yaml` so they survive a restart |
 
-**Returns:** `{"id": "...", "history": [{"role": "user", "content": "..."}]}`
+Every key is resolved before anything is applied: one unknown key rejects the whole batch
+(400, listing every unknown key) and nothing changes. Changing `llm_provider` / `llm_model` /
+`embedding_*` / `rerank` reinitialises the affected component once; if that fails (e.g. a
+provider whose extra isn't installed) every key is rolled back, nothing is saved, and the
+call fails with the reason. Switching the embedding
+model invalidates existing vectors — re-ingest afterwards.
+
+**Returns:** `{"status": "success", "applied": [{"key", "flat_key", "old_value", "new_value"}], "persisted": bool}` with secrets masked.
+
+> Replaces `update_settings`, `update_config` and the single-key `set_config(key, value)`.
+> (REST `POST /config/set` still accepts the single-key body `{key, value, persist}`.)
 
 ---
 
-## AxonStore & Sharing (8)
+## Graph (2)
 
-### `get_store_status`
+### `graph_retrieve`
 
-Check whether the AxonStore has been initialised on this machine. Returns store metadata when ready, or `{"initialized": false}` on a fresh install. Call this before any other tool on first use to decide whether to prompt the user to run `init_store`.
-
-**No parameters.**
-
-**Returns:** `{"initialized": true, "path": "~/.axon/...", "store_version": 2, "store_id": "...", "created_at": "...", "username": "alice"}` or `{"initialized": false, ...}`
-
----
-
-### `init_store`
-
-Initialize the AxonStore on first use, or move it to a different base path (e.g. a shared network drive). On a fresh install where `get_store_status` returns `{"initialized": false}`, call this to create the store layout at `base_path`. Also safe to call when relocating an existing store. Safe to call repeatedly.
+Run the active graph backend's `retrieve()` directly and return graph contexts only — no LLM call. Surfaces point-in-time historical queries (`point_in_time`) and per-query federation weight overrides (`federation_weights`).
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `base_path` | string | required | New base path (e.g. `/data` → data lives at `/data/AxonStore/<user>/`) |
-| `persist` | bool | `false` | Write the new path to `config.yaml` so it survives restarts |
+| `query` | string | required | The query string |
+| `top_k` | int \| null | `null` | Maximum graph contexts to return (server resolves to 10 when null; range 1-200) |
+| `point_in_time` | string | `null` | ISO-8601 timestamp; return facts valid at that instant. Honoured only by bi-temporal backends (`dynamic_graph`); ignored elsewhere |
+| `federation_weights` | dict[str, float] | `null` | Per-query RRF weights for the federated backend. Keys: `graphrag`, `dynamic_graph`. Ignored by other backends |
+| `project` | string | `null` | Expected active project (assertion — 409 on mismatch) |
 
-**Returns:** `{"store_path": "...", "user_dir": "...", "username": "..."}`
+**Returns:** `{"backend": "...", "contexts": [{"context_id", "context_type", "text", "score", "rank", "valid_at", "invalid_at", "matched_entity_names", "hop_count", ...}, ...]}`
+
+### `update_fact`
+
+Assert or correct one fact `(subject, relation, object)` in the active project's graph (`POST /graph/facts`). History is bi-temporal: a replaced fact is superseded, not deleted, so `graph_retrieve(point_in_time=...)` still sees it. Only `dynamic_graph` and `federated` projects store facts; `graphrag` and `none` answer `status: "not_applicable"`.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `subject` | string | required | Subject entity (1-200 chars) |
+| `relation` | string | required | Relation, e.g. `WORKS_FOR` or `works for` (normalised to upper snake case) |
+| `object` | string | required | Object entity (1-200 chars) |
+| `description` | string | `""` | Optional note stored with the fact |
+| `confidence` | float | `1.0` | 0.0-1.0 |
+| `replace` | bool \| null | `null` | `true` = make this the only current fact for (subject, relation); `false` = add alongside; `null` = replace for exclusive relations (`IS_CEO_OF`, `MARRIED_TO`, ...), add otherwise |
+| `project` | string | `null` | Expected active project (assertion — 409 on mismatch) |
+
+**Returns:** `{"status": "created"|"superseded"|"unchanged"|"conflicted"|"not_applicable", "backend_id": "...", "fact_id": "...", "superseded_ids": [...], "conflicted_ids": [...], "detail": "..."}`
+
+---
+
+## Sharing (5)
+
+Sharing stays agent-callable. Shares are read-only; the store must be initialised (`axon --store-init`) first.
 
 ### `share_project`
 
-Generate a share key allowing another user to access one of your projects. The returned `share_string` should be sent to the recipient out-of-band. All shares are read-only. Sealed-share auto-detection: if the project was encrypted via `seal_project`, v0.4.0+ always returns a `SEALED2:` envelope (carries the owner's Ed25519 signing pubkey for sidecar verification). The legacy `SEALED1:` 6-field format is still accepted by `redeem_share` for backward compatibility but is no longer emitted.
+Generate a share key allowing another user to read one of your projects. Send the returned `share_string` to the recipient out-of-band. Sealed projects automatically get a `SEALED2:` envelope (the sealed store must be unlocked by the user first, else 409).
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `project` | string | required | Project to share (must exist) |
 | `grantee` | string | required | OS username of the recipient |
-| `ttl_days` | int | `null` | Optional positive integer days until expiry; `null` means no expiry. **v0.4.0:** honoured for both plaintext (`sk_`) and sealed (`ssk_`) shares. For sealed shares, writes an Ed25519-signed expiry sidecar; the grantee's mount fails with `ShareExpiredError` after expiry and auto-destroys the local DEK + cache + mount descriptor on the next mount attempt. `ttl_days <= 0` is rejected. |
+| `ttl_days` | int | `null` | Optional positive number of days until expiry; `null` means no expiry. Honoured for plaintext (`sk_`) and sealed (`ssk_`) shares. `ttl_days <= 0` is rejected. |
 
-**Returns:** `{"share_string": "axon-share:v1:...", "key_id": "...", "expires_at": "..."}` (`expires_at` is Z-suffixed UTC ISO 8601 when `ttl_days` was set; absent or null otherwise).
+**Returns:** `{"share_string": "...", "key_id": "...", "expires_at": "..."}` (`expires_at` present when `ttl_days` was set).
 
 ### `redeem_share`
 
-Mount a shared project using a share string (read-only). After redemption the project appears as `mounts/{owner}_{project}`. Sealed-share auto-detection: a `SEALED1:` prefix routes through the encryption-at-rest redeem path and persists the DEK in the OS keyring.
+Mount a shared project using a share string (read-only). After redemption the project appears as `mounts/{owner}_{project}`; `switch_project` to it to query. Sealed envelopes are detected automatically and their key is stored in the OS keyring.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `share_string` | string | required | Full share string from `share_project` |
 
-**Returns:** `{"mount_path": "..."}`
+**Returns:** `{"owner": "...", "project": "...", "mount_name": "..."}`
 
 ### `list_shares`
 
@@ -356,233 +277,38 @@ List outgoing shares (projects this user has shared, with revocation status) and
 
 ### `revoke_share`
 
-Revoke a previously generated share key. For legacy plaintext shares (`sk_` prefix): cuts off access on the next project-list or switch attempt. For sealed shares (`ssk_` prefix): soft revoke deletes the wrap file; hard revoke (`rotate=True`) rotates the DEK and re-encrypts every content file.
+Soft-revoke a previously generated share key. Plaintext shares (`sk_`): access ends on the grantee's next project-list or switch. Sealed shares (`ssk_`): the key wrap is deleted so the share can't be redeemed any more; a grantee who already redeemed keeps the key they cached.
+
+Hard revoke — rotating the project's key and re-encrypting it, which invalidates **every** share — is human-only (see the table above). This tool has no `rotate` parameter.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `key_id` | string | required | Key ID from the `share_string` or `list_shares` output |
-| `project` | string | `null` | Project name — required for sealed shares, ignored for legacy |
-| `rotate` | bool | `false` | Hard revoke for sealed shares: rotates DEK and invalidates all share wraps |
+| `key_id` | string | required | Key ID from `list_shares` |
+| `project` | string | `null` | Project name — **required** for sealed (`ssk_`) shares, ignored for plaintext ones |
 
-**Returns:** `{"status": "revoked", "key_id": "..."}`
+**Returns:** `{"key_id": "...", "grantee": "...", "project": "...", ...}`
 
 ### `extend_share`
 
-Renew a share key's expiry, or clear it (`ttl_days=null`). Pairs with `share_project(ttl_days=...)` to give owners a hard cutoff for forgotten shares. **Plaintext shares (`sk_`) only.** Sealed (`ssk_`) `key_id`s are not in the plaintext share manifest and currently return `404 Key not found`. To renew a sealed share, mint a fresh one with the desired `ttl_days` and revoke the old `key_id` — sealed expiry lives in an Ed25519-signed sidecar that cannot be re-signed in place.
+Renew a share key's expiry, or clear it (`ttl_days=null`). **Plaintext shares (`sk_`) only** — sealed (`ssk_`) expiry lives in an Ed25519-signed sidecar that can't be re-signed in place; mint a fresh sealed share and revoke the old one instead.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `key_id` | string | required | Key ID of the share to extend (from `list_shares`) |
 | `ttl_days` | int | `null` | New time-to-live in days from now; `null` clears the expiry entirely |
 
-**Returns:** `{"status": "extended", "key_id": "...", "expires_at": "..."}`
-
-### `mount_refresh`
-
-Re-read the owner's version marker for a mounted share project, optionally switching to a specific mount first. Use after the owner has re-ingested and synced the share directory.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `project` | string | `null` | The mount project to refresh, e.g. `"mounts/alice_research"` — omit to refresh the currently active mount |
-
-**Returns:** `{"status": "success", "refreshed": bool, "seq": int|null}`
-
----
-
-## Graph (6)
-
-### `graph_status`
-
-Return entity count, edge count, community summary count, rebuild status, and readiness for graph-augmented retrieval. Call before `graph_finalize` to check if a rebuild is needed. No parameters.
-
-**Returns:** `{"entities": 340, "edges": 820, "communities": 12, "rebuild_in_progress": false, "ready": true}`
-
-### `graph_finalize`
-
-Trigger an explicit community detection rebuild. Call after a large ingest batch to ensure graph-augmented answers reflect the latest knowledge. No parameters.
-
-**Returns:** `{"status": "ok" | "not_applicable" | "error", "community_summary_count": N, "backend_id": "graphrag" | "dynamic_graph" | "federated", "detail": "..."}`
-
-> v0.3.2: status is capability-flagged. Backends without a finalize step (e.g. `dynamic_graph`) return `"not_applicable"`; the federated backend aggregates statuses from sub-backends.
-
-### `graph_data`
-
-Return the full entity/relation graph as JSON for inspection, export, or custom visualisations. No parameters.
-
-**Returns:** `{"nodes": [...], "links": [...]}`
-
-### `graph_backend_status`
-
-Return the active graph backend's type and health metrics. Distinguishes between the GraphRAG community-graph backend, the dynamic SQLite-WAL graph backend, and no backend. No parameters.
-
-**Returns:** `{"backend": "graphrag"|"dynamic"|"none", "ready": true|false, ...}`
-
-### `graph_conflicts`
-
-List facts whose status is `conflicted` (incompatible exclusive-relation facts in the same scope). Backends that don't track conflicts (e.g. `graphrag`) return `supported: false`.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `limit` | int | `100` | Maximum conflicts to return (1-1000) |
-
-**Returns:** `{"backend": "...", "supported": bool, "conflicts": [{"fact_id", "subject", "relation", "object", "valid_at", "scope_key", ...}, ...]}`
-
-### `graph_retrieve`
-
-Run the active graph backend's `retrieve()` directly with a `RetrievalConfig` and return graph contexts only — no LLM call. Surfaces point-in-time historical queries (`point_in_time`) and per-query federation weight overrides (`federation_weights`) that the legacy `/query` pipeline does not yet expose.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `query` | string | required | The query string |
-| `top_k` | int \| null | `null` | Maximum graph contexts to return (server resolves to 10 when null; range 1-200) |
-| `point_in_time` | string | `null` | ISO-8601 timestamp; return facts valid at that instant. Honoured only by bi-temporal backends (`dynamic_graph`); ignored elsewhere |
-| `federation_weights` | dict[str, float] | `null` | Per-query RRF weights for the federated backend. Keys: `graphrag`, `dynamic_graph`. Ignored by other backends |
-
-**Returns:** `{"backend": "...", "contexts": [{"context_id", "context_type", "text", "score", "rank", "valid_at", "invalid_at", "matched_entity_names", "hop_count", ...}, ...]}`
-
----
-
-## Sealed-Store Security (8)
-
-### `security_status`
-
-Return current sealed-store status (initialized and unlocked flags). Use on startup to decide whether to call `security_bootstrap` (first-time setup) or `security_unlock` (existing user). No parameters.
-
-**Returns:** `{"initialized": false}` or `{"initialized": true, "unlocked": false}` or `{"initialized": true, "unlocked": true}`
-
-### `wipe_sealed_cache`
-
-**v0.4.0 Item 3.** Manually wipe the active sealed-project plaintext cache. No-op when no sealed cache is mounted. Idempotent. Pair with `security.seal_cache_ephemeral=true` for automatic per-query wipes.
-
-No parameters.
-
-**Returns:** `{"wiped": bool}` (false when no active brain or no sealed cache).
-
-### `set_keyring_mode`
-
-**v0.4.0 Item 2.** Change DEK storage mode at runtime. Modes: `persistent` (default — OS keyring), `session` (in-memory only, wiped at process exit), `never` (no DEK caching anywhere; re-redeem every mount). Caveat: previously stored secrets are NOT migrated. For permanent change set `security.keyring_mode` in `config.yaml` and restart.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `mode` | string | required | One of `persistent`, `session`, `never` |
-
-**Returns:** `{"status": "ok", "keyring_mode": "session"}`
-
-### `suggest_passphrase`
-
-**v0.4.0 Item 1.** Suggest a strong Diceware passphrase from the bundled EFF large wordlist (CC BY 3.0 US, 7,776 words). Pure helper — no auth, no store. Useful before `security_bootstrap` (first-time setup) or as a UX hint when rotating via `security_change_passphrase`.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `words` | int | `6` | Word count (4-12). 6 ≈ 77 bits of entropy — enough to make scrypt brute force infeasible |
-| `separator` | string | `"-"` | String joined between words |
-
-**Returns:** `{"passphrase": "...", "n_words": 6, "entropy_bits": 77.5, "separator": "-", "source": "eff_large_wordlist"}`
-
-### `security_bootstrap`
-
-Initialise the sealed-store with a passphrase (one-time setup). Generates a fresh master key, wraps it under a passphrase-derived KEK, and stores it in the OS keyring. **There is NO recovery** — losing the passphrase means losing access to every project sealed under this master. Pair with `suggest_passphrase` for a strong default.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `passphrase` | string | required | Chosen passphrase; cannot be empty |
-
-**Returns:** `{"status": "bootstrapped"}`
-
-### `security_unlock`
-
-Unlock the sealed-store so sealed projects can be queried. Required after every process restart before `seal_project` or any sealed-project switch. Rate-limited: 5 wrong attempts within 5 minutes triggers a 429 lockout.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `passphrase` | string | required | The passphrase supplied at `security_bootstrap` time |
-
-**Returns:** `{"status": "unlocked"}`
-
-### `security_lock`
-
-Clear the in-process master key cache. Subsequent sealed-project queries will fail until `security_unlock` is called again. Use before walking away from the machine. No parameters.
-
-**Returns:** `{"status": "locked"}`
-
-### `security_change_passphrase`
-
-Re-wrap the master key under a new passphrase. Project DEKs are not touched (they are wrapped under the master, not the passphrase), so this is O(1) regardless of how many sealed projects exist.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `old_passphrase` | string | required | The current passphrase (required to unwrap the existing master) |
-| `new_passphrase` | string | required | The new passphrase; cannot be empty |
-
-**Returns:** `{"status": "passphrase_changed"}`
-
----
-
-## Configuration (4)
-
-### `get_config`
-
-Return the active configuration. Secrets are masked as `***` by the server, so this tool can never read a credential back out. Use it to discover the exact field names `set_config` accepts.
-
-**Returns:** the full `AxonConfig` as JSON, sensitive fields masked.
-
----
-
-### `set_config`
-
-Set a single configuration field.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `key` | string | required | Dot-notation alias (`chunk.strategy`, `llm.model`, `rag.top_k`) **or** any `AxonConfig` field name (`graph_rag_depth`, `chunk_size`, `llm_temperature`) |
-| `value` | any | required | New value; coerced to the field's type |
-| `persist` | bool | `true` | Also write to `config.yaml` so it survives a restart |
-
-**Returns:** `{"status": "success", "key": ..., "old_value": ..., "new_value": ..., "persisted": bool}` with secrets masked.
-
-Changing `llm_provider` / `llm_model` / `embedding_*` reinitialises the affected component immediately. Switching the embedding model invalidates existing vectors — re-ingest afterwards.
-
----
-
-### `update_config`
-
-Update several live retrieval settings at once.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `settings` | dict | required | Field/value pairs from the curated RAG-tuning subset |
-| `persist` | bool | `false` | Write the result to `config.yaml` |
-
-Covers `top_k`, `rerank`, `hyde`, `multi_query`, `step_back`, `graph_rag`, `raptor`, `cite` and similar. Storage paths and credentials are deliberately **not** settable here — use `set_config`.
-
-**Returns:** `{"status": "success", "applied": [...], "ignored": [...], "persisted": bool}`. Any key outside the curated subset appears in `ignored` and was **not** applied.
-
----
-
-### `validate_config`
-
-Check the on-disk config for errors, unknown keys, and risky combinations.
-
-**Returns:** findings grouped by severity. Includes the warning raised when GraphRAG is enabled with a local LLM and LLM-based entity extraction — one model call per chunk, impractical on a slow local model.
+**Returns:** `{"key_id": "...", "expires_at": "..."}`
 
 ---
 
 ## Usage Notes
 
-- Most ingest, search, and query tools operate on the **active project** and accept an optional `project` parameter validated against it (returns 409 on mismatch). Tools that do **not** accept `project`: `ingest_path`, `list_sessions`, `get_session`, `list_shares`, `graph_backend_status`, `graph_status`, `graph_finalize`, `graph_data`, `graph_conflicts`, `graph_retrieve`. `revoke_share` conditionally accepts `project` and **requires** it for sealed shares (`ssk_` prefix). Global tools (`security_*`, `init_store`, `share_project`, `redeem_share`, `list_shares`) are not scoped to the active project. Use `switch_project` to change the active project.
+- `ingest_knowledge(path=...)` and `ingest_knowledge(refresh=True)` are async — poll `get_job_status` until `status` is `completed` or `failed`. `text`, `docs` and `url` ingest are synchronous.
+- Mounted shares (via `redeem_share`) are always **read-only**. Ingest, delete and `update_fact` against a mount return 403.
+- `set_config` defaults to `persist=false` — changes apply to the running server only. Pass `persist=true` to write `config.yaml`.
+- Every request carries `X-Axon-Surface: mcp` for attribution; set `RAG_API_KEY` if the API requires a key.
+- A failed call raises a tool error whose message includes the HTTP status and the server's `detail` — e.g. the unknown config keys, the project the server is actually serving on a 409, or "project is required" for a sealed revoke.
 
-- `ingest_path` is async — it returns a `job_id`. Poll `get_job_status` until `status == "completed"` or `"failed"`. `ingest_url` is synchronous and returns `{"status": "ingested"|"skipped", "doc_id": "..."}` immediately — no polling required.
+### Removed in 0.5.0
 
-- `clear_knowledge` and `delete_project` are irreversible.
-
-- Mounted shares (via `redeem_share`) are always **read-only**. Ingest calls against a mount return an error.
-
-- `update_settings` changes are scoped to the current session by default. Pass `persist=True` to write to `config.yaml`.
-
-- `set_config` reaches **every** `AxonConfig` field; `update_config` is limited to the curated live-tuning subset and reports anything else in `ignored` rather than applying it. If a field seems to have no effect, check that list.
-
-- AxonStore tools: `init_store` and `get_store_status` are always available pre-init. `share_project`, `redeem_share`, `list_shares`, and `revoke_share` require an initialised store (`init_store` first if the store hasn't been bootstrapped).
-
-- Sealed-store tools (`security_*`, `seal_project`) require Phase 1 bootstrap (`security_bootstrap`) before use. The store must be unlocked (`security_unlock`) after every process restart before sealed projects can be accessed.
-
-- `mount_refresh` refreshes the currently active mount when called with no arguments, or accepts an optional `project` to target a specific mount and switch to it first. (A second `refresh_mount` tool duplicated the no-argument case and was removed in 0.5.0.)
+56 tools at the start of 0.5.0 → 18. Consolidated: `ingest_text`, `ingest_texts`, `ingest_url`, `ingest_path`, `refresh_ingest` → `ingest_knowledge`; `get_current_settings`, `validate_config` → `get_config`; `update_settings`, `update_config` → `set_config`. Removed (human-only, see the table above): `clear_knowledge`, `delete_project`, `get_stale_docs`, `get_active_leases`, `query_stream`, `list_sessions`, `get_session`, `get_store_status`, `init_store`, `security_status`, `security_bootstrap`, `security_unlock`, `security_lock`, `security_change_passphrase`, `suggest_passphrase`, `set_keyring_mode`, `wipe_sealed_cache`, `seal_project`, `pack_project`, `unpack_project`, `mount_refresh`, `graph_status`, `graph_finalize`, `graph_data`, `graph_backend_status`, `graph_conflicts`, and the five `governance_*` tools (removed with the governance console).

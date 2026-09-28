@@ -24,71 +24,69 @@ would require integration infrastructure.
 
 EXPECTED_MCP_TOOL_NAMES = {
     # Retrieval
-    "search_knowledge",
     "query_knowledge",
-    # Ingestion
-    "ingest_text",
-    "ingest_texts",
-    "ingest_url",
-    "ingest_path",
+    "search_knowledge",
+    # Ingest (text | docs | url | path | refresh in one tool) + job polling
+    "ingest_knowledge",
     "get_job_status",
-    "refresh_ingest",
-    "get_stale_docs",
-    # Knowledge base management
+    # Collection
     "list_knowledge",
     "delete_documents",
-    "clear_knowledge",
     # Projects
     "list_projects",
     "switch_project",
     "create_project",
-    "delete_project",
-    # Settings / sessions
-    "get_current_settings",
-    "update_settings",
-    "list_sessions",
-    "get_session",
-    # Sharing
+    # Configuration
+    "get_config",
+    "set_config",
+    # Graph
+    "graph_retrieve",
+    "update_fact",
+    # Sharing (stays agent-callable; hard revoke / key rotation is human-only)
     "share_project",
     "redeem_share",
+    "list_shares",
     "revoke_share",
     "extend_share",
-    "list_shares",
+}
+
+# Removed from the agent surface in 0.5.0 (human-only now: REST / CLI / REPL).
+REMOVED_MCP_TOOL_NAMES = {
+    "ingest_text",
+    "ingest_texts",
+    "ingest_url",
+    "ingest_path",
+    "refresh_ingest",
+    "get_stale_docs",
+    "clear_knowledge",
+    "delete_project",
+    "get_current_settings",
+    "update_settings",
+    "update_config",
+    "validate_config",
+    "list_sessions",
+    "get_session",
     "init_store",
     "get_store_status",
-    # Sealed-store (Phase 2 of #SEALED)
     "security_status",
     "security_bootstrap",
     "security_unlock",
     "security_lock",
     "security_change_passphrase",
+    "suggest_passphrase",
+    "set_keyring_mode",
+    "wipe_sealed_cache",
     "seal_project",
     "pack_project",
     "unpack_project",
-    # v0.4.0 Item 1 — passphrase suggestion helper
-    "suggest_passphrase",
-    # v0.4.0 Item 2 — keyring mode runtime control
-    "set_keyring_mode",
-    # v0.4.0 Item 3 — sealed-cache wipe
-    "wipe_sealed_cache",
-    # Graph
     "graph_status",
     "graph_finalize",
     "graph_data",
     "graph_backend_status",
     "graph_conflicts",
-    "graph_retrieve",
     "get_active_leases",
-    # Streaming + mount (added by parity sweep B1)
     "query_stream",
     "mount_refresh",
-    # Configuration — MCP was the only surface with no config access, even
-    # though surface_contract.py already claimed config_read / config_update
-    # on ALL_SURFACES.
-    "get_config",
-    "set_config",
-    "update_config",
-    "validate_config",
 }
 
 
@@ -109,7 +107,7 @@ def test_mcp_server_exposes_fastmcp_instance():
 
 
 def test_mcp_server_registers_all_expected_tools():
-    """All 32 expected MCP tools must be registered.
+    """All 18 expected MCP tools must be registered.
 
 
     Validated via the public JSON-RPC ``tools/list`` protocol in
@@ -130,7 +128,7 @@ def test_mcp_server_registers_all_expected_tools():
 
 
 def test_mcp_server_tool_count():
-    """Exactly 32 tools must be registered — not more, not fewer.
+    """Exactly 18 tools must be registered — not more, not fewer.
 
 
     See ``test_mcp_protocol_tools_list`` for the substantive assertion; this
@@ -269,7 +267,7 @@ def test_mcp_tool_invocation_proxies_to_api():
     import asyncio
     from unittest.mock import AsyncMock, MagicMock, patch
 
-    from axon.mcp_server import ingest_text
+    from axon.mcp_server import ingest_knowledge
 
     mock_resp = MagicMock()
 
@@ -283,7 +281,7 @@ def test_mcp_tool_invocation_proxies_to_api():
         with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
             mock_post.return_value = mock_resp
 
-            result = await ingest_text(text="Hello world", project="test-p")
+            result = await ingest_knowledge(text="Hello world", project="test-p")
 
             assert result == {"status": "created", "doc_id": "123"}
 
@@ -329,279 +327,386 @@ def _mock_post(return_value: dict):
     return m
 
 
-def test_ingest_texts_proxies_batch():
+def test_removed_tools_are_not_module_attributes():
+    """The dropped tools must be gone from the module, not just unregistered —
+    a leftover coroutine is a trap for anyone re-adding a decorator."""
+    import axon.mcp_server as mod
+
+    leftovers = sorted(n for n in REMOVED_MCP_TOOL_NAMES if hasattr(mod, n))
+    assert not leftovers, f"removed MCP tools still defined: {leftovers}"
+
+
+def _run(coro):
     import asyncio
+
+    return asyncio.run(coro)
+
+
+# ---------------------------------------------------------------------------
+# ingest_knowledge — one tool, exactly one source
+# ---------------------------------------------------------------------------
+
+
+class TestIngestKnowledge:
+    def _call(self, **kwargs):
+        from unittest.mock import patch
+
+        from axon.mcp_server import ingest_knowledge
+
+        mock = _mock_post({"status": "ok"})
+        with patch("httpx.AsyncClient.post", mock):
+            result = _run(ingest_knowledge(**kwargs))
+        assert result == {"status": "ok"}
+        args, kw = mock.call_args
+        return args[0], kw["json"], mock
+
+    def test_text_goes_to_add_text_with_metadata_doc_id_and_project(self):
+        url, body, _ = self._call(
+            text="Hello", metadata={"source": "s"}, doc_id="d1", project="proj"
+        )
+        assert url.endswith("/add_text")
+        assert body == {
+            "text": "Hello",
+            "metadata": {"source": "s"},
+            "doc_id": "d1",
+            "project": "proj",
+        }
+
+    def test_text_omits_unset_optionals(self):
+        url, body, _ = self._call(text="Hello")
+        assert url.endswith("/add_text")
+        assert body == {"text": "Hello"}
+
+    def test_docs_go_to_add_texts(self):
+        docs = [{"text": "A"}, {"text": "B", "doc_id": "b"}]
+        url, body, _ = self._call(docs=docs, project="proj")
+        assert url.endswith("/add_texts")
+        assert body == {"docs": docs, "project": "proj"}
+
+    def test_url_goes_to_ingest_url(self):
+        url, body, _ = self._call(url="https://example.com/p", metadata={"topic": "x"})
+        assert url.endswith("/ingest_url")
+        assert body == {"url": "https://example.com/p", "metadata": {"topic": "x"}}
+
+    def test_path_goes_to_ingest_with_project_assertion(self):
+        url, body, _ = self._call(path="/data/docs", project="proj")
+        assert url.endswith("/ingest")
+        assert body == {"path": "/data/docs", "project": "proj"}
+
+    def test_refresh_posts_refresh_and_never_switches_project(self):
+        """The old refresh_ingest(project=...) silently POSTed /project/switch
+        first; the project is now an assertion carried in the refresh body."""
+        url, body, mock = self._call(refresh=True, project="proj")
+        assert url.endswith("/ingest/refresh")
+        assert body == {"project": "proj"}
+        assert mock.call_count == 1
+        called = [c.args[0] for c in mock.call_args_list]
+        assert not any(u.endswith("/project/switch") for u in called)
+
+    def test_refresh_without_project_sends_empty_body(self):
+        url, body, _ = self._call(refresh=True)
+        assert url.endswith("/ingest/refresh")
+        assert body == {}
+
+    def test_no_source_raises(self):
+        import pytest
+
+        from axon.mcp_server import ingest_knowledge
+
+        with pytest.raises(ValueError, match="exactly one"):
+            _run(ingest_knowledge())
+
+    def test_two_sources_raise(self):
+        import pytest
+
+        from axon.mcp_server import ingest_knowledge
+
+        with pytest.raises(ValueError, match="exactly one"):
+            _run(ingest_knowledge(text="a", url="https://example.com"))
+        with pytest.raises(ValueError, match="exactly one"):
+            _run(ingest_knowledge(path="/x", refresh=True))
+
+    def test_empty_text_still_counts_as_a_source(self):
+        """text="" is a (bad) source, not "no source" — the server rejects it
+        with a real error rather than the tool claiming nothing was given."""
+        url, body, _ = self._call(text="")
+        assert url.endswith("/add_text")
+        assert body == {"text": ""}
+
+
+def test_get_job_status_proxies_get():
     from unittest.mock import patch
 
-    from axon.mcp_server import ingest_texts
+    from axon.mcp_server import get_job_status
 
-    async def _run():
-        rv = {"added": 2, "skipped": 0}
-        with patch("httpx.AsyncClient.post", _mock_post(rv)):
-            result = await ingest_texts(docs=[{"text": "A"}, {"text": "B"}], project="proj")
-        assert result == rv
-
-    asyncio.run(_run())
-
-
-def test_ingest_url_proxies_post():
-    import asyncio
-    from unittest.mock import patch
-
-    from axon.mcp_server import ingest_url
-
-    async def _run():
-        rv = {"status": "created", "doc_id": "u1"}
-        with patch("httpx.AsyncClient.post", _mock_post(rv)):
-            result = await ingest_url(url="http://example.com/page")
-        assert result == rv
-
-    asyncio.run(_run())
+    rv = {"job_id": "j1", "status": "completed"}
+    mock = _mock_get(rv)
+    with patch("httpx.AsyncClient.get", mock):
+        assert _run(get_job_status("j1")) == rv
+    assert mock.call_args.args[0].endswith("/ingest/status/j1")
 
 
 def test_list_knowledge_proxies_get():
-    import asyncio
     from unittest.mock import patch
 
     from axon.mcp_server import list_knowledge
 
-    async def _run():
-        rv = {"sources": [], "total_chunks": 0}
-        with patch("httpx.AsyncClient.get", _mock_get(rv)):
-            result = await list_knowledge()
-        assert result == rv
-
-    asyncio.run(_run())
+    rv = {"sources": [], "total_chunks": 0}
+    with patch("httpx.AsyncClient.get", _mock_get(rv)):
+        assert _run(list_knowledge()) == rv
 
 
 def test_delete_documents_proxies_post():
-    import asyncio
     from unittest.mock import patch
 
     from axon.mcp_server import delete_documents
 
-    async def _run():
-        rv = {"deleted": 1}
-        with patch("httpx.AsyncClient.post", _mock_post(rv)):
-            result = await delete_documents(doc_ids=["abc"])
-        assert result == rv
-
-    asyncio.run(_run())
-
-
-def test_get_stale_docs_proxies_get():
-    import asyncio
-    from unittest.mock import patch
-
-    from axon.mcp_server import get_stale_docs
-
-    async def _run():
-        rv = {"stale_docs": []}
-        with patch("httpx.AsyncClient.get", _mock_get(rv)):
-            result = await get_stale_docs(days=7)
-        assert result == rv
-
-    asyncio.run(_run())
+    rv = {"deleted": 1}
+    mock = _mock_post(rv)
+    with patch("httpx.AsyncClient.post", mock):
+        assert _run(delete_documents(doc_ids=["abc"])) == rv
+    assert mock.call_args.kwargs["json"] == {"doc_ids": ["abc"]}
 
 
 def test_list_projects_proxies_get():
-    import asyncio
     from unittest.mock import patch
 
     from axon.mcp_server import list_projects
 
-    async def _run():
-        rv = {"projects": ["default"]}
-        with patch("httpx.AsyncClient.get", _mock_get(rv)):
-            result = await list_projects()
-        assert result == rv
+    rv = {"projects": ["default"]}
+    with patch("httpx.AsyncClient.get", _mock_get(rv)):
+        assert _run(list_projects()) == rv
 
-    asyncio.run(_run())
+
+def test_switch_project_proxies_post():
+    from unittest.mock import patch
+
+    from axon.mcp_server import switch_project
+
+    mock = _mock_post({"status": "success"})
+    with patch("httpx.AsyncClient.post", mock):
+        _run(switch_project("research"))
+    assert mock.call_args.args[0].endswith("/project/switch")
+    assert mock.call_args.kwargs["json"] == {"project_name": "research"}
 
 
 def test_create_project_proxies_post():
-    import asyncio
     from unittest.mock import patch
 
     from axon.mcp_server import create_project
 
-    async def _run():
-        rv = {"status": "created", "project": "myproj"}
-        with patch("httpx.AsyncClient.post", _mock_post(rv)):
-            result = await create_project(name="myproj")
-        assert result == rv
-
-    asyncio.run(_run())
+    rv = {"status": "created", "project": "myproj"}
+    with patch("httpx.AsyncClient.post", _mock_post(rv)):
+        assert _run(create_project(name="myproj")) == rv
 
 
 def test_create_project_forwards_graph_backend_when_provided():
-    import asyncio
     from unittest.mock import patch
 
     from axon.mcp_server import create_project
 
-    async def _run():
-        rv = {"status": "created", "project": "dgproj", "graph_backend": "dynamic_graph"}
-        mock_post = _mock_post(rv)
-        with patch("httpx.AsyncClient.post", mock_post):
-            result = await create_project(name="dgproj", graph_backend="dynamic_graph")
-        assert result == rv
-        body = mock_post.call_args.kwargs["json"]
-        assert body["graph_backend"] == "dynamic_graph"
-
-    asyncio.run(_run())
+    rv = {"status": "created", "project": "dgproj", "graph_backend": "dynamic_graph"}
+    mock_post = _mock_post(rv)
+    with patch("httpx.AsyncClient.post", mock_post):
+        assert _run(create_project(name="dgproj", graph_backend="dynamic_graph")) == rv
+    assert mock_post.call_args.kwargs["json"]["graph_backend"] == "dynamic_graph"
 
 
 def test_create_project_omits_graph_backend_when_not_provided():
-    import asyncio
     from unittest.mock import patch
 
     from axon.mcp_server import create_project
 
-    async def _run():
-        rv = {"status": "created", "project": "myproj"}
-        mock_post = _mock_post(rv)
-        with patch("httpx.AsyncClient.post", mock_post):
-            await create_project(name="myproj")
-        body = mock_post.call_args.kwargs["json"]
-        assert "graph_backend" not in body
-
-    asyncio.run(_run())
+    mock_post = _mock_post({"status": "created", "project": "myproj"})
+    with patch("httpx.AsyncClient.post", mock_post):
+        _run(create_project(name="myproj"))
+    assert "graph_backend" not in mock_post.call_args.kwargs["json"]
 
 
-def test_delete_project_proxies_post():
-    import asyncio
+# ---------------------------------------------------------------------------
+# get_config / set_config
+# ---------------------------------------------------------------------------
+
+
+def test_get_config_returns_bare_config_by_default():
     from unittest.mock import patch
 
-    from axon.mcp_server import delete_project
+    from axon.mcp_server import get_config
 
-    async def _run():
-        rv = {"status": "deleted"}
-        with patch("httpx.AsyncClient.post", _mock_post(rv)):
-            result = await delete_project(name="myproj")
-        assert result == rv
+    rv = {"top_k": 10}
+    mock = _mock_get(rv)
+    with patch("httpx.AsyncClient.get", mock):
+        assert _run(get_config()) == rv
+    assert mock.call_count == 1
+    assert mock.call_args.args[0].endswith("/config")
 
-    asyncio.run(_run())
+
+def test_get_config_validate_also_fetches_validation():
+    from unittest.mock import AsyncMock, patch
+
+    from axon.mcp_server import get_config
+
+    responses = {
+        "/config": {"top_k": 10},
+        "/config/validate": {"valid": True, "issue_count": 0, "issues": []},
+    }
+    mock = AsyncMock(side_effect=lambda path, params=None: responses[path])
+    with patch("axon.mcp_server._get", mock):
+        result = _run(get_config(validate=True))
+    assert result == {"config": responses["/config"], "validation": responses["/config/validate"]}
+    assert [c.args[0] for c in mock.call_args_list] == ["/config", "/config/validate"]
 
 
-def test_get_current_settings_proxies_get():
-    import asyncio
+def test_set_config_sends_batch_with_persist_false_by_default():
     from unittest.mock import patch
 
-    from axon.mcp_server import get_current_settings
+    from axon.mcp_server import set_config
 
-    async def _run():
-        rv = {"top_k": 10, "hybrid_search": True}
-        with patch("httpx.AsyncClient.get", _mock_get(rv)):
-            result = await get_current_settings()
-        assert result == rv
+    rv = {"status": "success", "applied": []}
+    mock = _mock_post(rv)
+    with patch("httpx.AsyncClient.post", mock):
+        assert _run(set_config({"top_k": 8, "rerank": True})) == rv
+    assert mock.call_args.args[0].endswith("/config/set")
+    assert mock.call_args.kwargs["json"] == {
+        "settings": {"top_k": 8, "rerank": True},
+        "persist": False,
+    }
 
-    asyncio.run(_run())
 
-
-def test_update_settings_proxies_post():
-    import asyncio
+def test_set_config_persist_true_is_forwarded():
     from unittest.mock import patch
 
-    from axon.mcp_server import update_settings
+    from axon.mcp_server import set_config
 
-    async def _run():
-        rv = {"status": "updated"}
-        with patch("httpx.AsyncClient.post", _mock_post(rv)):
-            result = await update_settings(hyde=True)
-        assert result == rv
-
-    asyncio.run(_run())
+    mock = _mock_post({"status": "success"})
+    with patch("httpx.AsyncClient.post", mock):
+        _run(set_config({"llm.model": "m"}, persist=True))
+    assert mock.call_args.kwargs["json"]["persist"] is True
 
 
-def test_graph_status_proxies_get():
-    import asyncio
+# ---------------------------------------------------------------------------
+# Graph
+# ---------------------------------------------------------------------------
+
+
+def test_graph_retrieve_forwards_optional_fields():
     from unittest.mock import patch
 
-    from axon.mcp_server import graph_status
+    from axon.mcp_server import graph_retrieve
 
-    async def _run():
-        rv = {"entity_count": 5, "community_summary_count": 2}
-        with patch("httpx.AsyncClient.get", _mock_get(rv)):
-            result = await graph_status()
-        assert result == rv
+    mock = _mock_post({"contexts": []})
+    with patch("httpx.AsyncClient.post", mock):
+        _run(
+            graph_retrieve(
+                "who",
+                top_k=3,
+                point_in_time="2026-01-01T00:00:00Z",
+                federation_weights={"graphrag": 1.0},
+            )
+        )
+    assert mock.call_args.args[0].endswith("/graph/retrieve")
+    assert mock.call_args.kwargs["json"] == {
+        "query": "who",
+        "top_k": 3,
+        "point_in_time": "2026-01-01T00:00:00Z",
+        "federation_weights": {"graphrag": 1.0},
+    }
 
-    asyncio.run(_run())
 
-
-def test_graph_finalize_proxies_post():
-    import asyncio
+def test_update_fact_posts_graph_facts_minimal_body():
+    """GraphFactRequest is extra=forbid, so only the given fields are sent."""
     from unittest.mock import patch
 
-    from axon.mcp_server import graph_finalize
+    from axon.mcp_server import update_fact
 
-    async def _run():
-        rv = {"community_summary_count": 3}
-        with patch("httpx.AsyncClient.post", _mock_post(rv)):
-            result = await graph_finalize()
-        assert result == rv
+    rv = {"status": "created", "fact_id": "f1"}
+    mock = _mock_post(rv)
+    with patch("httpx.AsyncClient.post", mock):
+        assert _run(update_fact("Alice", "WORKS_FOR", "Acme")) == rv
+    assert mock.call_args.args[0].endswith("/graph/facts")
+    assert mock.call_args.kwargs["json"] == {
+        "subject": "Alice",
+        "relation": "WORKS_FOR",
+        "object": "Acme",
+    }
 
-    asyncio.run(_run())
 
-
-def test_graph_data_proxies_get():
-    import asyncio
+def test_update_fact_forwards_all_optional_fields():
     from unittest.mock import patch
 
-    from axon.mcp_server import graph_data
+    from axon.mcp_server import update_fact
 
-    async def _run():
-        rv = {"nodes": [], "links": []}
-        with patch("httpx.AsyncClient.get", _mock_get(rv)):
-            result = await graph_data()
-        assert result == rv
+    mock = _mock_post({"status": "superseded"})
+    with patch("httpx.AsyncClient.post", mock):
+        _run(
+            update_fact(
+                "Alice",
+                "IS_CEO_OF",
+                "Acme",
+                description="from the board minutes",
+                confidence=0.8,
+                replace=False,
+                project="proj",
+            )
+        )
+    assert mock.call_args.kwargs["json"] == {
+        "subject": "Alice",
+        "relation": "IS_CEO_OF",
+        "object": "Acme",
+        "description": "from the board minutes",
+        "confidence": 0.8,
+        "replace": False,
+        "project": "proj",
+    }
 
-    asyncio.run(_run())
+
+def test_update_fact_body_is_accepted_by_the_rest_schema():
+    """Every key the tool can send must be a GraphFactRequest field."""
+    from axon.api_schemas import GraphFactRequest
+
+    sent = {"subject", "relation", "object", "description", "confidence", "replace", "project"}
+    assert sent <= set(GraphFactRequest.model_fields)
 
 
-def test_get_active_leases_proxies_get():
-    import asyncio
-    from unittest.mock import patch
-
-    from axon.mcp_server import get_active_leases
-
-    async def _run():
-        rv = {"leases": {}}
-        with patch("httpx.AsyncClient.get", _mock_get(rv)):
-            result = await get_active_leases()
-        assert result == rv
-
-    asyncio.run(_run())
-
-
-def test_list_sessions_proxies_get():
-    import asyncio
-    from unittest.mock import patch
-
-    from axon.mcp_server import list_sessions
-
-    async def _run():
-        rv = {"sessions": []}
-        with patch("httpx.AsyncClient.get", _mock_get(rv)):
-            result = await list_sessions()
-        assert result == rv
-
-    asyncio.run(_run())
+# ---------------------------------------------------------------------------
+# Sharing
+# ---------------------------------------------------------------------------
 
 
 def test_share_project_proxies_post():
-    import asyncio
     from unittest.mock import patch
 
     from axon.mcp_server import share_project
 
-    async def _run():
-        rv = {"share_string": "axon-share-v1:..."}
-        with patch("httpx.AsyncClient.post", _mock_post(rv)):
-            result = await share_project(project="default", grantee="alice")
-        assert result == rv
+    rv = {"share_string": "axon-share-v1:..."}
+    with patch("httpx.AsyncClient.post", _mock_post(rv)):
+        assert _run(share_project(project="default", grantee="alice")) == rv
 
-    asyncio.run(_run())
+
+def test_redeem_share_and_list_shares_proxy():
+    from unittest.mock import patch
+
+    from axon.mcp_server import list_shares, redeem_share
+
+    mock = _mock_post({"mount_name": "alice_p"})
+    with patch("httpx.AsyncClient.post", mock):
+        _run(redeem_share("abc"))
+    assert mock.call_args.kwargs["json"] == {"share_string": "abc"}
+    get = _mock_get({"sharing": [], "shared": []})
+    with patch("httpx.AsyncClient.get", get):
+        _run(list_shares())
+    assert get.call_args.args[0].endswith("/share/list")
+
+
+def test_project_params_are_documented_as_assertions():
+    """`project` never switches; no docstring may call it a "Target project"."""
+    import inspect
+
+    import axon.mcp_server as mod
+
+    for name in EXPECTED_MCP_TOOL_NAMES:
+        doc = inspect.getdoc(getattr(mod, name)) or ""
+        assert "Target project" not in doc, name
 
 
 def test_search_knowledge_top_k_zero_raises():
@@ -713,3 +818,85 @@ def test_extend_share_passes_null_ttl_to_clear_expiry():
         assert kwargs["json"] == {"key_id": "sk_a", "ttl_days": None}
 
     asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# Errors carry the server's detail, not just httpx's status line
+# ---------------------------------------------------------------------------
+
+
+def _error_response(status: int, payload=None, text: str | None = None):
+    import httpx
+
+    req = httpx.Request("POST", "http://localhost:8420/x")
+    if payload is not None:
+        return httpx.Response(status, json=payload, request=req)
+    return httpx.Response(status, text=text or "", request=req)
+
+
+def test_400_detail_reaches_the_agent():
+    from unittest.mock import AsyncMock, patch
+
+    import pytest
+
+    from axon.mcp_server import AxonAPIError, set_config
+
+    detail = "Unknown config key(s) ['nope']; nothing was applied."
+    resp = _error_response(400, {"detail": detail})
+    with patch("httpx.AsyncClient.post", AsyncMock(return_value=resp)):
+        with pytest.raises(AxonAPIError) as exc:
+            _run(set_config({"nope": 1}))
+    assert exc.value.status == 400
+    assert "nope" in str(exc.value) and "400" in str(exc.value)
+    assert "/config/set" in str(exc.value)
+
+
+def test_409_detail_names_the_active_project():
+    from unittest.mock import AsyncMock, patch
+
+    import pytest
+
+    from axon.mcp_server import AxonAPIError, query_knowledge
+
+    detail = "Brain is serving project 'alpha', not 'beta'. Use POST /project/switch to change."
+    resp = _error_response(409, {"detail": detail})
+    with patch("httpx.AsyncClient.post", AsyncMock(return_value=resp)):
+        with pytest.raises(AxonAPIError, match="serving project 'alpha'"):
+            _run(query_knowledge("q", project="beta"))
+
+
+def test_get_errors_carry_detail_and_non_json_falls_back_to_text():
+    from unittest.mock import AsyncMock, patch
+
+    import pytest
+
+    from axon.mcp_server import AxonAPIError, list_knowledge
+
+    resp = _error_response(503, text="Brain not initialized")
+    with patch("httpx.AsyncClient.get", AsyncMock(return_value=resp)):
+        with pytest.raises(AxonAPIError, match="503.*Brain not initialized"):
+            _run(list_knowledge())
+
+
+def test_structured_detail_is_serialised():
+    from unittest.mock import AsyncMock, patch
+
+    import pytest
+
+    from axon.mcp_server import AxonAPIError, update_fact
+
+    resp = _error_response(422, {"detail": [{"loc": ["body", "relation"], "msg": "bad"}]})
+    with patch("httpx.AsyncClient.post", AsyncMock(return_value=resp)):
+        with pytest.raises(AxonAPIError, match="relation"):
+            _run(update_fact("A", "!!", "B"))
+
+
+def test_graph_retrieve_forwards_project_assertion():
+    from unittest.mock import patch
+
+    from axon.mcp_server import graph_retrieve
+
+    mock = _mock_post({"contexts": []})
+    with patch("httpx.AsyncClient.post", mock):
+        _run(graph_retrieve("who", project="alpha"))
+    assert mock.call_args.kwargs["json"] == {"query": "who", "project": "alpha"}

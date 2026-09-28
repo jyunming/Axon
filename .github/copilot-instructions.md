@@ -122,7 +122,7 @@ without re-embedding.
 
 ### Ingesting code repositories
 
-Use `ingest_path` on any local source directory — Axon automatically detects
+Use `ingest_knowledge(path=...)` (or `POST /ingest`) on any local source directory — Axon automatically detects
 code files (`.py`, `.go`, `.rs`, `.ts`, `.js`, `.java`, `.cpp`, `.rb`, `.sh`,
 `.pl`, `.jl`, and more) and routes them through the syntax-aware
 `CodeAwareSplitter`. No path prefix is injected into code content.
@@ -197,147 +197,44 @@ to avoid burning the context window.
 
 ---
 
-## VS Code Extension LM Tool Names (32 total)
+## Agent Tool Names (0.5.0) — MCP: 18, VS Code LM tools: 20
 
-When using the Axon VS Code extension in Copilot Chat (`@workspace` or inline), these LM tools are available:
-
-### Search & Query
-
-| Tool | Does |
-|---|---|
-| `search_knowledge` | Raw chunk retrieval — best for discovery; Copilot synthesises the answer |
-| `query_knowledge` | Retrieval + answer via local LLM (requires Ollama) |
-| `show_graph` | Open Graph Panel — shows answer, citations, and 3D entity/code graph in VS Code |
-| `graph_status` | Return GraphRAG community build status (in-progress flag + summary count) |
-| `get_current_settings` | Read current active configuration (top_k, rerank, hyde, model, etc.) |
-| `update_settings` | Toggle RAG flags for the current session (hyde, rerank, graph_rag, etc.) |
-| `graph_data` | Return raw graph payload (nodes + links) for the active project |
-| `graph_finalize` | Trigger community rebuild on the knowledge graph for global-mode GraphRAG |
-
-### Ingestion
+The MCP server (`axon-mcp`, agent mode) and the VS Code extension's Copilot LM tools
+expose the **same 18 tools with the same names and parameters**; VS Code adds
+`show_graph` and `ingest_image`. Full parameter tables: `docs/MCP_TOOLS.md`.
 
 | Tool | Does |
 |---|---|
-| `ingest_text` | Ingest a raw text snippet |
-| `ingest_texts` | Ingest multiple text snippets in one call |
-| `ingest_url` | Fetch a web page and ingest it |
-| `ingest_path` | Ingest a local file or directory (async, returns `job_id`) |
-| `get_job_status` | Poll ingest job status until `completed` |
-| `refresh_ingest` | Re-ingest tracked files whose content changed since last ingest |
-| `ingest_image` | Describe an image via Copilot vision model and ingest the description |
-
-### Knowledge Base Management
-
-| Tool | Does |
-|---|---|
+| `query_knowledge` | Retrieval + synthesised answer via the configured LLM |
+| `search_knowledge` | Raw chunk retrieval — best for discovery; you synthesise the answer |
+| `ingest_knowledge` | Ingest exactly one of `text`, `docs` (batch — prefer it for many docs), `url`, `path` (async, returns `job_id`), or `refresh: true` (re-ingest changed files, async) |
+| `get_job_status` | Poll an async ingest job until `completed` |
 | `list_knowledge` | List indexed sources and chunk counts for the active project |
-| `delete_documents` | Remove specific documents by ID |
-| `clear_knowledge` | Wipe all data from the active project (irreversible) |
-| `get_stale_docs` | Return docs not re-ingested within N days (default 7) |
+| `delete_documents` | Remove chunks or whole documents by `doc_ids` |
+| `list_projects` | List project namespaces and mounted shares |
+| `switch_project` | Switch the active project (`project_name`) — global server state |
+| `create_project` | Create a project (optional `graph_backend`: `graphrag` / `dynamic_graph` / `none`) |
+| `get_config` | Read the active config (secrets masked); `validate: true` adds config.yaml findings |
+| `set_config` | Set several config keys in one call (`settings`); `persist` defaults to false; all-or-nothing |
+| `graph_retrieve` | Graph-backend retrieval, point-in-time capable (`point_in_time`) |
+| `update_fact` | Assert or correct a graph fact (subject, relation, object) in a `dynamic_graph` / `federated` project |
+| `share_project` | Generate a read-only share key for a grantee (optional `ttl_days`) |
+| `redeem_share` | Mount a shared project using a share string |
+| `list_shares` | List outgoing shares and incoming mounts |
+| `revoke_share` | Soft-revoke a share (`project` required for sealed `ssk_` keys) — no key rotation |
+| `extend_share` | Renew or clear a plaintext share's expiry |
+| `show_graph` | *(VS Code only)* Open the Graph Panel for a query — answer, citations, 3D graph. No browser is opened |
+| `ingest_image` | *(VS Code only)* Describe an image with a Copilot vision model and ingest the description |
 
-### Project Management
+A tool's `project` parameter is an **assertion**: a mismatch with the active project is a 409,
+never a silent switch — call `switch_project` first.
 
-| Tool | Does |
-|---|---|
-| `list_projects` | List all project namespaces and mounted shares |
-| `switch_project` | Switch active project |
-| `create_project` | Create a new named project |
-| `delete_project` | Delete a project and all its data permanently |
+Human-only (no agent tool — use the CLI, REPL or REST API): clearing a project
+(`axon --clear --yes`, REPL `/clear`), deleting a project, stale-doc listing, sessions, store
+init/status, the sealed store, seal/pack/unpack, mount refresh, hard share revocation with key
+rotation, and graph status/finalize/conflicts.
 
-### AxonStore & Sharing
-
-| Tool | Does |
-|---|---|
-| `init_store` | Initialise AxonStore multi-user mode at a given base directory |
-| `get_store_status` | Check whether the AxonStore is initialised and return its metadata |
-| `share_project` | Generate an HMAC share key for a grantee |
-| `redeem_share` | Mount a shared project using a share string (read-only) |
-| `revoke_share` | Revoke a previously issued share key by `key_id` |
-| `list_shares` | List outgoing shares and incoming mounts with revocation status |
-
-### Sessions & Maintenance
-
-| Tool | Does |
-|---|---|
-| `list_sessions` | List active REPL/API sessions |
-| `get_session` | Get details for a specific session |
-| `get_active_leases` | List active write-lease counts per project |
-
-Use `show_graph` when the user asks to "show the graph", "visualise", or "see connections" for a topic. The tool opens the split panel inside VS Code — **no browser is opened**.
-
----
-
-## MCP Tool Names (30 total — agent mode)
-
-When using Copilot in **agent mode** with the Axon MCP server, use these
-tool names (they differ deliberately from the OpenAI-format `tools.py` names):
-
-### Ingestion
-
-| MCP tool | Does |
-|---|---|
-| `ingest_text` | Single document ingest |
-| `ingest_texts` | Batch ingest (prefer this) |
-| `ingest_url` | Fetch URL and ingest |
-| `ingest_path` | Ingest a local file/directory (async, returns `job_id`) |
-| `get_job_status` | Poll async ingest job |
-
-### Search & Query
-
-| MCP tool | Does |
-|---|---|
-| `search_knowledge` | Raw chunk retrieval (threshold fallback: retries without threshold if zero results) |
-| `query_knowledge` | Synthesised answer via local LLM |
-
-### Knowledge Base Management
-
-| MCP tool | Does |
-|---|---|
-| `list_knowledge` | List indexed sources with chunk counts |
-| `delete_documents` | Remove documents by `doc_ids` list |
-| `clear_knowledge` | Wipe active project's vector store and BM25 index (irreversible) |
-| `get_stale_docs` | Find docs not refreshed in N days (default 30) |
-| `get_active_leases` | List active read/write leases held via AxonStore |
-
-### Project Management
-
-| MCP tool | Does |
-|---|---|
-| `list_projects` | List all project namespaces and mounted shares |
-| `switch_project` | Change active project |
-| `create_project` | Create a new named project |
-| `delete_project` | Delete a project and all its data permanently |
-
-### Settings
-
-| MCP tool | Does |
-|---|---|
-| `get_current_settings` | Return active RAG flags, model config, and runtime settings |
-| `update_settings` | Toggle RAG flags at runtime (session-scoped, not persisted) |
-
-### Sessions
-
-| MCP tool | Does |
-|---|---|
-| `list_sessions` | List saved conversation sessions (up to 20 most recent) |
-| `get_session` | Retrieve a full session transcript by timestamp ID |
-
-### GraphRAG
-
-| MCP tool | Does |
-|---|---|
-| `graph_status` | Return entity count, edge count, community count, and rebuild state |
-| `graph_finalize` | Trigger community detection rebuild for global-mode GraphRAG |
-| `graph_data` | Return the full entity/relation graph as a JSON nodes+links payload |
-
-### AxonStore & Sharing
-
-| MCP tool | Does |
-|---|---|
-| `init_store` | Initialise AxonStore at a shared filesystem base path |
-| `share_project` | Generate a read-only share key for a grantee |
-| `redeem_share` | Mount a shared project using a share string (read-only) |
-| `list_shares` | List outgoing and incoming shares, including revoked status |
+Use `show_graph` when the user asks to "show the graph", "visualise", or "see connections" for a topic.
 
 ---
 
@@ -362,8 +259,8 @@ aborted with a `RuntimeError` if any active model is `[remote]` or `[MISSING]`.
 
 ## Dos and Don'ts
 
-- **Do** use `ingest_texts` (batch) for multiple documents — never call
-  `ingest_text` in a loop.
+- **Do** use `ingest_knowledge(docs=[...])` (batch) for multiple documents — never
+  call `ingest_knowledge(text=...)` in a loop.
 - **Do** set `metadata.source` on every document.
 - **Do** call `list_knowledge` before a large ingest to check what's already
   indexed.
