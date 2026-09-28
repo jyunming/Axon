@@ -99,7 +99,7 @@ If no query string is given, the interactive REPL starts. If a query string is g
 
 | Flag | Description |
 |------|-------------|
-| `--provider PROVIDER` | LLM provider: `ollama`, `local`, `openai`, `gemini`, `grok`, `vllm`, `github_copilot`, `ollama_cloud` |
+| `--provider PROVIDER` | LLM provider: `ollama`, `local`, `openai`, `gemini`, `grok`, `vllm`, `copilot`, `github_copilot`, `ollama_cloud` |
 | `--model NAME` | LLM model name (e.g. `gemma:2b`, `gemini-1.5-flash`, `gpt-4o`). Also accepts `provider/model` format |
 | `--embed MODEL` | Embedding model (e.g. `all-MiniLM-L6-v2` or `ollama/nomic-embed-text`). Accepts `provider/model` format |
 | `--list-models` | List supported providers and locally installed Ollama models, then exit |
