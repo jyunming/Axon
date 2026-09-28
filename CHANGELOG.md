@@ -256,6 +256,9 @@ never reaches. Nothing a default install can do was removed.
 
 ### 🐛 Fixes
 
+- **`axon --provider` accepts every provider the config does.** The flag's
+  choices had drifted from `AxonConfig.llm_provider` and rejected `copilot`
+  and `grok`; they are now derived from it.
 - **`axon --graph-status`, `--graph-conflicts` and `--graph-retrieve` work
   again.** They never loaded the brain, so status always reported 0 entities
   and "not ready", and conflicts/retrieve always said no graph backend was

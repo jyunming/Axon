@@ -1182,6 +1182,22 @@ class TestMainProvider:
         run_cli("--provider", "github_copilot", "test query")
         assert cfg.llm_provider == "github_copilot"
 
+    @pytest.mark.parametrize("provider", ["copilot", "grok", "local", "ollama_cloud"])
+    def test_every_config_provider_is_accepted(self, cfg, provider):
+        """--provider used to reject copilot and grok although config accepts them."""
+        run_cli("--provider", provider, "test query")
+        assert cfg.llm_provider == provider
+
+    def test_choices_match_config(self):
+        import typing
+
+        from axon.cli import _llm_provider_choices
+        from axon.config import AxonConfig
+
+        expected = typing.get_args(AxonConfig.__dataclass_fields__["llm_provider"].type)
+        assert sorted(_llm_provider_choices()) == sorted(expected)
+        assert {"copilot", "grok"} <= set(_llm_provider_choices())
+
 
 # ---------------------------------------------------------------------------
 # 12.  main() --model (infer provider)

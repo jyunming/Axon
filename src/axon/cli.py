@@ -187,6 +187,15 @@ def _run_via_server(server: dict, args, config) -> str:
     return active
 
 
+def _llm_provider_choices() -> list[str]:
+    """Every provider ``AxonConfig.llm_provider`` accepts (its Literal)."""
+    import typing
+
+    from axon.config import AxonConfig
+
+    return list(typing.get_args(AxonConfig.__dataclass_fields__["llm_provider"].type))
+
+
 def _run_cli_query(brain, args) -> None:
     """Answer the positional ``query`` with *brain* (local AxonBrain or RemoteBrain)."""
     if getattr(args, "dry_run", False):
@@ -562,7 +571,9 @@ def main():
     parser.add_argument("--stream", action="store_true", help="Stream the response")
     parser.add_argument(
         "--provider",
-        choices=["ollama", "gemini", "ollama_cloud", "openai", "vllm", "local", "github_copilot"],
+        # Derived from AxonConfig.llm_provider so the flag can't drift from the
+        # providers config accepts (it had silently omitted copilot and grok).
+        choices=_llm_provider_choices(),
         help="LLM provider to use (overrides config)",
     )
     parser.add_argument(
