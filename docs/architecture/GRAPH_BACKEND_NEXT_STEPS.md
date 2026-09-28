@@ -7,12 +7,16 @@ so a fresh Claude Code conversation can pick this up with zero prior context
 
 ## Where things stand
 
-Branch `feat/wire-graph-backend-to-production` (off `main`, currently at
-`main`'s `d08fb1a`) has the wiring commit (`0f8c9c1`) plus the M2 Phase 1
-commit(s) described below — **not yet pushed, no PR opened** — waiting on
-explicit user approval to push per this repo's standing workflow rule (see
-`CLAUDE.md` "Branch Workflow" and the user's saved feedback memory on PR
-approval).
+> **Status (2026-09-28):** historical handoff note. The wiring commit and all
+> of M2 shipped (PR #142); `GraphRagMixin` is no longer mixed into `AxonBrain`.
+> The GitHub Project #4 board this note asks to clean up has been cleaned up
+> (15 items Done; the 3 LadybugDB items archived as obsolete — V1 is locked to
+> local SQLite). Remaining v1.0 work is listed at the top of
+> `DYNAMIC_GRAPH_ROADMAP.md`'s Sprint Timeline and is deferred past 0.5.0.
+
+When written, branch `feat/wire-graph-backend-to-production` (off `main` at
+`d08fb1a`) held the wiring commit (`0f8c9c1`) plus the M2 Phase 1 commit(s)
+described below, not yet pushed.
 
 The wiring commit (`0f8c9c1`) closed the headline finding from a 4-agent
 codebase audit: the `GraphBackend` abstraction (`src/axon/graph_backends/`)

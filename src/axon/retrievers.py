@@ -175,6 +175,17 @@ class BM25Retriever:
         if not save_deferred:
             self.save()
 
+    def ensure_corpus_loaded(self) -> None:
+        """Make ``self.corpus`` hold every document before it is read directly.
+
+        After a restart the corpus can still be an undecoded on-disk payload,
+        with ``self.corpus`` empty until first use. This class's own methods
+        load it on demand; code outside it that iterates ``.corpus`` (document
+        deletion, the code-symbol index) must call this first, or it sees an
+        empty corpus.
+        """
+        self._ensure_corpus_materialized()
+
     def _ensure_corpus_materialized(self) -> None:
         if self._dedup_payload is None:
             return

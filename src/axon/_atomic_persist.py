@@ -32,7 +32,7 @@ def _tmp_path(p: pathlib.Path) -> pathlib.Path:
     return p.with_name(f"{p.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
 
 
-_TMP_NAME_RE = re.compile(r"\.\d+\.[0-9a-f]{8}\.tmp$")
+_TMP_NAME_RE = re.compile(r"\.(\d+)\.[0-9a-f]{8}\.tmp$")
 
 
 def is_atomic_tmp(path: str | pathlib.Path) -> bool:
@@ -43,6 +43,37 @@ def is_atomic_tmp(path: str | pathlib.Path) -> bool:
     copies a whole directory (e.g. ``project_pack``) should skip them.
     """
     return bool(_TMP_NAME_RE.search(pathlib.Path(path).name))
+
+
+def remove_orphaned_tmps(root: str | pathlib.Path, *, min_age_s: float = 3600.0) -> int:
+    """Delete this module's temp files under *root* left by a crashed writer.
+
+    A temp is removed only when it is older than *min_age_s* AND its writer's
+    pid is not alive here. The pid check alone is not enough: the pid is only
+    meaningful on the machine that wrote the file, and a store on a synced
+    folder (OneDrive etc.) can be written from another machine at the same
+    time — its in-flight temp would look orphaned from here. A write takes
+    milliseconds, so anything an hour old is abandoned wherever it came from.
+    Returns the number of files removed.
+    """
+    import time
+
+    from axon._pid_check import pid_alive
+
+    cutoff = time.time() - min_age_s
+    removed = 0
+    for p in pathlib.Path(root).rglob("*.tmp"):
+        m = _TMP_NAME_RE.search(p.name)
+        if not m or not p.is_file():
+            continue
+        try:
+            if p.stat().st_mtime > cutoff or pid_alive(int(m.group(1))):
+                continue
+            p.unlink()
+            removed += 1
+        except OSError:
+            pass
+    return removed
 
 
 def _write_tmp_then_replace(p: pathlib.Path, payload: bytes) -> None:

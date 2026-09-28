@@ -1138,6 +1138,7 @@ Your primary goal is to help the user by answering questions based on the provid
         _api._source_hashes.pop(project_key, None)
         if project_key == "default":
             _api._source_hashes.pop("_global", None)
+        _api._save_source_hashes()
         return {"status": "success", "message": "Collection cleared"}
 
     def delete_documents(self, doc_ids: list[str]) -> dict:
@@ -1191,14 +1192,12 @@ Your primary goal is to help the user by answering questions based on the provid
                 not_found = [i for i in not_found if ns + i not in chunks]
         in_vector_store = set(chunks)
 
-        # Expand document ids to their chunks via the BM25 corpus. The corpus
-        # may still be a lazy on-disk payload; every BM25Retriever method
-        # materializes it first, so do the same before reading it directly.
+        # Expand document ids to their chunks via the BM25 corpus (loaded
+        # first: after a restart it can still be an undecoded payload).
         corpus = None
         if bm25 is not None:
-            materialize = getattr(bm25, "_ensure_corpus_materialized", None)
-            if callable(materialize):
-                materialize()
+            if callable(getattr(bm25, "ensure_corpus_loaded", None)):
+                bm25.ensure_corpus_loaded()
             corpus = getattr(bm25, "corpus", None)
         if not_found and corpus:
             keys: dict[str, str] = {}

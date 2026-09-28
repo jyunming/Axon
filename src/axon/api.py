@@ -59,9 +59,18 @@ def get_brain_optional() -> AxonBrain | None:
     return brain
 
 
-# Source-level dedup store: project → content_hash → {doc_id, last_ingested_at}
+# Source-level dedup store: project → content_hash → {doc_id, last_ingested_at}.
+# Persisted to <projects_root>/.source_hashes.json so /collection/stale and the
+# /add_text dedup survive a server restart (it used to reset on every restart,
+# which made the staleness report meaningless for a long-running server).
 
 _source_hashes: dict[str, dict[str, dict]] = {}
+
+# The file _source_hashes was loaded from. Only a process that loaded it writes
+# it back: a CLI/library AxonBrain never loads it, and must not overwrite the
+# server's copy with its own empty dict when it calls clear().
+_source_hashes_file: Path | None = None
+_source_hashes_digest: dict[str, str] = {}
 
 # Async ingest job status store (in-memory, single-worker deployments only)
 
@@ -105,6 +114,36 @@ def _evict_old_jobs() -> None:
             _jobs.pop(jid, None)
 
 
+def _load_source_hashes(projects_root: str | Path) -> None:
+    """Replace ``_source_hashes`` with the store's persisted copy (if any)."""
+    import json
+
+    global _source_hashes_file
+    path = Path(projects_root) / ".source_hashes.json"
+    _source_hashes.clear()
+    _source_hashes_digest.clear()
+    try:
+        if path.exists():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                _source_hashes.update({k: v for k, v in data.items() if isinstance(v, dict)})
+    except Exception as exc:
+        logger.warning(f"Could not load source dedup records from {path}: {exc}")
+    _source_hashes_file = path
+
+
+def _save_source_hashes() -> None:
+    """Persist ``_source_hashes``; a no-op unless this process loaded it."""
+    if _source_hashes_file is None:
+        return
+    from axon._atomic_persist import write_json_if_changed
+
+    try:
+        write_json_if_changed(_source_hashes_file, _source_hashes, _source_hashes_digest)
+    except Exception as exc:
+        logger.warning(f"Could not save source dedup records: {exc}")
+
+
 def _check_dedup(text: str, project: str = "_global") -> dict | None:
     """Check whether *text* was already ingested in *project*.
     Returns a ``{status, reason, doc_id}`` dict if the content is a duplicate.
@@ -122,13 +161,19 @@ def _check_dedup(text: str, project: str = "_global") -> dict | None:
     return None
 
 
-def _record_dedup(text: str, doc_id: str, project: str = "_global") -> None:
-    """Record the content hash after a successful ingest."""
+def _record_dedup(text: str, doc_id: str, project: str = "_global", *, save: bool = True) -> None:
+    """Record the content hash after a successful ingest.
+
+    Batch callers pass ``save=False`` per item and call
+    :func:`_save_source_hashes` once afterwards.
+    """
     content_hash = _compute_content_hash(text)
     _source_hashes.setdefault(project, {})[content_hash] = {
         "doc_id": doc_id,
         "last_ingested_at": datetime.now(timezone.utc).isoformat(),
     }
+    if save:
+        _save_source_hashes()
 
 
 def _purge_dedup(
@@ -161,6 +206,7 @@ def _purge_dedup(
                 bucket.pop(content_hash, None)
         if not bucket:
             _source_hashes.pop(target, None)
+    _save_source_hashes()
 
 
 def _get_user_dir() -> Path:
@@ -220,6 +266,7 @@ async def lifespan(app: FastAPI):
         # "store not found" failure on a fresh install.
         _auto_init_store(config)
         brain = AxonBrain(config)
+        _load_source_hashes(config.projects_root)
         logger.info("Axon initialized successfully")
         # Passive update-check, fired as a background task so a slow/
         # unreachable PyPI never delays the server accepting requests.
@@ -249,6 +296,10 @@ async def lifespan(app: FastAPI):
         logger.error(f"Failed to initialize Axon: {e}")
         raise
     yield
+    # Stop persisting once this server's store is gone (also keeps a test that
+    # ran the real lifespan from leaving later tests writing into that store).
+    global _source_hashes_file
+    _source_hashes_file = None
     try:
         from axon import server_client as _sc
 

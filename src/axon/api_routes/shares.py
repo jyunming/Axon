@@ -78,7 +78,7 @@ async def store_init(request: StoreInitRequest):
     if brain:
         brain.close()
     _api.brain = AxonBrain(config)
-    _api._source_hashes.clear()
+    _api._load_source_hashes(config.projects_root)  # the new store's own records
     _api._jobs.clear()
     result: dict = {
         "status": "ok",

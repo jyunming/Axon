@@ -6,8 +6,17 @@ from fastapi.testclient import TestClient
 
 class TestApiE2E:
     @pytest.fixture
-    def client(self, tmp_path):
+    def client(self, tmp_path, monkeypatch):
         from axon.api import app
+
+        # lifespan() loads a real config and claims the store's single-instance
+        # lock. Point it at a throwaway store: otherwise it opens the
+        # developer's real ~/.axon store, and errors whenever a real axon-api
+        # is already serving that store.
+        cfg = tmp_path / "config.yaml"
+        store = (tmp_path / "store").as_posix()
+        cfg.write_text(f"store:\n  base: {store}\n", encoding="utf-8")
+        monkeypatch.setenv("AXON_CONFIG_PATH", str(cfg))
 
         # We patch AxonBrain in the api module so when lifespan instantiates it,
         # it gets our mock.
@@ -39,7 +48,6 @@ class TestApiE2E:
         response = c.get("/")
         assert response.status_code in (200, 404)
 
-    @pytest.mark.skip(reason="brain attribute moved to api_routes submodule in Phase 5 refactor")
     def test_api_query(self, client):
         c, mock_brain = client
         # Use a mock query that will definitely trigger the mock

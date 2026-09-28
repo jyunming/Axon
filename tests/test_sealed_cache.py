@@ -90,6 +90,19 @@ class TestCacheCreate:
         finally:
             cache.wipe()
 
+    def test_skips_leftover_atomic_write_temp(self, tmp_path):
+        sealed = tmp_path / "proj"
+        dek = generate_dek()
+        _seal_project(sealed, dek, key_id="sk_a", files={"meta.json": b'{"id":"x"}'})
+        (sealed / "meta.json.999999.0a1b2c3d.tmp").write_bytes(b"{partial")
+
+        cache = SealedCache.create(sealed, dek, key_id="sk_a", cache_root=tmp_path)
+        try:
+            assert (cache.path / "meta.json").exists()
+            assert not (cache.path / "meta.json.999999.0a1b2c3d.tmp").exists()
+        finally:
+            cache.wipe()
+
     def test_round_trip_nested_dirs(self, tmp_path):
         sealed = tmp_path / "proj"
         dek = generate_dek()

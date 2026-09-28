@@ -461,7 +461,8 @@ async def add_texts(request: BatchTextIngestRequest):
         try:
             n_written = await asyncio.to_thread(brain.ingest, docs_to_ingest)
             for doc_id, text in pending_records:
-                _api._record_dedup(text, doc_id, project_key)
+                _api._record_dedup(text, doc_id, project_key, save=False)
+            _api._save_source_hashes()
             if n_written == 0:
                 # AxonBrain.ingest()'s own chunk-level dedup found every chunk
                 # in this batch already present, despite Layer B's per-item

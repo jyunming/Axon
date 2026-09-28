@@ -340,8 +340,8 @@ the default; until then both recipes coexist.
 | Grantee can query offline | Yes (with cached files) | Yes (with cached files + cached DEK) | No |
 | Revocation invalidates cached bytes | No | Yes (with `--rotate`) | Yes (immediate) |
 | Cloud provider can read bytes | Yes (plaintext on OneDrive) | No (AES-GCM ciphertext) | Yes (only owner has the data) |
-| Mmap works on grantee | Yes | No (decrypt-into-memory) | N/A (no local files) |
-| Memory cost on grantee | Mmap, low | RAM = file size | Low (HTTP responses) |
+| Mmap works on grantee | Yes | Yes (files decrypted into an ephemeral plaintext cache, §4.4/§5.1) | N/A (no local files) |
+| Memory cost on grantee | Mmap, low | Mmap, low (disk: a plaintext cache copy while mounted) | Low (HTTP responses) |
 | Cross-platform (Linux + Windows) | Yes (current) | Yes | Yes |
 | Implementation cost | (already shipped) | **3–5 weeks** | 2–3 weeks |
 | Breaking change for existing projects | n/a | Opt-in (`project seal`); plaintext keeps working | Opt-in |

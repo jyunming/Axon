@@ -93,7 +93,7 @@ how they differ from Z"). Reports or summaries requiring multiple document secti
 
 ## 6. Context Compression
 
-**Flag:** `compress: true`
+**Flag:** `rag.compress_context: true` (or `context_compression: {enabled: true}`)
 **CLI:** `axon --compress "your query"`
 **REPL:** `/rag compress`
 
@@ -121,7 +121,7 @@ before synthesis.
 surfacing the most relevant chunks. Works best with `top_k ≥ 20` to give the reranker a wide
 candidate pool.
 
-**Reranker model:** Set via `/rag rerank-model <model>` or `rerank_model` in config.
+**Reranker model:** Set via `/rag rerank-model <model>` or `rerank.model` in `config.yaml`.
 
 **Cost:** One cross-encoder forward pass per candidate chunk (CPU-bound; fast on modern hardware).
 
@@ -347,7 +347,7 @@ rag:
   hyde: true
   multi_query: true
   step_back: true
-  compress: true
+  compress_context: true
   raptor: true
   graph_rag: true
   graph_rag_mode: hybrid

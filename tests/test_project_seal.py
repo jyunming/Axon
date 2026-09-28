@@ -244,6 +244,24 @@ class TestSealAtomicity:
         assert result["orphans_removed"] == 1
         assert not orphan.exists()
 
+    def test_orphaned_atomic_write_temps_removed_before_sealing(self, kr_backend, user_dir):
+        """A crashed atomic metadata write leaves meta.json.<pid>.<hex>.tmp.
+        _should_seal() skips it, so without cleanup it would stay behind as
+        plaintext in a project that is meant to be encrypted at rest."""
+        bootstrap_store(user_dir, "test-pass-ok")
+        proj = _populate_plaintext_project(user_dir)
+        orphan = proj / "meta.json.999999.0a1b2c3d.tmp"
+        orphan.write_text('{"name": "research", "description": "secret"}', encoding="utf-8")
+        import os
+        import time
+
+        old = time.time() - 2 * 3600
+        os.utime(orphan, (old, old))
+
+        with patch("axon._pid_check.pid_alive", return_value=False):
+            project_seal("research", user_dir)
+        assert not orphan.exists()
+
     def test_partial_seal_resumes_with_persisted_seal_id(self, kr_backend, user_dir):
         """A real resume case: prior run persisted ``.security/.sealing``
         before encrypting one file then crashed. The next run reads the
