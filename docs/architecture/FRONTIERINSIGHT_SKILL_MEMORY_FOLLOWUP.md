@@ -92,7 +92,9 @@ ask, not a blocker, and FI is content to do the mapping itself in the meantime.
 The open question from the original proposal is answered. A retrieved chunk
 carries `source` (full path), `source_id` (also namespaced), `chunk`,
 `chunk_index`, `total_chunks`, `chunk_kind`, `dataset_type`, `subdoc_locator`,
-`type`, and `parent_text`. Nothing FI writes at ingest appears to be dropped.
+`type`, and `parent_text` — plus, since PR #169, `dedup_hash` (the chunk's
+dedup key, used by `delete_documents` to let deleted text be re-ingested).
+Nothing FI writes at ingest appears to be dropped.
 
 ---
 

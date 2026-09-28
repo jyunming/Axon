@@ -3,6 +3,8 @@
 ## Project Structure & Module Organization
 Core code lives in `src/axon/`. Key areas: `api_routes/` for FastAPI handlers, `graph_backends/` and `dynamic_graph/` for graph retrieval, `code_graph.py` and `code_retrieval.py` for code-aware RAG, and `repl.py` / `cli.py` / `mcp_server.py` for user-facing entry points. Tests live in `tests/`; VS Code extension end-to-end coverage is under `tests/e2e/`. The bundled extension is in `integrations/vscode-axon/`. Top-level docs are in `docs/`.
 
+Before adding new functionality, check `docs/CAPABILITIES.md` — a curated catalog of the reusable functions/classes already built per subsystem, kept specifically so new work extends or builds on existing capabilities instead of duplicating them. `CLAUDE.md` is the fuller repo-conventions reference this file summarizes.
+
 ## Build, Test, and Development Commands
 - `pip install -e ".[dev]"`: install Axon with local dev tools.
 - `make format`: run `black` and `ruff --fix` on `src/` and `tests/`.

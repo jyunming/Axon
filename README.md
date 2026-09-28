@@ -69,6 +69,7 @@ Most RAG tools make you choose between **cloud power** and **data privacy**. Axo
 - **54 file formats** — PDF, DOCX, XLSX, PPTX, Jupyter, images, 24 code formats
 - URL ingestion — any public web page
 - SHA-256 dedup skips unchanged files
+- Delete by document or chunk ID — deleted text can be re-ingested cleanly
 - Stale detection for modified sources
 - 4 content-aware chunking strategies
 
