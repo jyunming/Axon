@@ -1070,7 +1070,7 @@ Copilot will call `list_knowledge` or `list_projects` automatically. You can als
 | `delete_project` | Delete a project and all its data |
 | `pack_project` | Zip a project's entire on-disk footprint for backup, restore, or relocation |
 | `unpack_project` | Restore a project from a packed zip into AxonStore |
-| `delete_documents` | Remove specific documents by ID |
+| `delete_documents` | Remove documents or chunks by ID |
 | `list_knowledge` | List all ingested files with chunk counts |
 | `clear_knowledge` | Wipe all data from the current project |
 | `update_settings` | Adjust RAG settings (top_k, rerank, hyde, etc.) |

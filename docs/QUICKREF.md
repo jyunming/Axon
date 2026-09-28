@@ -540,6 +540,15 @@ brain.ingest([
 ])
 ```
 
+### Delete Documents
+```python
+# Pass the id you ingested with (deletes all its chunks) or individual chunk ids.
+result = brain.delete_documents(["doc1"])
+# {"status": "success", "deleted": <n>, "doc_ids": [<chunk ids deleted>], "not_found": []}
+# The deleted text's dedup records are cleared, so ingesting it again works.
+```
+Same behaviour as `POST /delete`; raises `PermissionError` on a read-only scope or mounted share.
+
 ### Direct API Usage
 ```python
 import httpx

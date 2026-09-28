@@ -403,6 +403,27 @@ schema. This prevents excessively long strings from being passed through the pip
 
 ---
 
+## Re-ingesting deleted text does nothing
+
+**Symptom:** You deleted a document, then ingested the same text again (under the same or a
+different id). The ingest call succeeds, but the text never shows up in search results. The log
+shows `Dedup: skipped N already-seen chunk(s)`.
+
+**Cause:** Ingest skips any chunk whose text hash it has already seen. In Axon 0.4.6 and earlier, deleting a
+document through `POST /delete` (and so the MCP / VS Code `delete_documents` tools) removed its
+chunks but not their hashes, so the same text stayed marked "already seen" forever.
+
+**Fix:** Upgrade to a release after 0.4.6 (PR #169). Deleting now clears the chunks' dedup hashes, so the text can be ingested again.
+For text deleted *before* upgrading, the stale hashes are still there. Either:
+- delete it again after upgrading (if any of its chunks still exist), or
+- re-ingest once with dedup off (`rag.dedup_on_ingest: false` in `config.yaml`), then turn it back on, or
+- `POST /clear` the project and re-ingest everything (clears all hashes).
+
+Chunks ingested with `contextual_retrieval: true` on 0.4.6 or earlier need the dedup-off route even when
+deleted after upgrading: their stored text was rewritten, so the original hash can't be recovered.
+
+---
+
 ## `pip install axon[graphrag]` fails with `gensim` build error
 
 **Error:**
