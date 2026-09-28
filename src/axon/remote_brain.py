@@ -349,6 +349,35 @@ class RemoteBrain:
         """
         return self._request("POST", "/delete", {"doc_ids": list(doc_ids)}) or {}
 
+    def update_fact(
+        self,
+        subject: str,
+        relation: str,
+        object: str,
+        *,
+        description: str = "",
+        confidence: float = 1.0,
+        replace: bool | None = None,
+        provenance: str = "api",
+    ) -> dict:
+        """Assert or correct a graph fact via the server's ``POST /graph/facts``.
+
+        Same return shape as ``AxonBrain.update_fact()``; write access and
+        input validation are enforced server-side. ``provenance`` is not
+        sent — the server records the calling surface (``X-Axon-Surface``).
+        """
+        body: dict[str, Any] = {
+            "subject": subject,
+            "relation": relation,
+            "object": object,
+            "description": description,
+            "confidence": confidence,
+            "replace": replace,
+            "project": self._active_project,
+        }
+        result: dict = self._request("POST", "/graph/facts", body) or {}
+        return result
+
     # ------------------------------------------------------------------ #
     # Read-only introspection
     # ------------------------------------------------------------------ #

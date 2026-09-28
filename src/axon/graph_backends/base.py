@@ -70,6 +70,31 @@ class FinalizationResult:
 
 
 @dataclass
+class FactUpdateResult:
+    """Outcome of GraphBackend.upsert_fact() — an explicit (agent/user) fact write.
+
+    ``status`` is one of:
+
+    * ``"created"`` — a new active fact was written and nothing was superseded.
+    * ``"superseded"`` — the asserted fact is now the single active fact for
+      its (subject, relation) and at least one older fact was superseded
+      (ids in ``superseded_ids``).
+    * ``"unchanged"`` — the identical fact was already active; nothing written.
+    * ``"conflicted"`` — reserved for backends that record same-time
+      contradictions; explicit writes on ``dynamic_graph`` never produce it.
+    * ``"not_applicable"`` — this backend does not store editable facts
+      (``graphrag``, ``none``); ``detail`` explains why.
+    """
+
+    status: str
+    backend_id: str = ""
+    fact_id: str = ""
+    superseded_ids: list[str] = field(default_factory=list)
+    conflicted_ids: list[str] = field(default_factory=list)
+    detail: str = ""
+
+
+@dataclass
 class GraphDataFilters:
     """Optional filters accepted by GraphBackend.graph_data()."""
 
@@ -124,6 +149,7 @@ _REQUIRED_METHODS = frozenset(
         "graph_data",
         "has_entities",
         "has_community_summaries",
+        "upsert_fact",
     }
 )
 
@@ -136,7 +162,7 @@ _OPTIONAL_CAPABILITIES = frozenset({"list_conflicts"})
 @runtime_checkable
 class GraphBackend(Protocol):
     """Pluggable graph strategy interface.
-    All seven methods are required.  Implementations must NOT raise
+    Every method below is required (see ``_REQUIRED_METHODS``).  Implementations must NOT raise
     ``NotImplementedError`` for ``status()`` — callers use it to probe
     readiness without triggering side effects.
     """
@@ -208,5 +234,29 @@ class GraphBackend(Protocol):
         summaries to drive global-search map-reduce? Used by query_router.py
         as a truthy guard in place of reaching into brain-owned attributes
         directly.
+        """
+        ...
+
+    def upsert_fact(
+        self,
+        subject: str,
+        relation: str,
+        obj: str,
+        *,
+        description: str = "",
+        confidence: float = 1.0,
+        replace: bool | None = None,
+        provenance: str = "agent",
+    ) -> FactUpdateResult:
+        """Assert a fact explicitly (not extracted from ingested text).
+
+        ``replace=True`` makes the new fact the only current fact for
+        (subject, relation), superseding the others; ``replace=False`` appends
+        it; ``None`` lets the backend decide (``dynamic_graph``: replace for
+        exclusive relations such as ``IS_CEO_OF``, append otherwise).
+        Backends that derive their graph purely from ingested text return
+        ``FactUpdateResult(status="not_applicable")`` instead of raising.
+        Implementations raise ``PermissionError`` when the graph is read-only
+        (e.g. a mounted share) and ``ValueError`` for invalid input.
         """
         ...

@@ -2692,7 +2692,13 @@ def _interactive_repl(
                         "    /graph finalize                trigger community detection rebuild\n"
                         "    /graph conflicts               list conflicted facts (dynamic_graph backend)\n"
                         "    /graph retrieve <q> [--at TS]  run backend.retrieve directly (point-in-time)\n"
+                        "    /graph fact <s> | <REL> | <o> [| desc] [--add|--replace]\n"
+                        "                                   assert/correct a fact (dynamic_graph, federated)\n"
                         "    /graph viz [path]              export graph as HTML (opens in browser)\n"
+                        "\n"
+                        "    /graph fact: --replace supersedes the other current facts for (subject,\n"
+                        "    relation); --add appends. Default: replace for exclusive relations\n"
+                        "    (IS_CEO_OF, MARRIED_TO, ...), add otherwise.\n"
                         "\n"
                         "    GraphRAG must be enabled: /rag graph-rag\n"
                         "    Finalize is useful after batch ingest with community summarisation deferred.",
@@ -2739,7 +2745,7 @@ def _interactive_repl(
                         "    /context        show current conversation context size\n"
                         "    /discuss        toggle discussion fallback (general knowledge)\n"
                         "    /embed [model]  show or switch embedding model\n"
-                        "    /graph [sub]    GraphRAG status, finalize communities, or viz export\n"
+                        "    /graph [sub]    graph status, finalize, retrieve, fact updates, viz export\n"
                         "    /help [cmd]     show this help or details for a command\n"
                         "    /ingest <path>  ingest a file, directory, or glob\n"
                         "    /keys           show/set API keys (gemini, openai, brave, ollama_cloud)\n"
@@ -4456,6 +4462,45 @@ def _interactive_repl(
                                     _txt = (_c.text or "")[:120].replace("\n", " ")
                                     print(f"      [{_c.score:.3f} {_c.context_type}] {_txt}")
                                 print()
+                elif sub == "fact":
+                    import re as _re_f
+
+                    _usage_f = (
+                        "    Usage: /graph fact <subject> | <RELATION> | <object> "
+                        "[| description] [--add|--replace]"
+                    )
+                    _rest = sub_parts[1] if len(sub_parts) > 1 else ""
+                    _flag_re = _re_f.compile(r"(?:^|\s)--(add|replace)(?=\s|$)")
+                    _flags = set(_flag_re.findall(_rest))
+                    _rest = _flag_re.sub(" ", _rest)
+                    _fparts = [p.strip() for p in _rest.split("|")]
+                    if len(_flags) > 1:
+                        print("    Use either --add or --replace, not both.")
+                    elif len(_fparts) not in (3, 4) or not all(_fparts[:3]):
+                        print(_usage_f)
+                    else:
+                        _replace_f = None if not _flags else ("replace" in _flags)
+                        try:
+                            _res_f = brain.update_fact(
+                                _fparts[0],
+                                _fparts[1],
+                                _fparts[2],
+                                description=_fparts[3] if len(_fparts) == 4 else "",
+                                replace=_replace_f,
+                                provenance="repl",
+                            )
+                        except Exception as e:
+                            print(f"    Fact update failed: {e}")
+                        else:
+                            _st_f = _res_f.get("status", "?")
+                            _msg_f = f"    {_st_f}"
+                            if _res_f.get("fact_id"):
+                                _msg_f += f"  fact_id={_res_f['fact_id']}"
+                            if _res_f.get("superseded_ids"):
+                                _msg_f += f"  superseded={len(_res_f['superseded_ids'])}"
+                            if _res_f.get("detail"):
+                                _msg_f += f"  — {_res_f['detail']}"
+                            print(_msg_f)
                 elif sub == "viz":
                     import hashlib as _hashlib_g
                     import time as _time_g
@@ -4504,7 +4549,8 @@ def _interactive_repl(
                     print(f"    Unknown sub-command '{sub}'.")
                     print(
                         "    Usage: /graph status | /graph finalize | /graph conflicts | "
-                        "/graph retrieve <query> [--at TS] [--top-k N] | /graph viz [path]"
+                        "/graph retrieve <query> [--at TS] [--top-k N] | "
+                        "/graph fact <s> | <REL> | <o> [| desc] [--add|--replace] | /graph viz [path]"
                     )
             elif cmd == "/theme":
                 global _MD_CODE_THEME

@@ -261,6 +261,7 @@ class TestCliSurfaceContract:
         cli_src = _cli_source()
         _TIER2_CLI_FLAGS = {
             "session_list": "--session-list",
+            "graph_fact_update": "--graph-fact",
         }
         for cap in REGISTRY:
             if cap.tier != Tier.TWO or Surface.CLI not in cap.supported_surfaces:
@@ -432,3 +433,44 @@ class TestB1ParitySweep:
         assert (
             '"extend"' in repl_src or "'extend'" in repl_src
         ), "Missing /share extend handler in repl.py"
+
+
+# ---------------------------------------------------------------------------
+# PR5b: agent-writable fact update (graph_fact_update)
+# ---------------------------------------------------------------------------
+class TestGraphFactUpdateContract:
+    """graph_fact_update is registered and actually wired on every surface it
+    claims (API route, CLI flag, REPL sub-command); VS Code/MCP arrive with the
+    agent-surface consolidation and must carry a documented exception."""
+
+    def _cap(self):
+        from axon.surface_contract import REGISTRY
+
+        (cap,) = (c for c in REGISTRY if c.id == "graph_fact_update")
+        return cap
+
+    def test_registered_as_tier2_graph_capability(self):
+        from axon.surface_contract import Surface, Tier
+
+        cap = self._cap()
+        assert cap.tier == Tier.TWO
+        assert cap.category == "graph"
+        assert cap.api_route == "/graph/facts"
+        assert cap.supported_surfaces == frozenset({Surface.API, Surface.REPL, Surface.CLI})
+        assert cap.intentional_exceptions.get(Surface.VSCODE)
+
+    def test_api_route_exists(self):
+        from axon.api_routes import graph
+
+        routes = {(r.path, m) for r in graph.router.routes for m in getattr(r, "methods", ())}
+        assert ("/graph/facts", "POST") in routes
+
+    def test_cli_flags_exist(self):
+        cli_src = _cli_source()
+        for flag in ("--graph-fact", "--graph-fact-mode", "--graph-fact-desc"):
+            assert flag in cli_src, f"Missing CLI flag: {flag}"
+
+    def test_repl_subcommand_exists(self):
+        repl_src = _repl_source()
+        assert 'sub == "fact"' in repl_src
+        assert "brain.update_fact(" in repl_src

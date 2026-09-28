@@ -11,6 +11,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from axon.graph_backends.base import (
+    FactUpdateResult,
     FinalizationResult,
     GraphContext,
     GraphDataFilters,
@@ -291,3 +292,21 @@ class GraphRagBackend:
 
     def has_community_summaries(self) -> bool:
         return bool(self._engine._community_summaries)
+
+    def upsert_fact(
+        self,
+        subject: str,
+        relation: str,
+        obj: str,
+        *,
+        description: str = "",
+        confidence: float = 1.0,
+        replace: bool | None = None,
+        provenance: str = "agent",
+    ) -> FactUpdateResult:
+        """Explicit fact writes are not supported on this backend."""
+        return FactUpdateResult(
+            status="not_applicable",
+            backend_id=BACKEND_ID,
+            detail="graphrag derives its graph from ingested text; use a dynamic_graph or federated project to record facts.",
+        )

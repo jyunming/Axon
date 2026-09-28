@@ -129,7 +129,56 @@ never reaches. Nothing a default install can do was removed.
   `docs/TROUBLESHOOTING.md` names when something goes wrong. A config that
   still sets a removed key keeps loading and says so.
 
+### ✨ Added
+
+- **Agents can update facts.** A new `POST /graph/facts` records one
+  `(subject, relation, object)` fact directly in a project's knowledge graph,
+  so an agent that learns "Alice is now CEO of Globex" can correct the graph
+  instead of waiting for a document that says so. It is also on the CLI
+  (`axon --graph-fact SUBJECT RELATION OBJECT [--graph-fact-mode replace|add]
+  [--graph-fact-desc TEXT]`) and the REPL
+  (`/graph fact Alice | IS_CEO_OF | Globex [| description] [--add|--replace]`);
+  the MCP and VS Code agent tools arrive with the upcoming agent-surface
+  consolidation.
+  - Replace mode supersedes every other current fact for that subject and
+    relation — including ones extracted from ingested text — and keeps them as
+    history: `/graph/retrieve` with a `point_in_time` before the change still
+    returns the old value. Add mode appends. By default, exclusive relations
+    (`IS_CEO_OF`, `MARRIED_TO`, `HEADQUARTERS_IN`, …) replace and everything
+    else adds.
+  - Repeating an identical fact is a no-op (`status: "unchanged"`). Two quick
+    corrections supersede cleanly instead of tripping the ±1 s "same-time
+    contradiction" rule extraction uses. A fact written or confirmed this way
+    (including confirming one extracted from a document) survives deleting
+    that document; deleting the chunk id `agent:<fact_id>` retracts it.
+  - Works on `dynamic_graph` and `federated` projects. `graphrag` and `none`
+    projects derive their graph from ingested text only and answer
+    `status: "not_applicable"` (HTTP 200). Mounted shares are read-only (403).
+  - Backend authors: `upsert_fact()` is now a required `GraphBackend` Protocol
+    method returning a `FactUpdateResult`.
+
 ### 🐛 Fixes
+
+- **`axon --graph-status`, `--graph-conflicts` and `--graph-retrieve` work
+  again.** They never loaded the brain, so status always reported 0 entities
+  and "not ready", and conflicts/retrieve always said no graph backend was
+  active.
+- **Point-in-time graph retrieval now returns facts that were later
+  superseded.** `dynamic_graph`'s `point_in_time` query excluded every
+  `superseded` fact outright, so asking "what was true in March?" never
+  returned a value that had since been replaced — only facts that were still
+  current. It now uses each fact's validity window. The multi-hop expansion
+  applies the same time filter, so a later fact can no longer leak into a
+  historical answer through a shared entity.
+- **Deleting documents now retracts facts explicitly.** When a current fact
+  loses its last source document, `dynamic_graph` marks it `retracted` (new
+  status, counted as `retracted_facts` in the backend status) instead of
+  `superseded`, and point-in-time queries exclude it. A fact that was already
+  superseded keeps its history even when its stale source is deleted later.
+  Existing graph databases are migrated once on open: superseded facts with no
+  remaining evidence — the ones earlier deletes produced — become `retracted`,
+  so they stay hidden as before. A retracted fact is never re-activated;
+  asserting the same fact again records a new one.
 
 - **`tqdb` now requires `>=0.9.1,<1.0.0`, up from an unbounded `>=0.7.0`.**
   Two separate problems, one pin.

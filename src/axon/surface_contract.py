@@ -391,6 +391,26 @@ REGISTRY: list[Capability] = [
         intentional_exceptions={},
         api_route="/graph/retrieve",
     ),
+    Capability(
+        id="graph_fact_update",
+        name="Graph fact update (agent-writable)",
+        category="graph",
+        tier=Tier.TWO,
+        description=(
+            "Assert or correct one fact (subject, relation, object) in the active "
+            "project's graph with bi-temporal supersession — replace or add mode. "
+            "dynamic_graph and federated projects store it; graphrag and none "
+            "answer status='not_applicable'."
+        ),
+        supported_surfaces=frozenset({Surface.API, Surface.REPL, Surface.CLI}),
+        intentional_exceptions={
+            Surface.VSCODE: (
+                "Added to the agent surfaces (MCP + VS Code LM tools) with the "
+                "MCP/VS Code tool consolidation (PR5c)"
+            ),
+        },
+        api_route="/graph/facts",
+    ),
     # ── Session ──────────────────────────────────────────────────────────────
     Capability(
         id="session_list",

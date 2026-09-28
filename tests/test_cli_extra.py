@@ -781,6 +781,103 @@ class TestCliDeleteDoc:
         assert "Deleted: 1  Not found: 1" in capsys.readouterr().out
 
 
+class TestCliGraphReadCommandsLoadTheBrain:
+    """--graph-status / --graph-conflicts / --graph-retrieve were missing from
+    need_brain, so they ran with brain=None: status always printed 0 entities,
+    conflicts and retrieve always reported no graph backend."""
+
+    def test_graph_status_reads_the_real_backend(self, brain, capsys):
+        brain._graph_backend.status.return_value = {"entities": 7}
+        brain._code_graph = {"nodes": {}}
+        run_cli("--graph-status")
+        assert "Entities           : 7" in capsys.readouterr().out
+
+    def test_graph_conflicts_uses_the_backend(self, brain):
+        brain._graph_backend.list_conflicts.return_value = []
+        run_cli("--graph-conflicts")
+        brain._graph_backend.list_conflicts.assert_called()
+
+    def test_graph_retrieve_uses_the_backend(self, brain):
+        brain._graph_backend.retrieve.return_value = []
+        run_cli("--graph-retrieve", "who works where")
+        brain._graph_backend.retrieve.assert_called()
+
+
+class TestCliGraphFact:
+    """--graph-fact SUBJECT RELATION OBJECT [--graph-fact-mode] [--graph-fact-desc]
+    delegates to AxonBrain.update_fact (backend behaviour is tested in
+    tests/test_dynamic_graph_backend.py::TestUpsertFact)."""
+
+    _CREATED = {
+        "status": "created",
+        "backend_id": "dynamic_graph",
+        "fact_id": "abc123",
+        "superseded_ids": [],
+        "conflicted_ids": [],
+        "detail": "",
+    }
+
+    def test_builds_a_local_brain_and_calls_update_fact(self, brain, capsys):
+        brain.update_fact.return_value = self._CREATED
+        with patch("axon.main.AxonBrain", return_value=brain) as ctor:
+            code = run_cli("--graph-fact", "Alice", "WORKS_FOR", "Acme Corp")
+        assert code == 0
+        ctor.assert_called_once()  # need_brain includes --graph-fact
+        brain.update_fact.assert_called_once_with(
+            "Alice", "WORKS_FOR", "Acme Corp", description="", replace=None, provenance="cli"
+        )
+        out = capsys.readouterr().out
+        assert "created" in out and "fact_id=abc123" in out
+
+    @pytest.mark.parametrize("mode,expected", [("replace", True), ("add", False)])
+    def test_mode_and_description(self, brain, capsys, mode, expected):
+        brain.update_fact.return_value = {
+            **self._CREATED,
+            "status": "superseded",
+            "superseded_ids": ["old"],
+            "detail": "replaced 1 earlier fact(s)",
+        }
+        run_cli(
+            "--graph-fact",
+            "Alice",
+            "IS_CEO_OF",
+            "Globex",
+            "--graph-fact-mode",
+            mode,
+            "--graph-fact-desc",
+            "promoted",
+        )
+        kwargs = brain.update_fact.call_args.kwargs
+        assert kwargs["replace"] is expected
+        assert kwargs["description"] == "promoted"
+        out = capsys.readouterr().out
+        assert "superseded=1" in out and "replaced 1 earlier fact(s)" in out
+
+    def test_invalid_mode_is_rejected_by_argparse(self, brain):
+        code = run_cli("--graph-fact", "A", "KNOWS", "B", "--graph-fact-mode", "merge")
+        assert code == 2
+        brain.update_fact.assert_not_called()
+
+    def test_not_applicable_exits_nonzero(self, brain, capsys):
+        brain.update_fact.return_value = {
+            **self._CREATED,
+            "status": "not_applicable",
+            "backend_id": "graphrag",
+            "fact_id": "",
+            "detail": "graphrag derives its graph from ingested text",
+        }
+        code = run_cli("--graph-fact", "A", "KNOWS", "B")
+        assert code == 1
+        assert "not_applicable" in capsys.readouterr().out
+
+    @pytest.mark.parametrize("exc", [PermissionError("mounted share"), ValueError("bad relation")])
+    def test_errors_exit_nonzero(self, brain, capsys, exc):
+        brain.update_fact.side_effect = exc
+        code = run_cli("--graph-fact", "A", "KNOWS", "B")
+        assert code == 1
+        assert str(exc) in capsys.readouterr().out
+
+
 # ---------------------------------------------------------------------------
 # 8.  main() --ingest + --project-new
 # ---------------------------------------------------------------------------

@@ -218,6 +218,41 @@ def test_finalize_graph_routes():
     assert record[0][:2] == ("POST", "/graph/finalize")
 
 
+def test_update_fact_routes_to_graph_facts():
+    record = []
+    brain = _make_brain(record)
+    brain._request = lambda method, path, body=None, timeout=None: (
+        record.append((method, path, body))
+        or {"status": "created", "fact_id": "f1", "superseded_ids": []}
+    )
+    result = brain.update_fact(
+        "Alice", "WORKS_FOR", "Acme", description="d", confidence=0.5, replace=False
+    )
+    method, path, body = record[0]
+    assert (method, path) == ("POST", "/graph/facts")
+    assert body == {
+        "subject": "Alice",
+        "relation": "WORKS_FOR",
+        "object": "Acme",
+        "description": "d",
+        "confidence": 0.5,
+        "replace": False,
+        "project": "physics_kg",
+    }
+    assert result == {"status": "created", "fact_id": "f1", "superseded_ids": []}
+
+
+def test_update_fact_body_matches_graph_fact_request_schema():
+    """The proxy body must validate against the server's extra='forbid' model."""
+    from axon.api_schemas import GraphFactRequest
+
+    record = []
+    brain = _make_brain(record)
+    brain._request = lambda method, path, body=None, timeout=None: record.append(body) or {}
+    assert brain.update_fact("Alice", "KNOWS", "Bob") == {}
+    GraphFactRequest(**record[0])  # raises on unknown keys / bad values
+
+
 def test_clear_routes_to_clear_endpoint():
     record = []
     brain = _make_brain(record)

@@ -174,6 +174,7 @@ Role: The central orchestrator. Defines `AxonBrain`, which wires together embedd
 - `AxonBrain._assert_write_allowed(operation="write")` — raises `PermissionError` if current project is read-only (scope/mounted/draining) — `main.py:1113`
 - `AxonBrain.clear()` — public API: clears the active project's vector store, BM25 index, hash store and entity graph. Enforces write access itself (`_assert_write_allowed`), then delegates to `collection_ops.clear_active_project()`; also purges the API layer's `_source_hashes` dedup cache for the project. Mirrors `RemoteBrain.clear()` — same verb, same return shape, so callers don't need an `isinstance` branch — `main.py:1124`
 - `AxonBrain.delete_documents(doc_ids)` — the single delete implementation behind `POST /delete`, the CLI and the agent tool. Each id may be a chunk id or a whole-document id; a non-chunk id is expanded to every chunk whose `metadata.source`/`metadata.source_id` matches it, including `<id>_p<n>` parent-doc-split children. Beyond removing from the vector store/BM25/graph, it forgets each deleted chunk's dedup hash (via `metadata["dedup_hash"]`, stamped by `ingest()` — see below), the source-level dedup records in `axon.api._source_hashes`, and any `_doc_versions` entry left with no chunks — so the same text can be re-ingested afterwards. Only the active project's own stores are touched; on a parent project, chunks living in a descendant come back in `not_found`. Returns `{"status", "deleted", "doc_ids", "not_found"}` — `main.py:1143`
+- `AxonBrain.update_fact(subject, relation, object, *, description="", confidence=1.0, replace=None, provenance="api") -> dict` — the single explicit fact-write implementation behind `POST /graph/facts`, `axon --graph-fact` and the REPL's `/graph fact`. `_assert_write_allowed("update_fact")` first, then the active graph backend's `upsert_fact()`; returns `dataclasses.asdict(FactUpdateResult)`. Raises `PermissionError` (read-only / mounted) and `ValueError` (bad input) — `main.py:1288`
 - `AxonBrain._project_is_sealed(project_root)` — cheap probe for the `.security/.sealed` marker — `main.py:1292`
 - `AxonBrain._auto_destroy_expired_share(mount_name, share_key_id, cause)` — on `ShareExpiredError`, wipes the grantee's cached DEK, plaintext cache, and mount descriptor (never touches owner's encrypted source files) — `main.py:1309`
 - `AxonBrain._mount_sealed_project(name, project_root, share_key_id=None)` — decrypts a sealed project into an ephemeral plaintext cache (owner path via master-unwrapped DEK, grantee path via keyring DEK); stashes `_sealed_cache`/`_sealed_remount_args` — `main.py:1384`
@@ -225,6 +226,7 @@ Role: HTTP-backed `RemoteBrain` proxy implementing the subset of `AxonBrain`'s i
 - `RemoteBrain.load_directory(directory)` — async wrapper around `server_client.remote_ingest` for path-based ingest — `remote_brain.py:310`
 - `RemoteBrain.clear()` — POSTs `/clear`. Same return shape as `AxonBrain.clear()`; write access is enforced server-side (there is no local vector_store/bm25/graph state in this process to check) — `remote_brain.py:319`
 - `RemoteBrain.delete_documents(doc_ids)` — POSTs `/delete`. Same return shape as `AxonBrain.delete_documents()`, write access enforced server-side — `remote_brain.py:330`
+- `RemoteBrain.update_fact(subject, relation, object, ...)` — POSTs `/graph/facts` (with `project` as an assertion). Same return shape as `AxonBrain.update_fact()`; write access and validation enforced server-side — `remote_brain.py:352`
 - `RemoteBrain.list_documents()` / `get_doc_versions()` — GET `/collection` / `/tracked-docs` — `remote_brain.py:341` / `346`
 - `RemoteBrain.finalize_graph(force=False)` / `refresh_mount()` — POST `/graph/finalize` / `/mount/refresh` — `remote_brain.py:354` / `357`
 - `RemoteBrain._build_query_body(query, filters, overrides)` — maps local `AxonConfig` RAG toggles to `QueryRequest` override field names (`_OVERRIDE_TO_QUERYREQ` table) — `remote_brain.py:191`
@@ -630,10 +632,11 @@ Kept as real `AxonConfig` fields (deliberately not moved here): the on/off switc
 - `GraphContext` (dataclass) — one retrieved context item: `context_id`, `context_type` ("entity"/"relation"/"community"/"fact"), `text`, `score`, `rank`, `backend_id`, temporal `valid_at`/`invalid_at`, `evidence_ids`, `matched_entity_names`, multi-hop `hop_count`/`path` — `base.py:20`
 - `IngestResult` (dataclass) — `entities_added`, `relations_added`, `chunks_processed`, `backend_id` — `base.py:45`
 - `FinalizationResult` (dataclass) — `communities_built`, `time_elapsed`, `status` ("ok"/"error"/"not_applicable"), `detail` — `base.py:55`
-- `GraphDataFilters` (dataclass) — `entity_types`, `min_degree`, `limit` filters for `graph_data()` — `base.py:73`
+- `FactUpdateResult` (dataclass) — outcome of `upsert_fact()`: `status` ("created"/"superseded"/"unchanged"/"conflicted"/"not_applicable"), `backend_id`, `fact_id`, `superseded_ids`, `conflicted_ids`, `detail` — `base.py:73`
+- `GraphDataFilters` (dataclass) — `entity_types`, `min_degree`, `limit` filters for `graph_data()` — `base.py:98`
 - `RetrievalConfig` (dataclass) — `top_k`, `point_in_time`, `federation_weights` (consumed only by `FederatedGraphBackend`) — `base.py:82`
 - `GraphPayload` (dataclass + `to_dict()`) — renderer-neutral `{nodes, links}` container — `base.py:95`
-- `GraphBackend` (runtime-checkable `Protocol`) — the pluggable graph-strategy interface: `ingest(chunks)`, `retrieve(query, cfg, existing_results)`, `finalize(force)`, `clear(persist=False)`, `delete_documents(chunk_ids)`, `status()`, `graph_data(filters)`, `has_entities()`, `has_community_summaries()`; optional capability `list_conflicts` (hasattr-guarded) — `base.py:137`
+- `GraphBackend` (runtime-checkable `Protocol`) — the pluggable graph-strategy interface: `ingest(chunks)`, `retrieve(query, cfg, existing_results)`, `finalize(force)`, `clear(persist=False)`, `delete_documents(chunk_ids)`, `status()`, `graph_data(filters)`, `has_entities()`, `has_community_summaries()`, `upsert_fact(subject, relation, obj, *, description, confidence, replace, provenance)` (explicit fact write — backends without editable facts return `status="not_applicable"` rather than raising); optional capability `list_conflicts` (hasattr-guarded) — `base.py:160`
 
 ### `src/axon/graph_backends/factory.py`
 
@@ -646,7 +649,7 @@ Kept as real `AxonConfig` fields (deliberately not moved here): the on/off switc
 
 **Role:** Explicit no-op `GraphBackend` for projects with `graph_backend: "none"` — every method returns an empty/inert result, nothing persisted.
 
-- `NoneGraphBackend` — full `GraphBackend` Protocol implementation, all no-ops — `none_backend.py:24`
+- `NoneGraphBackend` — full `GraphBackend` Protocol implementation, all no-ops (`upsert_fact` → `not_applicable`) — `none_backend.py:24`
 
 ### `src/axon/graph_backends/graphrag_backend.py`
 
@@ -663,7 +666,7 @@ Kept as real `AxonConfig` fields (deliberately not moved here): the on/off switc
   - `flush_ingest_saves()` — persist entity/relation/claims graphs + extraction cache after a batch-mode ingest — `graphrag_backend.py:100`
   - `flush()` — flush dirty cache + pending background persists without shutting down — `graphrag_backend.py:125`
   - `close()` — flush then shut down the engine's persist executor — `graphrag_backend.py:138`
-  - `ingest(chunks)` / `retrieve(query, cfg, existing_results)` / `finalize(force)` / `clear(persist)` / `delete_documents(chunk_ids)` / `status()` / `graph_data(filters)` / `has_entities()` / `has_community_summaries()` — full `GraphBackend` Protocol implementation — `graphrag_backend.py:152-292`
+  - `ingest(chunks)` / `retrieve(query, cfg, existing_results)` / `finalize(force)` / `clear(persist)` / `delete_documents(chunk_ids)` / `status()` / `graph_data(filters)` / `has_entities()` / `has_community_summaries()` / `upsert_fact()` — full `GraphBackend` Protocol implementation (`upsert_fact` → `not_applicable`: the graph is derived from ingested text) — `graphrag_backend.py:153-311`
 
 ### `src/axon/graph_backends/graphrag_engine.py`
 
@@ -687,13 +690,16 @@ Kept as real `AxonConfig` fields (deliberately not moved here): the on/off switc
   - `_export_snapshot()` / `_load_snapshot()` — owner writes a compact JSON snapshot after ingest; grantees load it into an in-memory SQLite instead of touching the owner's DB file — `dynamic_graph_backend.py:435,495`
   - `_extract_entities(text)` / `_extract_facts(text)` — LLM pipe-delimited extraction (own prompt copy, same wire format as `GraphRagMixin`) — `dynamic_graph_backend.py:616,638`
   - `_upsert_entity(name, entity_type, description, now)` — `dynamic_graph_backend.py:671`
-  - `_upsert_fact(subject, relation, obj, description, confidence, chunk_id, episode_id, now)` — bi-temporal insert with exclusive-relation (`_EXCLUSIVE_RELATIONS`) supersession/conflict detection (same-timestamp contradictions marked `conflicted`) — `dynamic_graph_backend.py:692`
+  - `_upsert_fact(subject, relation, obj, description, confidence, chunk_id, episode_id, now, *, explicit=False, metadata=None)` — bi-temporal insert with exclusive-relation (`_EXCLUSIVE_RELATIONS`) supersession/conflict detection (same-timestamp contradictions marked `conflicted`); `explicit=True` skips that rule (the caller decided supersession) — `dynamic_graph_backend.py:711`
+  - `upsert_fact(subject, relation, obj, *, description, confidence, replace, provenance)` — explicit (agent/user) fact write: relation normalised + validated (`_normalize_relation`, `_RELATION_RE`), replace mode supersedes by (subject, relation) not `scope_key` (`replace=None` → replace only for exclusive relations), idempotent (`unchanged`), never `conflicted`, sentinel `fact_evidence` chunk id `agent:<fact_id>` + provenance episode on every fact it settles on — new, kept, or confirmed-unchanged (`_ensure_agent_evidence`, no duplicates on repeat) — so `delete_documents()` of other chunks cannot retract it; retracted facts are never re-activated (a repeat creates a new fact); then snapshot export + nx-cache invalidation. `PermissionError` on a mounted share — `dynamic_graph_backend.py:920`
   - `ingest(chunks)` — extract entities/facts per chunk, store as episodes — `dynamic_graph_backend.py:780`
-  - `retrieve(query, cfg, existing_results)` — query-term matching against facts, optional point-in-time filtering, multi-hop BFS traversal with SQLite `IN`-clause chunking, returns ranked `GraphContext` list — `dynamic_graph_backend.py:846`
+  - `retrieve(query, cfg, existing_results)` — query-term matching against facts, optional point-in-time filtering (superseded/conflicted facts stay visible inside their validity window; `retracted` ones are excluded; the multi-hop BFS applies the same time filter), multi-hop BFS traversal with SQLite `IN`-clause chunking, returns ranked `GraphContext` list — `dynamic_graph_backend.py:1010`
   - `_build_nx_graph_from_db()` — build a cached (TTL) `nx.Graph` from all active facts (used in tests) — `dynamic_graph_backend.py:1004`
   - `finalize(force)` — no-op (`status="not_applicable"`); dynamic graph has no community-detection step — `dynamic_graph_backend.py:1035`
   - `list_conflicts(limit=100)` — return facts marked `status='conflicted'` for UI/agent resolution — `dynamic_graph_backend.py:1043`
-  - `clear(persist)` / `delete_documents(chunk_ids)` / `status()` / `has_entities()` / `has_community_summaries()` / `graph_data(filters)` / `close()` — remaining `GraphBackend` Protocol surface — `dynamic_graph_backend.py:1079-1234`
+  - `delete_documents(chunk_ids)` — removes evidence + episodes for the chunks; a current (`active`/`conflicted`) fact left with no evidence becomes `retracted` (`invalid_at` kept if set); `superseded` facts keep their history; exports the snapshot — `dynamic_graph_backend.py:1318`
+  - `_migrate(conn)` — `PRAGMA user_version`-keyed one-shot migrations; v1 marks legacy superseded-with-no-evidence facts `retracted` — `dynamic_graph_backend.py:444`
+  - `clear(persist)` / `status()` (incl. `retracted_facts`) / `has_entities()` / `has_community_summaries()` / `graph_data(filters)` / `close()` — remaining `GraphBackend` Protocol surface — `dynamic_graph_backend.py:1303-1481`
 
 ### `src/axon/graph_backends/federated_backend.py`
 
@@ -705,7 +711,8 @@ Kept as real `AxonConfig` fields (deliberately not moved here): the on/off switc
   - `ingest(chunks)` / `finalize(force)` / `list_conflicts(limit)` / `clear(persist)` / `delete_documents(chunk_ids)` / `close()` — sequential delegation to each sub-backend, each failure logged and isolated (partial-failure surfaced via `status="error"` on `finalize`) — `federated_backend.py:158-269`
   - `status()` / `graph_data(filters)` — merge sub-backend results — `federated_backend.py:274,283`
   - `has_entities()` / `has_community_summaries()` — true if any sub-backend is true — `federated_backend.py:298,314`
-  - `_graphrag_sub_backend()` — locate the wrapped `graphrag`-typed sub-backend by `BACKEND_ID`, or `None` — `federated_backend.py:334`
+  - `upsert_fact(...)` — delegated to the `dynamic_graph` sub-backend only (`backend_id="federated"`, detail "via dynamic_graph"); `not_applicable` when that sub-backend is absent. Errors propagate (unlike the fan-out methods) so surfaces can map them to 403/422 — `federated_backend.py:254`
+  - `_graphrag_sub_backend()` / `_dynamic_sub_backend()` — locate the wrapped `graphrag`- / `dynamic_graph`-typed sub-backend by `BACKEND_ID`, or `None` — `federated_backend.py:385` / `298`
   - `expand_with_entity_graph` / `local_search_context` / `global_search_map_reduce` / `classify_query_needs_graphrag` / `ensure_community_summaries` — GraphRAG-specific bridge methods delegated to the wrapped `graphrag` sub-backend via `_graphrag_sub_backend()` (hasattr-guarded by callers) — `federated_backend.py:340-363`
 
 ### `src/axon/dynamic_graph/models.py`
@@ -1096,7 +1103,7 @@ Role: Bundled EFF large Diceware wordlist (7,776 words) for generating human-typ
 
 ## 8. REST API Layer
 
-Covers `src/axon/api.py`, `api_schemas.py`, `surface_contract.py`, and all modules under `src/axon/api_routes/`. Verified endpoint count for this file set: **68** distinct routes across 11 routers (75 across 12 before the governance console's seven `/governance/*` routes were removed), each mounted twice (bare + `/v1` prefix) in `api.py` — `grep -rE '@router\.(get|post|put|delete|patch)\(' src/axon/api_routes/*.py` returns 69 hits, but one (`_rate_limit.py:12`) is inside that module's own usage-example docstring, not a live route. CLAUDE.md's stated "76 REST endpoints" was that same raw grep count (docstring line included) from before the governance removal; worth a follow-up fix to CLAUDE.md's recount, out of scope for this doc.
+Covers `src/axon/api.py`, `api_schemas.py`, `surface_contract.py`, and all modules under `src/axon/api_routes/`. Verified endpoint count for this file set: **69** distinct routes across 11 routers (68 before `POST /graph/facts` was added; 75 across 12 before the governance console's seven `/governance/*` routes were removed), each mounted twice (bare + `/v1` prefix) in `api.py` — `grep -rE '@router\.(get|post|put|delete|patch)\(' src/axon/api_routes/*.py` returns 70 hits, but one (`_rate_limit.py:12`) is inside that module's own usage-example docstring, not a live route. CLAUDE.md's stated "76 REST endpoints" was that same raw grep count (docstring line included) from before the governance removal; worth a follow-up fix to CLAUDE.md's recount, out of scope for this doc.
 
 ### src/axon/api.py
 
@@ -1128,6 +1135,7 @@ Covers `src/axon/api.py`, `api_schemas.py`, `surface_contract.py`, and all modul
 - `_VALID_PROJECT_NAME_RE` — regex enforcing 1-5 slash-separated segments, `[a-z0-9_-]{1,50}` each — the canonical project-name validator, reused across `projects.py`, `shares.py`, `maintenance.py` — `api_schemas.py:68`
 - `QueryRequest` / `SearchRequest` / `QueryVisualizeRequest` / `SearchVisualizeRequest` — query/search bodies with RAG-toggle overrides (hyde, multi_query, step_back, rerank, hybrid, top_k, threshold, dry_run, include_diagnostics/citations) — `api_schemas.py:118,173,191,199`
 - `GraphRetrieveRequest` — body for `/graph/retrieve`; validates `federation_weights` keys against `_VALID_FEDERATION_KEYS = {graphrag, dynamic_graph}` and rejects negative weights in `__init__` — `api_schemas.py:212`
+- `GraphFactRequest` — body for `/graph/facts` (`extra="forbid"`); subject/object 1-200 chars after strip, relation 1-64 chars of `[A-Za-z0-9_ ]`, description <= 1000, confidence 0-1, `replace: bool | None`, `project` — `api_schemas.py:262`
 - `IngestRequest` / `TextIngestRequest` / `BatchDocItem` / `BatchTextIngestRequest` / `URLIngestRequest` / `DeleteRequest` — ingest/delete payloads — `api_schemas.py:262-328`
 - `ProjectSwitchRequest` (with `.final_name` property reconciling `project_name`/`name` aliases) / `ProjectCreateRequest` — `api_schemas.py:337,352`
 - `ProjectRotateKeysRequest` / `ProjectSealRequest` — `api_schemas.py:544,548`
@@ -1257,15 +1265,16 @@ Covers `src/axon/api.py`, `api_schemas.py`, `surface_contract.py`, and all modul
 - `GET /graph/status` — `get_graph_status()` — community build progress, summary count, entity count, code-node count, `graph_ready` flag — `graph.py:21`
 - `POST /graph/finalize` — `finalize_graph()` — triggers `backend.finalize(True)` off-thread; returns `not_applicable` status for backends without a community step — `graph.py:45`
 - `GET /graph/conflicts` — `graph_conflicts(project, limit)` — lists facts with `status="conflicted"` via `backend.list_conflicts()`; returns `supported: false` for backends lacking the method (e.g. graphrag) — `graph.py:99`
-- `POST /graph/retrieve` — `graph_retrieve(request)` — runs the active backend's `retrieve()` directly with a `RetrievalConfig` (supports `point_in_time` + per-query `federation_weights`), bypassing the full `/query` pipeline/LLM — `graph.py:138`
-- `POST /query/visualize` — `query_visualize(request)` — runs a query (RAPTOR/GraphRAG off by default) and returns a self-contained HTML page combining the answer, sources, and highlighted entity+code graph via `brain.render_query_graph_html()` — `graph.py:234`
-- `POST /search/visualize` — `search_visualize(request)` — same HTML visualization but retrieval-only (no LLM answer) — `graph.py:281`
-- `GET /graph/visualize` — `get_graph_visualization()` — standalone entity-graph HTML export via `brain.export_graph_html()` — `graph.py:331`
-- `GET /graph/backend/status` — `graph_backend_status()` — raw `backend.status()` dict — `graph.py:348`
-- `GET /graph/data` — `graph_data(project)` — entity/relation graph as JSON nodes+links, for VS Code webview — `graph.py:366`
-- `GET /code-graph/data` — `code_graph_data(project)` — code-structure graph JSON via `brain.build_code_graph_payload()` — `graph.py:378`
-- `_resolve_graph_payload(brain)` — normalizes `backend.graph_data()` output (handles `.to_dict()`, dict, or missing) to `{nodes, links}` — shared by `/graph/data` and both `/*/visualize` HTML routes — `graph.py:191`
-- `_serialise_context(ctx)` — converts a `GraphContext` dataclass to a JSON-friendly dict (ISO timestamps, etc.) for `/graph/retrieve` — `graph.py:213`
+- `POST /graph/retrieve` — `graph_retrieve(request)` — runs the active backend's `retrieve()` directly with a `RetrievalConfig` (supports `point_in_time` + per-query `federation_weights`), bypassing the full `/query` pipeline/LLM — `graph.py:123`
+- `POST /graph/facts` — `graph_update_fact(payload, request)` — 503 → `enforce_project` (409) → `_enforce_write_access(brain, "update_fact")` (403) → `brain.update_fact(..., provenance=request.state.surface)` in a thread; `not_applicable` is a 200, `PermissionError` → 403, `ValueError` → 422 — `graph.py:176`
+- `POST /query/visualize` — `query_visualize(request)` — runs a query (RAPTOR/GraphRAG off by default) and returns a self-contained HTML page combining the answer, sources, and highlighted entity+code graph via `brain.render_query_graph_html()` — `graph.py:263`
+- `POST /search/visualize` — `search_visualize(request)` — same HTML visualization but retrieval-only (no LLM answer) — `graph.py:310`
+- `GET /graph/visualize` — `get_graph_visualization()` — standalone entity-graph HTML export via `brain.export_graph_html()` — `graph.py:360`
+- `GET /graph/backend/status` — `graph_backend_status()` — raw `backend.status()` dict — `graph.py:377`
+- `GET /graph/data` — `graph_data(project)` — entity/relation graph as JSON nodes+links, for VS Code webview — `graph.py:395`
+- `GET /code-graph/data` — `code_graph_data(project)` — code-structure graph JSON via `brain.build_code_graph_payload()` — `graph.py:407`
+- `_resolve_graph_payload(brain)` — normalizes `backend.graph_data()` output (handles `.to_dict()`, dict, or missing) to `{nodes, links}` — shared by `/graph/data` and both `/*/visualize` HTML routes — `graph.py:219`
+- `_serialise_context(ctx)` — converts a `GraphContext` dataclass to a JSON-friendly dict (ISO timestamps, etc.) for `/graph/retrieve` — `graph.py:241`
 
 ### src/axon/api_routes/maintenance.py
 

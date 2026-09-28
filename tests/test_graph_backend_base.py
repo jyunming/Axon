@@ -1,7 +1,7 @@
 """Architecture tests for the GraphBackend Protocol.
 
 Verifies:
-  1. The Protocol exposes exactly the 9 required methods.
+  1. The Protocol exposes exactly the 10 required methods.
   2. GraphRagBackend satisfies the Protocol (runtime isinstance check).
   3. DynamicGraphBackend satisfies the Protocol (full SQLite implementation).
   4. A minimal hand-rolled object satisfies the Protocol.
@@ -14,6 +14,7 @@ import pytest
 
 from axon.graph_backends.base import (
     _REQUIRED_METHODS,
+    FactUpdateResult,
     FinalizationResult,
     GraphBackend,
     GraphContext,
@@ -76,7 +77,7 @@ def _make_none_backend() -> NoneGraphBackend:
 
 class TestProtocolShape:
     def test_required_methods_count(self):
-        assert len(_REQUIRED_METHODS) == 9
+        assert len(_REQUIRED_METHODS) == 10
 
     def test_required_method_names(self):
         expected = {
@@ -89,6 +90,7 @@ class TestProtocolShape:
             "graph_data",
             "has_entities",
             "has_community_summaries",
+            "upsert_fact",
         }
         assert _REQUIRED_METHODS == expected
 
@@ -168,6 +170,15 @@ class TestGraphRagBackendProtocol:
         backend = _make_graphrag_backend()
         backend._engine._community_summaries = {"0_0": {"full_content": "summary"}}
         assert backend.has_community_summaries() is True
+
+    def test_upsert_fact_is_not_applicable(self):
+        backend = _make_graphrag_backend()
+        result = backend.upsert_fact("Alice", "WORKS_FOR", "Acme", replace=True)
+        assert isinstance(result, FactUpdateResult)
+        assert result.status == "not_applicable"
+        assert result.backend_id == "graphrag"
+        assert "dynamic_graph" in result.detail
+        assert result.fact_id == ""
 
 
 # ---------------------------------------------------------------------------
@@ -322,6 +333,12 @@ class TestDynamicGraphBackendProtocol:
     def test_has_community_summaries_always_false(self, tmp_path):
         assert _make_dynamic_backend(tmp_path).has_community_summaries() is False
 
+    def test_upsert_fact_returns_fact_update_result(self, tmp_path):
+        result = _make_dynamic_backend(tmp_path).upsert_fact("Alice", "WORKS_FOR", "Acme")
+        assert isinstance(result, FactUpdateResult)
+        assert result.status == "created"
+        assert result.backend_id == "dynamic_graph"
+
 
 # ---------------------------------------------------------------------------
 # NoneGraphBackend satisfies Protocol
@@ -388,6 +405,13 @@ class TestNoneGraphBackendProtocol:
 
     def test_has_community_summaries_always_false(self):
         assert _make_none_backend().has_community_summaries() is False
+
+    def test_upsert_fact_is_not_applicable(self):
+        result = _make_none_backend().upsert_fact("Alice", "WORKS_FOR", "Acme")
+        assert isinstance(result, FactUpdateResult)
+        assert result.status == "not_applicable"
+        assert result.backend_id == "none"
+        assert result.detail
 
 
 # ---------------------------------------------------------------------------
@@ -477,6 +501,9 @@ class TestMinimalProtocolConformance:
             def has_community_summaries(self):
                 return False
 
+            def upsert_fact(self, subject, relation, obj, **kwargs):
+                return FactUpdateResult(status="not_applicable")
+
         assert isinstance(_Minimal(), GraphBackend)
 
     def test_missing_one_method_fails_isinstance(self):
@@ -523,6 +550,11 @@ class TestDataTypes:
         assert ctx.invalid_at is None
         assert ctx.evidence_ids == []
         assert ctx.matched_entity_names == []
+
+    def test_fact_update_result_defaults(self):
+        r = FactUpdateResult(status="created")
+        assert r.backend_id == "" and r.fact_id == "" and r.detail == ""
+        assert r.superseded_ids == [] and r.conflicted_ids == []
 
     def test_graph_data_filters_defaults(self):
         f = GraphDataFilters()

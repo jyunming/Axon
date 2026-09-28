@@ -10,7 +10,7 @@ import re
 from typing import Any, Literal
 
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
 # Default upper bounds applied to free-form text fields exposed by the REST API.
 # These guard against accidental or malicious oversized payloads before any
@@ -257,6 +257,50 @@ class GraphRetrieveRequest(BaseModel):
             for k, v in fw.items():
                 if v < 0:
                     raise ValueError(f"federation_weights['{k}'] must be >= 0 (got {v})")
+
+
+class GraphFactRequest(BaseModel):
+    """Body for ``POST /graph/facts`` — assert or correct one graph fact.
+
+    ``relation`` is normalised server-side like extraction does (upper-cased,
+    spaces become underscores) and must then start with a letter.
+    ``replace`` controls supersession: ``true`` makes this the only current
+    fact for (subject, relation), ``false`` appends it, ``null`` (default)
+    lets the backend decide (replace for exclusive relations such as
+    ``IS_CEO_OF``, add otherwise). Unknown keys are rejected (422).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    subject: str = Field(
+        ..., min_length=1, max_length=200, description="Subject entity (1-200 chars)"
+    )
+    relation: str = Field(
+        ...,
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9_ ]+$",
+        description="Relation, e.g. WORKS_FOR or 'works for' (letters, digits, _, space)",
+    )
+    object: str = Field(
+        ..., min_length=1, max_length=200, description="Object entity (1-200 chars)"
+    )
+    description: str = Field("", max_length=1000, description="Optional free-text description")
+    confidence: float = Field(1.0, ge=0.0, le=1.0, description="Confidence 0.0-1.0")
+    replace: bool | None = Field(
+        None,
+        description=(
+            "true = supersede other current facts for (subject, relation); "
+            "false = append; null = backend default (replace for exclusive relations)"
+        ),
+    )
+    project: str | None = Field(None, description="Target project (must match active project)")
+
+    @field_validator("subject", "object", "relation", mode="before")
+    @classmethod
+    def _strip(cls, v: Any) -> Any:
+        # Strip before the length constraints run, so "   " fails min_length.
+        return v.strip() if isinstance(v, str) else v
 
 
 class IngestRequest(BaseModel):

@@ -3394,6 +3394,195 @@ class TestGraphFinalize:
         assert "community" in data["detail"].lower()
 
 
+class TestGraphFacts:
+    """POST /graph/facts — agent-writable fact update (PR5b)."""
+
+    _BODY = {"subject": "Alice", "relation": "WORKS_FOR", "object": "Acme"}
+
+    @staticmethod
+    def _brain(result=None):
+        brain = _make_brain()
+        brain._active_project = "default"
+        brain.update_fact.return_value = result or {
+            "status": "created",
+            "backend_id": "dynamic_graph",
+            "fact_id": "f1",
+            "superseded_ids": [],
+            "conflicted_ids": [],
+            "detail": "",
+        }
+        return brain
+
+    def test_503_when_no_brain(self):
+        resp = client.post("/graph/facts", json=self._BODY)
+        assert resp.status_code == 503
+
+    def test_200_created_passes_arguments_and_surface_provenance(self):
+        brain = self._brain()
+        api_module.brain = brain
+        resp = client.post(
+            "/graph/facts",
+            json={
+                **self._BODY,
+                "description": "since 2024",
+                "confidence": 0.7,
+                "replace": True,
+                "project": "default",
+            },
+            headers={"X-Axon-Surface": "mcp"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "created"
+        assert resp.json()["fact_id"] == "f1"
+        brain._assert_write_allowed.assert_called_once_with("update_fact")
+        brain.update_fact.assert_called_once_with(
+            "Alice",
+            "WORKS_FOR",
+            "Acme",
+            description="since 2024",
+            confidence=0.7,
+            replace=True,
+            provenance="mcp",
+        )
+
+    def test_defaults_and_default_provenance(self):
+        brain = self._brain()
+        api_module.brain = brain
+        resp = client.post("/graph/facts", json={**self._BODY, "subject": "  Alice  "})
+        assert resp.status_code == 200
+        brain.update_fact.assert_called_once_with(
+            "Alice",
+            "WORKS_FOR",
+            "Acme",
+            description="",
+            confidence=1.0,
+            replace=None,
+            provenance="api",
+        )
+
+    def test_200_not_applicable_passthrough(self):
+        api_module.brain = self._brain(
+            {
+                "status": "not_applicable",
+                "backend_id": "graphrag",
+                "fact_id": "",
+                "superseded_ids": [],
+                "conflicted_ids": [],
+                "detail": "graphrag derives its graph from ingested text",
+            }
+        )
+        resp = client.post("/graph/facts", json=self._BODY)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "not_applicable"
+        assert data["backend_id"] == "graphrag"
+        assert "graphrag" in data["detail"]
+
+    def test_403_when_write_denied(self):
+        brain = self._brain()
+        brain._assert_write_allowed.side_effect = PermissionError("read-only scope")
+        api_module.brain = brain
+        resp = client.post("/graph/facts", json=self._BODY)
+        assert resp.status_code == 403
+        brain.update_fact.assert_not_called()
+
+    def test_403_when_backend_is_a_mounted_share(self):
+        brain = self._brain()
+        brain.update_fact.side_effect = PermissionError("mounted share is read-only")
+        api_module.brain = brain
+        resp = client.post("/graph/facts", json=self._BODY)
+        assert resp.status_code == 403
+
+    def test_409_project_mismatch(self):
+        brain = self._brain()
+        api_module.brain = brain
+        resp = client.post("/graph/facts", json={**self._BODY, "project": "other"})
+        assert resp.status_code == 409
+        brain.update_fact.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "patch",
+        [
+            {"subject": ""},
+            {"subject": "   "},
+            {"object": "x" * 201},
+            {"relation": "works-for"},
+            {"relation": "A" * 65},
+            {"confidence": 1.5},
+            {"confidence": -0.1},
+            {"description": "d" * 1001},
+            {"surprise": 1},
+        ],
+    )
+    def test_422_invalid_body(self, patch):
+        brain = self._brain()
+        api_module.brain = brain
+        resp = client.post("/graph/facts", json={**self._BODY, **patch})
+        assert resp.status_code == 422
+        brain.update_fact.assert_not_called()
+
+    def test_422_when_backend_rejects_value(self):
+        """e.g. a relation starting with a digit passes the schema pattern
+        but fails the backend's normalised-relation check."""
+        brain = self._brain()
+        brain.update_fact.side_effect = ValueError("relation '1ST' is invalid")
+        api_module.brain = brain
+        resp = client.post("/graph/facts", json={**self._BODY, "relation": "1ST"})
+        assert resp.status_code == 422
+
+    def test_500_on_unexpected_error(self):
+        brain = self._brain()
+        brain.update_fact.side_effect = RuntimeError("sqlite exploded")
+        api_module.brain = brain
+        resp = client.post("/graph/facts", json=self._BODY)
+        assert resp.status_code == 500
+
+    def test_end_to_end_with_real_dynamic_backend(self, tmp_path):
+        """Real AxonBrain.update_fact + DynamicGraphBackend behind the route."""
+        import functools
+        from types import SimpleNamespace
+
+        from axon.graph_backends.dynamic_graph_backend import DynamicGraphBackend
+        from axon.main import AxonBrain
+
+        brain = _make_brain()
+        brain._active_project = "default"
+        brain._graph_backend = DynamicGraphBackend(
+            SimpleNamespace(config=SimpleNamespace(bm25_path=str(tmp_path)), llm=None)
+        )
+        brain.update_fact = functools.partial(AxonBrain.update_fact, brain)
+        api_module.brain = brain
+        first = client.post("/graph/facts", json={**self._BODY, "relation": "is ceo of"})
+        assert first.status_code == 200
+        assert first.json()["status"] == "created"
+        second = client.post(
+            "/graph/facts", json={**self._BODY, "relation": "IS_CEO_OF", "object": "Globex"}
+        )
+        assert second.status_code == 200
+        data = second.json()
+        assert data["status"] == "superseded"
+        assert data["superseded_ids"] == [first.json()["fact_id"]]
+        assert set(data) == {
+            "status",
+            "backend_id",
+            "fact_id",
+            "superseded_ids",
+            "conflicted_ids",
+            "detail",
+        }
+        brain._graph_backend.close()
+
+    def test_axon_brain_update_fact_checks_write_access_before_backend(self):
+        from axon.main import AxonBrain
+
+        brain = MagicMock()
+        brain._assert_write_allowed.side_effect = PermissionError("mounted share")
+        with pytest.raises(PermissionError):
+            AxonBrain.update_fact(brain, "Alice", "KNOWS", "Bob")
+        brain._assert_write_allowed.assert_called_once_with("update_fact")
+        brain._graph_backend.upsert_fact.assert_not_called()
+
+
 class TestGraphVisualize:
     def test_503_when_no_brain(self):
         """graph.py line 56 — brain is None raises 503."""

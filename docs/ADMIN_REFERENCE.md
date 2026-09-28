@@ -146,6 +146,7 @@ If no query string is given, the interactive REPL starts. If a query string is g
 | `--graph-export [PATH]` | Export the entity graph as an HTML file to PATH (default: active project dir/graph.html), then exit |
 | `--graph-conflicts` | List facts with `status='conflicted'` from the active graph backend (dynamic_graph or federated), then exit |
 | `--graph-retrieve QUERY [--graph-at TS]` | Run the active graph backend's `retrieve()` directly. `--graph-at` passes an ISO-8601 `point_in_time` (only honoured by bi-temporal backends). Then exit |
+| `--graph-fact SUBJECT RELATION OBJECT [--graph-fact-mode replace\|add] [--graph-fact-desc TEXT]` | Assert or correct one fact in the active project's graph (`dynamic_graph` / `federated`). `replace` supersedes the other current facts for (subject, relation); `add` appends; default replaces for exclusive relations (`IS_CEO_OF`, …) only. Prints the status (`created` / `superseded` / `unchanged`); exits 1 on error or `not_applicable` (`graphrag` / `none` projects). Then exit |
 
 ### 2.9 Vector Index Management
 
@@ -352,6 +353,7 @@ All RAG flags can be toggled at runtime without restarting.
 | `/graph finalize` | Trigger explicit community rebuild; reports `not_applicable` on backends without a community step (e.g. `dynamic_graph`) | `/graph finalize` |
 | `/graph conflicts` | List facts with `status='conflicted'` (dynamic_graph or federated backend); `graphrag` reports unsupported | `/graph conflicts` |
 | `/graph retrieve <q>` | Run the active backend's `retrieve()` directly. Flags: `--at ISO-TIMESTAMP` (point-in-time), `--top-k N` | `/graph retrieve who leads acme --at 2025-06-01` |
+| `/graph fact <s> \| <REL> \| <o> [\| desc]` | Assert or correct one fact (`dynamic_graph` / `federated`). Flags: `--replace` (supersede the other current facts for subject+relation), `--add` (append); default replaces for exclusive relations only | `/graph fact Alice \| IS_CEO_OF \| Globex --replace` |
 | `/graph viz` | Open the interactive 3D graph in VS Code webview (or default browser outside VS Code) | `/graph viz` |
 | `/graph-viz [PATH]` | Export entity–relation graph as standalone HTML file; omit path to open in browser immediately | `/graph-viz /tmp/graph.html` |
 
@@ -492,6 +494,7 @@ Interactive docs: `/docs` (Swagger UI), `/redoc` — both branded with the Axon 
 | `GET` | `/graph/status` | Entity count, edge count, community count, rebuild status |
 | `POST` | `/graph/finalize` | Trigger community detection rebuild. v0.3.2: returns capability-flagged status (`ok` \| `not_applicable` \| `error`) + `community_summary_count` + `backend_id` |
 | `POST` | `/graph/retrieve` | **v0.3.2** — run active backend's `retrieve()` directly. Body: `query` (req), `top_k`, `point_in_time` (ISO 8601), `federation_weights` (`{graphrag, dynamic_graph}`). Bi-temporal-only fields silently ignored on non-bi-temporal backends |
+| `POST` | `/graph/facts` | Assert or correct one fact. Body: `subject`, `relation`, `object` (req), `description`, `confidence` (0-1), `replace` (`true`/`false`/`null`), `project`. Returns `{status, backend_id, fact_id, superseded_ids, conflicted_ids, detail}`; `not_applicable` (200) on `graphrag`/`none`; 403 read-only or mounted; 409 project mismatch; 422 invalid. See [API_REFERENCE.md](API_REFERENCE.md#graphrag) |
 | `GET`  | `/graph/conflicts` | **v0.3.2** — list `status='conflicted'` facts. Query: `?limit=N` (default 100). Returns `{supported: bool, conflicts: [...]}` |
 | `GET` | `/graph/data` | Full entity/relation graph as JSON (`nodes` + `links`) |
 | `GET` | `/code-graph/data` | Structural code graph as JSON (file/class/function nodes) |

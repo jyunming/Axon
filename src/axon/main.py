@@ -1285,6 +1285,51 @@ Your primary goal is to help the user by answering questions based on the provid
             "not_found": not_found,
         }
 
+    def update_fact(
+        self,
+        subject: str,
+        relation: str,
+        object: str,
+        *,
+        description: str = "",
+        confidence: float = 1.0,
+        replace: bool | None = None,
+        provenance: str = "api",
+    ) -> dict:
+        """Assert or correct a fact in the active project's graph.
+
+        The single implementation behind ``POST /graph/facts``, ``axon
+        --graph-fact`` and the REPL's ``/graph fact``. Delegates to the active
+        graph backend's ``upsert_fact()``: ``dynamic_graph`` (and
+        ``federated``, via its dynamic_graph half) records the fact with
+        bi-temporal supersession; ``graphrag`` and ``none`` answer
+        ``status="not_applicable"``. ``replace=None`` lets the backend decide
+        (replace for exclusive relations such as ``IS_CEO_OF``, add
+        otherwise).
+
+        Raises ``PermissionError`` when the project is read-only (scope,
+        mounted share, maintenance state) and ``ValueError`` for invalid input.
+
+        Returns:
+            ``dataclasses.asdict(FactUpdateResult)`` — ``{"status",
+            "backend_id", "fact_id", "superseded_ids", "conflicted_ids",
+            "detail"}``.
+        """
+        import dataclasses
+
+        self._assert_write_allowed("update_fact")
+        result = self._graph_backend.upsert_fact(
+            subject,
+            relation,
+            object,
+            description=description,
+            confidence=confidence,
+            replace=replace,
+            provenance=provenance,
+        )
+        out: dict = dataclasses.asdict(result)
+        return out
+
     # ------------------------------------------------------------------
     # Sealed-project routing (lazy — only fires when [sealed] installed)
     # ------------------------------------------------------------------

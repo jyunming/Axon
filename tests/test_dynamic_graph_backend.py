@@ -279,7 +279,7 @@ class TestDynamicGraphBackendClear:
         assert s["episodes"] == 0
 
     def test_delete_documents_orphans_facts(self, tmp_path):
-        """Deleting the only chunk supporting a fact supersedes that fact."""
+        """Deleting the only chunk supporting a fact retracts that fact."""
         backend = _make_backend(tmp_path)
         now = "2026-01-01T00:00:00+00:00"
         backend._upsert_entity("alice", "PERSON", "", now)
@@ -289,7 +289,8 @@ class TestDynamicGraphBackendClear:
         backend.delete_documents(["c1"])
         s = backend.status()
         assert s["active_facts"] == 0
-        assert s["superseded_facts"] == 1
+        assert s["superseded_facts"] == 0
+        assert s["retracted_facts"] == 1
 
     def test_delete_documents_partial(self, tmp_path):
         """Deleting one chunk leaves facts from other chunks intact."""
@@ -302,7 +303,7 @@ class TestDynamicGraphBackendClear:
         backend.delete_documents(["c1"])
         s = backend.status()
         assert s["active_facts"] == 1  # c2 fact survives
-        assert s["superseded_facts"] == 1
+        assert s["retracted_facts"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -677,3 +678,557 @@ class TestConfigShareMountValidation:
         issues = AxonConfig.validate(str(cfg_path))
         msgs = [i.message for i in issues if i.section == "store"]
         assert any("unsafe filesystem" in m and "cloud-sync" in m for m in msgs)
+
+
+# ---------------------------------------------------------------------------
+# upsert_fact() — explicit (agent / user) fact writes (PR5b)
+# ---------------------------------------------------------------------------
+
+
+class _Clock:
+    """Deterministic replacement for dynamic_graph_backend._now_iso.
+
+    Each call returns the current time, then advances it by ``step`` so that
+    every timestamp is distinct but all writes stay well inside the ±1 s
+    window the ingest path treats as "same-time".
+    """
+
+    def __init__(self, start, step_ms: int = 1):
+        from datetime import timedelta
+
+        self.t = start
+        self.step = timedelta(milliseconds=step_ms)
+
+    def __call__(self) -> str:
+        cur = self.t
+        self.t = self.t + self.step
+        return cur.isoformat(timespec="microseconds")
+
+
+def _iso_to_dt(iso: str):
+    from datetime import datetime
+
+    return datetime.fromisoformat(iso)
+
+
+class TestUpsertFact:
+    @staticmethod
+    def _clock(monkeypatch):
+        from datetime import datetime, timezone
+
+        from axon.graph_backends import dynamic_graph_backend as dgb
+
+        clock = _Clock(datetime(2026, 3, 1, 12, 0, 0, tzinfo=timezone.utc))
+        monkeypatch.setattr(dgb, "_now_iso", clock)
+        return clock
+
+    @staticmethod
+    def _facts(backend, subject="alice"):
+        return [
+            dict(r)
+            for r in backend._conn.execute(
+                "SELECT fact_id, subject, relation, object, status, valid_at, invalid_at, "
+                "scope_key, confidence, metadata FROM facts WHERE subject = ? ORDER BY valid_at",
+                (subject,),
+            ).fetchall()
+        ]
+
+    @staticmethod
+    def _entity_types(backend):
+        return {
+            r["canonical_name"]: r["entity_type"]
+            for r in backend._conn.execute("SELECT canonical_name, entity_type FROM entities")
+        }
+
+    def test_created(self, tmp_path):
+        import json as _json
+
+        backend = _make_backend(tmp_path)
+        res = backend.upsert_fact(
+            "Alice", "WORKS_FOR", "Acme", description="since 2024", confidence=0.8
+        )
+        assert res.status == "created"
+        assert res.backend_id == "dynamic_graph"
+        assert res.fact_id
+        assert res.superseded_ids == [] and res.conflicted_ids == []
+        rows = self._facts(backend)
+        assert len(rows) == 1
+        row = rows[0]
+        assert (row["subject"], row["relation"], row["object"]) == ("alice", "WORKS_FOR", "acme")
+        assert row["status"] == "active"
+        assert row["confidence"] == 0.8
+        assert _json.loads(row["metadata"]) == {"description": "since 2024", "provenance": "agent"}
+        # Both entities were upserted (UNKNOWN type when new).
+        assert self._entity_types(backend) == {"alice": "UNKNOWN", "acme": "UNKNOWN"}
+        # Sentinel evidence + episode rows carry the provenance.
+        ev = backend._conn.execute(
+            "SELECT chunk_id, episode_id FROM fact_evidence WHERE fact_id = ?", (res.fact_id,)
+        ).fetchall()
+        assert [r["chunk_id"] for r in ev] == [f"agent:{res.fact_id}"]
+        ep = backend._conn.execute(
+            "SELECT content, metadata FROM episodes WHERE episode_id = ?", (ev[0]["episode_id"],)
+        ).fetchone()
+        assert ep["content"] == "Alice WORKS_FOR Acme: since 2024"
+        assert _json.loads(ep["metadata"]) == {"provenance": "agent"}
+
+    def test_unchanged_on_repeat(self, tmp_path):
+        backend = _make_backend(tmp_path)
+        first = backend.upsert_fact("Alice", "WORKS_FOR", "Acme")
+        second = backend.upsert_fact("alice ", "works for", " ACME")
+        assert second.status == "unchanged"
+        assert second.fact_id == first.fact_id
+        assert len(self._facts(backend)) == 1
+        assert backend.status()["episodes"] == 1
+
+    def test_replace_supersedes_ingest_extracted_non_exclusive_fact(self, tmp_path):
+        backend = _make_backend(
+            tmp_path,
+            llm_responses={
+                "Extract the key named entities": "Alice | PERSON | Engineer",
+                "Extract key relationships": "Alice | WORKS_FOR | Acme | employed | 9",
+            },
+        )
+        backend.ingest([_chunk("Alice works for Acme.", "c1")])
+        (extracted,) = self._facts(backend)
+        assert extracted["scope_key"] is None  # non-exclusive: no scope_key
+        res = backend.upsert_fact("Alice", "WORKS_FOR", "Globex", replace=True)
+        assert res.status == "superseded"
+        assert res.superseded_ids == [extracted["fact_id"]]
+        by_obj = {r["object"]: r for r in self._facts(backend)}
+        assert by_obj["acme"]["status"] == "superseded"
+        assert by_obj["acme"]["invalid_at"] is not None
+        assert by_obj["globex"]["status"] == "active"
+        # The extracted entity keeps its type; the new one is UNKNOWN.
+        types = self._entity_types(backend)
+        assert types["alice"] == "PERSON"
+        assert types["globex"] == "UNKNOWN"
+
+    def test_add_appends(self, tmp_path):
+        backend = _make_backend(tmp_path)
+        backend.upsert_fact("Alice", "KNOWS", "Bob")
+        res = backend.upsert_fact("Alice", "KNOWS", "Carol", replace=False)
+        assert res.status == "created"
+        rows = self._facts(backend)
+        assert {r["object"] for r in rows if r["status"] == "active"} == {"bob", "carol"}
+
+    def test_add_mode_leaves_exclusive_relation_alone(self, tmp_path):
+        backend = _make_backend(tmp_path)
+        backend.upsert_fact("Alice", "IS_CEO_OF", "Acme")
+        res = backend.upsert_fact("Alice", "IS_CEO_OF", "Globex", replace=False)
+        assert res.status == "created"
+        assert backend.status()["active_facts"] == 2
+
+    def test_default_replaces_for_exclusive_relation(self, tmp_path):
+        backend = _make_backend(tmp_path)
+        first = backend.upsert_fact("Alice", "IS_CEO_OF", "Acme")
+        res = backend.upsert_fact("Alice", "is ceo of", "Globex")
+        assert res.status == "superseded"
+        assert res.superseded_ids == [first.fact_id]
+        s = backend.status()
+        assert s["active_facts"] == 1 and s["superseded_facts"] == 1
+
+    def test_default_adds_for_non_exclusive_relation(self, tmp_path):
+        backend = _make_backend(tmp_path)
+        backend.upsert_fact("Alice", "KNOWS", "Bob")
+        res = backend.upsert_fact("Alice", "KNOWS", "Carol")
+        assert res.status == "created"
+        assert backend.status()["active_facts"] == 2
+
+    def test_replace_with_identical_active_fact_supersedes_the_others(self, tmp_path):
+        backend = _make_backend(tmp_path)
+        keep = backend.upsert_fact("Alice", "KNOWS", "Bob")
+        other = backend.upsert_fact("Alice", "KNOWS", "Carol")
+        res = backend.upsert_fact("Alice", "KNOWS", "Bob", replace=True)
+        assert res.status == "superseded"
+        assert res.fact_id == keep.fact_id  # kept, no new row
+        assert res.superseded_ids == [other.fact_id]
+        assert len(self._facts(backend)) == 2
+        assert backend.status()["active_facts"] == 1
+
+    def test_two_writes_under_one_second_supersede_without_conflict(self, tmp_path, monkeypatch):
+        self._clock(monkeypatch)
+        backend = _make_backend(tmp_path)
+        first = backend.upsert_fact("Alice", "IS_CEO_OF", "Acme")
+        second = backend.upsert_fact("Alice", "IS_CEO_OF", "Globex")
+        rows = {r["object"]: r for r in self._facts(backend)}
+        # Both writes happened within a few ms — the ingest path would mark
+        # them both 'conflicted'; explicit writes must not.
+        gap = _iso_to_dt(rows["globex"]["valid_at"]) - _iso_to_dt(rows["acme"]["valid_at"])
+        assert gap.total_seconds() < 1.0
+        assert second.status == "superseded"
+        assert second.superseded_ids == [first.fact_id]
+        assert second.conflicted_ids == []
+        assert rows["acme"]["status"] == "superseded"
+        assert rows["globex"]["status"] == "active"
+        assert backend.status()["conflicted_facts"] == 0
+        assert backend.list_conflicts() == []
+
+    def test_ingest_path_still_conflicts_within_one_second(self, tmp_path):
+        """Regression guard: the explicit flag must not change extraction."""
+        backend = _make_backend(tmp_path)
+        now = "2026-01-01T00:00:00+00:00"
+        backend._upsert_fact("alice", "IS_CEO_OF", "acme", "", 1.0, "c1", "ep1", now)
+        backend._upsert_fact("alice", "IS_CEO_OF", "globex", "", 1.0, "c2", "ep2", now)
+        assert backend.status()["conflicted_facts"] == 2
+
+    def test_survives_delete_documents_of_unrelated_chunks(self, tmp_path):
+        backend = _make_backend(
+            tmp_path,
+            llm_responses={"Extract key relationships": "Bob | KNOWS | Carol | x | 9"},
+        )
+        backend.ingest([_chunk("Bob knows Carol.", "c1")])
+        res = backend.upsert_fact("Alice", "WORKS_FOR", "Acme")
+        backend.delete_documents(["c1"])
+        (agent_fact,) = self._facts(backend, "alice")
+        assert agent_fact["status"] == "active"
+        (bob_fact,) = self._facts(backend, "bob")
+        assert bob_fact["status"] == "retracted"
+        # Deleting the sentinel chunk id is how an agent fact is retracted.
+        backend.delete_documents([f"agent:{res.fact_id}"])
+        assert self._facts(backend, "alice")[0]["status"] == "retracted"
+
+    def test_snapshot_contains_fact(self, tmp_path):
+        import json as _json
+
+        from axon.graph_backends.dynamic_graph_backend import SNAPSHOT_FILENAME
+
+        backend = _make_backend(tmp_path)
+        res = backend.upsert_fact("Alice", "WORKS_FOR", "Acme")
+        data = _json.loads((tmp_path / SNAPSHOT_FILENAME).read_text(encoding="utf-8"))
+        assert any(f["fact_id"] == res.fact_id for f in data["facts"])
+        assert {"alice", "acme"} <= {e["canonical_name"] for e in data["entities"]}
+
+    def test_invalidates_cached_nx_graph(self, tmp_path):
+        backend = _make_backend(tmp_path)
+        backend.upsert_fact("Alice", "KNOWS", "Bob")
+        assert backend._build_nx_graph_from_db().has_edge("alice", "bob")
+        backend.upsert_fact("Alice", "KNOWS", "Carol")
+        assert backend._cached_nx_graph is None
+        assert backend._build_nx_graph_from_db().has_edge("alice", "carol")
+
+    def test_mounted_instance_raises_permission_error(self, tmp_path):
+        import pytest
+
+        from axon.graph_backends.dynamic_graph_backend import DynamicGraphBackend
+
+        brain = _make_brain(tmp_path)
+        brain._active_project = "mounts/shared"
+        grantee = DynamicGraphBackend(brain)
+        with pytest.raises(PermissionError):
+            grantee.upsert_fact("Alice", "WORKS_FOR", "Acme")
+        assert grantee.status()["active_facts"] == 0
+
+    def test_relation_normalization(self, tmp_path):
+        backend = _make_backend(tmp_path)
+        backend.upsert_fact("Alice", "  works for ", "Acme")
+        assert self._facts(backend)[0]["relation"] == "WORKS_FOR"
+
+    def test_invalid_input_rejected(self, tmp_path):
+        import pytest
+
+        backend = _make_backend(tmp_path)
+        for bad_rel in ("1ST_PLACE", "works-for", "", "   ", "A" * 65, "KNOWS!"):
+            with pytest.raises(ValueError):
+                backend.upsert_fact("Alice", bad_rel, "Acme")
+        with pytest.raises(ValueError):
+            backend.upsert_fact("   ", "KNOWS", "Acme")
+        with pytest.raises(ValueError):
+            backend.upsert_fact("Alice", "KNOWS", "")
+        with pytest.raises(ValueError):
+            backend.upsert_fact("Alice", "KNOWS", "Bob", confidence=1.5)
+        assert backend.status()["active_facts"] == 0
+        assert backend.status()["entities"] == 0
+
+    def test_point_in_time_returns_old_then_new_object(self, tmp_path, monkeypatch):
+        from datetime import timedelta
+
+        from axon.graph_backends.base import RetrievalConfig
+
+        clock = self._clock(monkeypatch)
+        backend = _make_backend(tmp_path)
+        backend.upsert_fact("Alice", "IS_CEO_OF", "Acme")
+        between = clock.t
+        clock.t = clock.t + timedelta(days=30)
+        backend.upsert_fact("Alice", "IS_CEO_OF", "Globex")
+        after = clock.t
+
+        def texts(pit):
+            ctxs = backend.retrieve("alice", RetrievalConfig(top_k=10, point_in_time=pit))
+            return {c.text for c in ctxs}
+
+        # Before the update: only the old object — the new fact must not leak
+        # in through the multi-hop expansion either.
+        assert texts(between) == {"alice is ceo of acme"}
+        assert texts(after) == {"alice is ceo of globex"}
+        # Current view (no point_in_time) is the new object only.
+        assert {c.text for c in backend.retrieve("alice")} == {"alice is ceo of globex"}
+
+    def test_point_in_time_excludes_facts_retracted_by_delete(self, tmp_path, monkeypatch):
+        from datetime import timedelta
+
+        from axon.graph_backends.base import RetrievalConfig
+
+        clock = self._clock(monkeypatch)
+        backend = _make_backend(tmp_path)
+        res = backend.upsert_fact("Alice", "KNOWS", "Bob")
+        between = clock.t
+        clock.t = clock.t + timedelta(days=1)
+        backend.delete_documents([f"agent:{res.fact_id}"])
+        ctxs = backend.retrieve("alice", RetrievalConfig(top_k=10, point_in_time=between))
+        assert ctxs == []
+
+    def test_unchanged_confirmation_protects_extracted_fact_from_delete(self, tmp_path):
+        """An agent confirming an extracted fact (status 'unchanged') adds the
+        sentinel evidence, so deleting the source document no longer
+        retracts it."""
+        backend = _make_backend(
+            tmp_path,
+            llm_responses={"Extract key relationships": "Alice | WORKS_FOR | Acme | x | 9"},
+        )
+        backend.ingest([_chunk("Alice works for Acme.", "doc1")])
+        (extracted,) = self._facts(backend)
+        res = backend.upsert_fact("Alice", "WORKS_FOR", "Acme")
+        assert res.status == "unchanged"
+        assert res.fact_id == extracted["fact_id"]
+        chunks = {
+            r["chunk_id"]
+            for r in backend._conn.execute(
+                "SELECT chunk_id FROM fact_evidence WHERE fact_id = ?", (res.fact_id,)
+            )
+        }
+        assert chunks == {"doc1", f"agent:{res.fact_id}"}
+        backend.delete_documents(["doc1"])
+        assert self._facts(backend)[0]["status"] == "active"
+
+    def test_repeated_confirmation_does_not_duplicate_evidence_or_episodes(self, tmp_path):
+        backend = _make_backend(tmp_path)
+        res = backend.upsert_fact("Alice", "KNOWS", "Bob")
+        for _ in range(3):
+            assert backend.upsert_fact("Alice", "KNOWS", "Bob").status == "unchanged"
+        n_ev = backend._conn.execute(
+            "SELECT COUNT(*) FROM fact_evidence WHERE fact_id = ?", (res.fact_id,)
+        ).fetchone()[0]
+        assert n_ev == 1
+        assert backend.status()["episodes"] == 1
+
+    def test_kept_fact_in_replace_mode_gets_sentinel_evidence(self, tmp_path):
+        backend = _make_backend(
+            tmp_path,
+            llm_responses={
+                "Extract key relationships": "Alice | KNOWS | Bob | x | 9\nAlice | KNOWS | Carol | y | 9"
+            },
+        )
+        backend.ingest([_chunk("Alice knows Bob and Carol.", "doc1")])
+        res = backend.upsert_fact("Alice", "KNOWS", "Bob", replace=True)
+        assert res.status == "superseded"
+        backend.delete_documents(["doc1"])
+        by_obj = {r["object"]: r["status"] for r in self._facts(backend)}
+        # bob: kept + sentinel, survives. carol: superseded by the replace,
+        # stays superseded (history) even though its source is gone.
+        assert by_obj == {"bob": "active", "carol": "superseded"}
+
+    def test_retracted_fact_is_not_reactivated_by_identical_upsert(self, tmp_path):
+        """A retracted fact stays retracted; asserting the same triple again
+        creates a fresh active fact with a new id."""
+        backend = _make_backend(tmp_path)
+        first = backend.upsert_fact("Alice", "KNOWS", "Bob")
+        backend.delete_documents([f"agent:{first.fact_id}"])
+        assert self._facts(backend)[0]["status"] == "retracted"
+        again = backend.upsert_fact("Alice", "KNOWS", "Bob", replace=True)
+        assert again.status == "created"
+        assert again.fact_id != first.fact_id
+        assert again.superseded_ids == []
+        by_id = {r["fact_id"]: r["status"] for r in self._facts(backend)}
+        assert by_id == {first.fact_id: "retracted", again.fact_id: "active"}
+
+    def test_clear_removes_it(self, tmp_path):
+        backend = _make_backend(tmp_path)
+        backend.upsert_fact("Alice", "WORKS_FOR", "Acme")
+        backend.clear()
+        s = backend.status()
+        assert s["active_facts"] == 0 and s["episodes"] == 0 and s["entities"] == 0
+        assert backend._conn.execute("SELECT COUNT(*) FROM fact_evidence").fetchone()[0] == 0
+
+
+# ---------------------------------------------------------------------------
+# Explicit retraction: delete_documents() marks facts 'retracted' (PR5b)
+# ---------------------------------------------------------------------------
+
+
+class TestRetraction:
+    DAY_MS = 86_400_000
+
+    @classmethod
+    def _daily_clock(cls, monkeypatch):
+        from datetime import datetime, timezone
+
+        from axon.graph_backends import dynamic_graph_backend as dgb
+
+        clock = _Clock(datetime(2026, 1, 1, tzinfo=timezone.utc), step_ms=cls.DAY_MS)
+        monkeypatch.setattr(dgb, "_now_iso", clock)
+        return clock
+
+    @staticmethod
+    def _texts_at(backend, query, pit):
+        from axon.graph_backends.base import RetrievalConfig
+
+        ctxs = backend.retrieve(query, RetrievalConfig(top_k=10, point_in_time=pit))
+        return {c.text.split(":")[0] for c in ctxs}  # drop ": description"
+
+    @staticmethod
+    def _hq_backend(tmp_path):
+        return _make_backend(
+            tmp_path,
+            llm_responses={
+                "HQ is Seattle": "Acme | HEADQUARTERS_IN | Seattle | x | 9",
+                "HQ moved to Portland": "Acme | HEADQUARTERS_IN | Portland | y | 9",
+            },
+        )
+
+    def test_superseded_by_ingest_survives_deleting_its_stale_source(self, tmp_path, monkeypatch):
+        """Repro (a): C1 says Seattle, C2 supersedes with Portland; deleting the
+        stale C1 later must not erase Seattle from point-in-time history."""
+        from datetime import timedelta
+
+        clock = self._daily_clock(monkeypatch)
+        backend = self._hq_backend(tmp_path)
+        start = clock.t
+        backend.ingest([_chunk("Acme HQ is Seattle.", "C1")])
+        backend.ingest([_chunk("Acme HQ moved to Portland.", "C2")])
+        between = start + timedelta(hours=12)
+        assert self._texts_at(backend, "acme", between) == {"acme headquarters in seattle"}
+        backend.delete_documents(["C1"])
+        assert self._texts_at(backend, "acme", between) == {"acme headquarters in seattle"}
+        statuses = {
+            r["object"]: r["status"]
+            for r in backend._conn.execute("SELECT object, status FROM facts")
+        }
+        assert statuses == {"seattle": "superseded", "portland": "active"}
+
+    def test_superseded_by_agent_survives_deleting_its_source(self, tmp_path, monkeypatch):
+        """Repro (b): extracted fact superseded by upsert_fact(replace=True),
+        then its source is deleted — history must still show it."""
+        from datetime import timedelta
+
+        clock = self._daily_clock(monkeypatch)
+        backend = _make_backend(
+            tmp_path,
+            llm_responses={"Extract key relationships": "Alice | IS_CEO_OF | Acme | x | 9"},
+        )
+        start = clock.t
+        backend.ingest([_chunk("Alice is CEO of Acme.", "c1")])
+        backend.upsert_fact("Alice", "IS_CEO_OF", "Globex", replace=True)
+        before = start + timedelta(hours=12)
+        backend.delete_documents(["c1"])
+        assert self._texts_at(backend, "alice", before) == {"alice is ceo of acme"}
+        assert {c.text.split(":")[0] for c in backend.retrieve("alice")} == {
+            "alice is ceo of globex"
+        }
+
+    def test_retracting_the_current_fact_hides_it_but_keeps_superseded_history(
+        self, tmp_path, monkeypatch
+    ):
+        from datetime import timedelta
+
+        clock = self._daily_clock(monkeypatch)
+        backend = self._hq_backend(tmp_path)
+        start = clock.t
+        backend.ingest([_chunk("Acme HQ is Seattle.", "C1")])
+        backend.ingest([_chunk("Acme HQ moved to Portland.", "C2")])
+        seattle_invalid = backend._conn.execute(
+            "SELECT invalid_at FROM facts WHERE object = 'seattle'"
+        ).fetchone()[0]
+        backend.delete_documents(["C2"])  # retract the current fact
+        backend.delete_documents(["C1"])  # the superseded one's source goes too
+        rows = {
+            r["object"]: (r["status"], r["invalid_at"])
+            for r in backend._conn.execute("SELECT object, status, invalid_at FROM facts")
+        }
+        # Superseded history is kept, with its original end boundary.
+        assert rows["seattle"] == ("superseded", seattle_invalid)
+        assert rows["portland"][0] == "retracted" and rows["portland"][1] is not None
+        assert self._texts_at(backend, "acme", start + timedelta(hours=12)) == {
+            "acme headquarters in seattle"
+        }
+        assert self._texts_at(backend, "acme", clock.t) == set()  # Portland is gone
+        assert backend.retrieve("acme") == []
+        s = backend.status()
+        assert (s["active_facts"], s["superseded_facts"], s["retracted_facts"]) == (0, 1, 1)
+
+    def test_retracted_conflicted_fact_leaves_list_conflicts(self, tmp_path):
+        backend = _make_backend(tmp_path)
+        now = "2026-01-01T00:00:00+00:00"
+        backend._upsert_fact("alice", "IS_CEO_OF", "acme", "", 1.0, "c1", "ep1", now)
+        backend._upsert_fact("alice", "IS_CEO_OF", "globex", "", 1.0, "c2", "ep2", now)
+        assert len(backend.list_conflicts()) == 2
+        backend.delete_documents(["c1"])
+        assert [r["object"] for r in backend.list_conflicts()] == ["globex"]
+
+    def test_retracted_facts_are_not_exported_or_drawn(self, tmp_path):
+        import json as _json
+
+        from axon.graph_backends.dynamic_graph_backend import SNAPSHOT_FILENAME
+
+        backend = _make_backend(tmp_path)
+        res = backend.upsert_fact("Alice", "KNOWS", "Bob")
+        backend.delete_documents([f"agent:{res.fact_id}"])
+        data = _json.loads((tmp_path / SNAPSHOT_FILENAME).read_text(encoding="utf-8"))
+        assert data["facts"] == []
+        assert backend.graph_data().links == []
+
+    def test_migration_marks_legacy_orphaned_superseded_facts_retracted(self, tmp_path):
+        """A pre-PR DB (user_version 0) where delete_documents() left
+        superseded facts with no evidence: those become 'retracted' on open;
+        superseded facts that still have evidence are untouched."""
+        from axon.graph_backends.dynamic_graph_backend import DynamicGraphBackend
+
+        backend = _make_backend(tmp_path)
+        rows = [
+            ("orphan", "superseded", "2026-02-01T00:00:00+00:00", None),
+            ("kept", "superseded", "2026-02-01T00:00:00+00:00", "c2"),
+            ("live", "active", None, "c3"),
+        ]
+        with backend._write_lock:
+            for fid, status, inv, chunk in rows:
+                backend._conn.execute(
+                    "INSERT INTO facts (fact_id, subject, relation, object, valid_at, "
+                    "invalid_at, status, confidence, metadata) VALUES "
+                    "(?, 'alice', 'KNOWS', ?, '2026-01-01T00:00:00+00:00', ?, ?, 1.0, '{}')",
+                    (fid, fid, inv, status),
+                )
+                if chunk:
+                    backend._conn.execute(
+                        "INSERT INTO fact_evidence (fact_id, chunk_id) VALUES (?, ?)",
+                        (fid, chunk),
+                    )
+            backend._conn.execute("PRAGMA user_version = 0")
+            backend._conn.commit()
+        backend.close()
+
+        reopened = DynamicGraphBackend(_make_brain(tmp_path))
+        got = {
+            r["fact_id"]: (r["status"], r["invalid_at"])
+            for r in reopened._conn.execute("SELECT fact_id, status, invalid_at FROM facts")
+        }
+        assert got == {
+            "orphan": ("retracted", "2026-02-01T00:00:00+00:00"),
+            "kept": ("superseded", "2026-02-01T00:00:00+00:00"),
+            "live": ("active", None),
+        }
+        assert reopened._conn.execute("PRAGMA user_version").fetchone()[0] >= 1
+        reopened.close()
+        # Idempotent: a second open changes nothing.
+        again = DynamicGraphBackend(_make_brain(tmp_path))
+        s = again.status()
+        assert (s["retracted_facts"], s["superseded_facts"], s["active_facts"]) == (1, 1, 1)
+        again.close()
+
+    def test_clear_resets_nx_cache(self, tmp_path):
+        backend = _make_backend(tmp_path)
+        backend.upsert_fact("Alice", "KNOWS", "Bob")
+        backend._build_nx_graph_from_db()
+        assert backend._cached_nx_graph is not None
+        backend.clear()
+        assert backend._cached_nx_graph is None
+        assert backend._cached_nx_time == 0.0
+        assert backend._build_nx_graph_from_db().number_of_edges() == 0
