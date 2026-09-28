@@ -1641,4 +1641,4 @@ class TestCliConfigReset:
         code = run_cli("--config-reset", "--config", str(target))
         assert code == 0
         assert "Config reset to defaults" in capsys.readouterr().out
-        assert not target.with_suffix(target.suffix + ".tmp").exists()
+        assert not list(target.parent.glob(target.name + "*.tmp"))

@@ -50,8 +50,11 @@ _MAX_SESSIONS = 50
 def _save_session(session: dict) -> None:
     try:
         project = session.get("project")
-        with open(_session_path(session["id"], project), "w", encoding="utf-8") as f:
-            _json.dump(session, f, ensure_ascii=False, indent=2)
+        from axon._atomic_persist import write_json_if_changed
+
+        write_json_if_changed(
+            _session_path(session["id"], project), session, {}, indent=2, ensure_ascii=False
+        )
         # Evict oldest sessions once the directory exceeds the cap.
         d = _sessions_dir(project)
         files = sorted(

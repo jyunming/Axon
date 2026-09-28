@@ -281,7 +281,7 @@ class TestSave:
         cfg.save(str(target))
 
         assert target.exists()
-        assert not target.with_suffix(target.suffix + ".tmp").exists()
+        assert not list(target.parent.glob(target.name + "*.tmp"))
 
     def test_save_twice_unchanged_is_a_no_op_write(self, tmp_path):
         """Saving identical content twice in a row must skip the second
@@ -1566,7 +1566,7 @@ class TestRagSectionSchemaMatchesLoad:
             if name.startswith("_"):
                 continue
             value = getattr(cfg, name, None)
-            if value is None or isinstance(value, (str, int, float, bool, list, dict)):
+            if value is None or isinstance(value, str | int | float | bool | list | dict):
                 rag[name] = value
         path = self._cfg(tmp_path, _yaml.safe_dump({"rag": rag}, sort_keys=True))
         unknown = [i.field for i in AxonConfig.validate(path) if "Unknown key" in i.message]
