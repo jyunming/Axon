@@ -108,7 +108,9 @@ def _read_json(path: Path) -> dict:
 
 
 def _write_json(path: Path, data: dict) -> None:
-    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    from axon._atomic_persist import write_json_if_changed
+
+    write_json_if_changed(path, data, {}, indent=2)
     # Set permissions: manifest is 644 (world-readable), keys is 600 (owner only)
     if path.name == ".share_manifest.json":
         try:

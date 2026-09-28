@@ -57,17 +57,15 @@ notes — full detail lives there. This is a scannable index.
 - **Atomic file writes are still hand-rolled in several places.**
   `_atomic_persist.py` now has `write_json_if_changed()`,
   `write_bytes_if_changed()` and `write_text_if_changed()` (the latter two
-  added in `2427be1`), used by `graph_rag.py`, `code_graph.py` and all three
-  config-reset paths. Still not using them:
+  added in `2427be1`), used by `graph_rag.py`, `code_graph.py`, all three
+  config-reset paths, and the project/share/mount/session metadata writers.
+  Still not using them:
   - `security/crypto.py`, `security/master.py`, `security/seal.py`,
     `security/share.py` — hand-rolled tempfile+`os.replace` (some need
     crash-safe two-phase writes the helpers don't support; `2427be1`
     explicitly deferred them).
   - `retrievers.py`'s `BM25Retriever.save()` — the same pattern hand-rolled
     four times inside one method.
-  - `shares.py`, `mounts.py`, `projects.py` — `meta.json` / mount descriptor /
-    share manifest written with a bare `write_text()`, **no atomicity at all**:
-    a crash mid-write leaves a truncated file. The worst case of the three.
 - **Private helpers used as public API.** `seal._should_seal` (imported by
   `cache.py` and `share.py`) and `BM25Retriever._ensure_corpus_materialized`
   (called by `AxonBrain.delete_documents` via `getattr`, because
@@ -136,7 +134,10 @@ deleted, #157); `fuse_sparse` reimplementing `weighted_score_fusion`
 confirmation prompts (`df49862`); `llm.py`'s five unlocked client-factory
 caches (`15806a1`); `OpenLLM.ping_local()` vs `doctor.check_local_llm_reachable()`
 (`8d3e933`); per-instance LLMLingua loading (`ccf2c16`); two PID-liveness checks
-(`_pid_check.py`); per-surface delete logic (`AxonBrain.delete_documents`, #169).
+(`_pid_check.py`); per-surface delete logic (`AxonBrain.delete_documents`, #169);
+bare, non-atomic `write_text()` for `meta.json` / `store_meta.json` / share
+manifests / mount descriptors / session files (now `_atomic_persist`, which
+also gives each writer its own temp file).
 
 ---
 
@@ -948,7 +949,7 @@ Role: Governance/audit backend for the Operator Console — a SQLite-first (JSON
 
 - **Project listing walks meta.json twice, in two shapes.** `projects.list_projects()` / `_list_sub_projects()` (`projects.py:556`, `:471`) build a recursive tree of project dicts (name/description/created_at/path/maintenance_state/graph_backend/children) purely by reading `meta.json` files directly. `mounts.list_mount_descriptors()` and `projects.list_share_mounts()` independently do a similar directory-scan-plus-JSON-parse pattern over `mounts/`. There's no shared "scan a directory of dirs, parse each meta/descriptor JSON, skip on parse error" helper — the same defensive try/except JSON-read loop is duplicated four times (`_list_sub_projects`, `list_projects`, `list_mount_descriptors`, `list_share_mounts`). Still present, unchanged since the 2026-08-28 audit. A shared internal iterator could reduce duplication if this file set is ever refactored.
 - **Two independent "is this share still good" checks.** `mounts.validate_mount_descriptor()` (`mounts.py:172`) checks `revoked`/`state`/target-existence on a descriptor, while `shares.validate_received_shares()` (`shares.py:399`) separately re-derives revoked/expired status by re-reading the *owner's* manifest and comparing key_ids. These overlap conceptually (both answer "is this mount still valid?") but check different sources of truth (local descriptor state vs. owner's manifest) — worth documenting clearly so a future caller doesn't assume one implies the other, since a descriptor can look locally "active" while the owner's manifest already shows it revoked (that's exactly the gap `validate_received_shares` exists to close, but it's not obvious from `validate_mount_descriptor` alone). Still present, unchanged.
-- **Non-atomic writes in this file set are a strictly weaker variant of the "atomic file writes reimplemented" duplication flagged for Security below.** `shares._write_json()` (`shares.py:110`), `mounts.create_mount_descriptor()` (`mounts.py:122`), and `projects._ensure_single_project()`/`_ensure_single_project_at()`/`ensure_user_project()` (`projects.py:301-314`, `713-730`, `743-754`) all persist JSON via a bare `path.write_text(...)` — no tempfile, no `os.replace`, so a crash mid-write can leave a truncated/unparsable descriptor or `meta.json`. This is worse than Security's hand-rolled tempfile+replace pattern, not just a duplicate of it. It was explicitly named as deferred follow-up work in the commit that added `_atomic_persist.write_bytes_if_changed()`/`write_text_if_changed()` (which currently only `config.py` uses): "Remaining 14 lower-risk sites from the audit (shares.py, sessions.py, projects.py's meta.json, mounts.py, sentence_window.py, etc.) are left for a follow-up pass." Migrating these three files to `write_json_if_changed()` (or the new bytes/text siblings) would both fix the atomicity gap and remove the duplicated scan-and-persist boilerplate in one pass.
+- **Metadata writes are atomic (resolved).** `shares._write_json()`, `mounts.create_mount_descriptor()`, `projects.py`'s `meta.json` / `store_meta.json` / active-project writers and `sessions._save_session()` used to write with a bare `write_text()` / `open("w")`, so a crash mid-write could leave a truncated `meta.json` or descriptor. They now all go through `_atomic_persist.write_json_if_changed(..., indent=2)` (`write_text_if_changed` for the active-project file), keeping the files' human-readable format. Remaining gap: a temp file orphaned by a process killed mid-write is skipped by `project_pack` (`is_atomic_tmp`) but not yet by sealing (`security/seal.py`) or the sealed plaintext cache (`security/cache.py`), and nothing sweeps them.
 - **`project_pack._resolve_project_dir()` is a third independent copy of the "resolve a project name against an explicit user_dir, honoring `subs/` nesting" pattern**, after `projects.project_dir()` (resolves against the process-global `PROJECTS_ROOT`) and `security.seal._resolve_project_dir()` (`seal.py:256`, resolves against an explicit `user_dir` for the same reason: CLI's early-exit path never calls `set_projects_root()`). `project_pack.py:49`'s docstring explicitly acknowledges duplicating rather than importing `seal`'s version. Not a bug — each copy exists for a documented reason — but a shared `resolve_project_dir_at(name, user_dir)` helper (in `projects.py`, imported by both `seal.py` and `project_pack.py`) would remove the third near-identical implementation.
 
 ---
@@ -1531,7 +1532,9 @@ already does as a strict superset — 57→56), and `pack_project`/`unpack_proje
 ### `src/axon/_atomic_persist.py`
 **Role:** Shared atomic-write-if-changed helpers for persistence, extracted from `GraphRagMixin._gr_write_json_if_changed` so `CodeGraphMixin._save_code_graph` (and any future persistence code) share one digest-cached, crash-safe write path instead of maintaining divergent implementations. As of commit `2427be1`, grew two non-JSON siblings so `config.py`'s `AxonConfig.save()`, the first-run config scaffold write, and all three independent "reset config.yaml to defaults" call sites (`cli.py --config-reset`, `api_routes/config_routes.py POST /config/reset`, `repl.py /config reset`) go through the same atomicity contract instead of each doing a plain `open(...).write()`.
 
-- `write_json_if_changed(path, payload, cache, *, sort_keys=False)` — atomically writes JSON to `path` via SHA-1-digest-gated skip-if-unchanged, using `axon.version_marker._atomic_replace` for a crash/OneDrive-safe rename; returns `True` if it wrote, `False` if skipped — `_atomic_persist.py:19`
+- `write_json_if_changed(path, payload, cache, *, sort_keys=False, indent=None, ensure_ascii=True)` — atomically writes JSON to `path` via SHA-1-digest-gated skip-if-unchanged, using `axon.version_marker._atomic_replace` for a crash/OneDrive-safe rename; returns `True` if it wrote, `False` if skipped. Compact by default; with `indent` it serializes exactly like `json.dumps(payload, indent=...)` (the human-readable metadata files use `indent=2`) — `_atomic_persist.py`
+- `_tmp_path(p)` — per-writer temp name (`<name>.<pid>.<random>.tmp`) used by all three writers, so two processes writing the same file (e.g. `axon-api` and a one-off CLI both touching `meta.json`) can't clobber each other's temp file; a failed temp write removes its partial temp instead of orphaning it — `_atomic_persist.py`
+- `is_atomic_tmp(path)` — true for a temp file left by these writers (only a process killed between write and rename can leave one). Anything that copies a whole project directory should skip these; `project_pack.pack_project` does — `_atomic_persist.py`
 - `write_bytes_if_changed(path, payload, cache)` — **new** (commit `2427be1`): same digest-cache/skip-if-unchanged/Windows-safe-replace contract as `write_json_if_changed`, for raw `bytes` payloads (msgpack, pre-encoded YAML/text, key material) that aren't JSON. Pass a throwaway `{}` for `cache` on one-shot writers with no cross-call digest reuse need — `_atomic_persist.py:62`
 - `write_text_if_changed(path, text, cache, *, encoding="utf-8")` — **new** (commit `2427be1`): thin wrapper over `write_bytes_if_changed()` for plain-text content (YAML, `.env`-style key=value files, newline-joined lists) — `_atomic_persist.py:96`
 

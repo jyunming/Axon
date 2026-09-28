@@ -3163,7 +3163,7 @@ def test_config_reset_second_call_is_a_no_op_write(tmp_path):
         client.post("/config/reset")
         response = client.post("/config/reset")
     assert response.status_code == 200
-    assert not target.with_suffix(target.suffix + ".tmp").exists()
+    assert not list(target.parent.glob(target.name + "*.tmp"))
 
 
 def test_list_sessions_no_brain():

@@ -2229,4 +2229,4 @@ class TestReplConfigReset:
         with patch("axon.repl._confirm", return_value=True):
             _handle_config_cmd("reset", None, str(target))
             _handle_config_cmd("reset", None, str(target))
-        assert not target.with_suffix(target.suffix + ".tmp").exists()
+        assert not list(target.parent.glob(target.name + "*.tmp"))

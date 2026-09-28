@@ -31,6 +31,7 @@ from importlib.metadata import version as _pkg_version
 from pathlib import Path
 from typing import Any
 
+from ._atomic_persist import is_atomic_tmp, write_json_if_changed
 from .projects import _parse_name
 
 __all__ = ["ProjectPackError", "pack_project", "unpack_project"]
@@ -147,8 +148,8 @@ def pack_project(
             }
             zf.writestr(MANIFEST_NAME, json.dumps(manifest, indent=2))
             for src in sorted(project_dir.rglob("*")):
-                if not src.is_file():
-                    continue
+                if not src.is_file() or is_atomic_tmp(src):
+                    continue  # (a crashed atomic write's leftover temp file)
                 rel = src.relative_to(project_dir)
                 if external_db is not None and rel == local_db_rel:
                     continue  # superseded by the external, authoritative copy below
@@ -209,11 +210,11 @@ def _ensure_ancestor_skeleton(ancestor_dir: Path) -> None:
         (ancestor_dir / d).mkdir(parents=True, exist_ok=True)
     meta_path = ancestor_dir / "meta.json"
     if not meta_path.exists():
-        meta_path.write_text(
-            json.dumps(
-                {"name": ancestor_dir.name, "created_at": datetime.now(timezone.utc).isoformat()}
-            ),
-            encoding="utf-8",
+        write_json_if_changed(
+            meta_path,
+            {"name": ancestor_dir.name, "created_at": datetime.now(timezone.utc).isoformat()},
+            {},
+            indent=2,
         )
 
 

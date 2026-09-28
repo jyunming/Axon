@@ -119,8 +119,10 @@ def create_mount_descriptor(
     }
     desc_dir = mount_descriptor_dir(grantee_user_dir, mount_name)
     desc_dir.mkdir(parents=True, exist_ok=True)
-    mount_descriptor_path(grantee_user_dir, mount_name).write_text(
-        json.dumps(descriptor, indent=2), encoding="utf-8"
+    from axon._atomic_persist import write_json_if_changed
+
+    write_json_if_changed(
+        mount_descriptor_path(grantee_user_dir, mount_name), descriptor, {}, indent=2
     )
     return descriptor
 

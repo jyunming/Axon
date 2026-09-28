@@ -155,7 +155,7 @@ def test_bytes_no_stray_tmp_file_left_behind(tmp_path):
     cache: dict[str, str] = {}
     write_bytes_if_changed(path, b"v1", cache)
     write_bytes_if_changed(path, b"v1", cache)
-    assert not path.with_suffix(path.suffix + ".tmp").exists()
+    assert not list(path.parent.glob(path.name + "*.tmp"))
 
 
 def test_text_writes_new_file(tmp_path):

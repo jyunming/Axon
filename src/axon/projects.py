@@ -53,6 +53,8 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from axon._atomic_persist import write_json_if_changed, write_text_if_changed
+
 logger = logging.getLogger(__name__)
 
 
@@ -299,18 +301,17 @@ def _ensure_single_project(name: str, description: str, graph_backend: str | Non
     (root / "sessions").mkdir(parents=True, exist_ok=True)
     meta_file = root / "meta.json"
     if not meta_file.exists():
-        meta_file.write_text(
-            json.dumps(
-                {
-                    "name": name,
-                    "description": description,
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                    "project_id": build_project_id("proj"),
-                    "graph_backend": graph_backend or "graphrag",
-                },
-                indent=2,
-            ),
-            encoding="utf-8",
+        write_json_if_changed(
+            meta_file,
+            {
+                "name": name,
+                "description": description,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "project_id": build_project_id("proj"),
+                "graph_backend": graph_backend or "graphrag",
+            },
+            {},
+            indent=2,
         )
     else:
         meta = json.loads(meta_file.read_text(encoding="utf-8"))
@@ -331,7 +332,7 @@ def _ensure_single_project(name: str, description: str, graph_backend: str | Non
                 f"stored='{meta['graph_backend']}', requested='{graph_backend}'"
             )
         if changed:
-            meta_file.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+            write_json_if_changed(meta_file, meta, {}, indent=2)
     return root
 
 
@@ -416,7 +417,7 @@ def get_or_create_node_id(user_dir: Path) -> str:
     new_nid = str(_uuid.uuid4())
     meta["node_id"] = new_nid
     try:
-        store_meta.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        write_json_if_changed(store_meta, meta, {}, indent=2)
     except OSError:
         # Persistence failed — return the value anyway so the current
         # bump can proceed; the next call will retry the write.
@@ -544,7 +545,7 @@ def set_maintenance_state(name: str, state: str) -> None:
         raise ValueError(f"Could not read meta.json for '{name}': {exc}") from exc
     old_state = data.get("maintenance_state", "normal")
     data["maintenance_state"] = state
-    meta_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    write_json_if_changed(meta_path, data, {}, indent=2)
     logger.info(
         "audit: project '%s' maintenance_state %s → %s",
         name,
@@ -647,7 +648,7 @@ def set_active_project(name: str) -> None:
     """
     try:
         _ACTIVE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _ACTIVE_FILE.write_text(name, encoding="utf-8")
+        write_text_if_changed(_ACTIVE_FILE, name, {})
     except OSError:
         # Non-fatal: isolated/test environments may not have write access to
         # the home directory. The in-memory switch still takes effect.
@@ -710,23 +711,22 @@ def ensure_user_project(user_dir: Path) -> None:
     if not store_meta.exists():
         import uuid as _uuid
 
-        store_meta.write_text(
-            json.dumps(
-                {
-                    "store_version": 2,
-                    "store_scope": "user_scoped",
-                    "store_id": build_project_id("store"),
-                    # v0.4.0 Item 4a — random UUID per store. Replaces
-                    # the OS hostname previously written into version.json
-                    # markers; identifies the source of writes for stale-
-                    # ness detection without leaking machine identity to
-                    # anyone watching the synced filesystem.
-                    "node_id": str(_uuid.uuid4()),
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                },
-                indent=2,
-            ),
-            encoding="utf-8",
+        write_json_if_changed(
+            store_meta,
+            {
+                "store_version": 2,
+                "store_scope": "user_scoped",
+                "store_id": build_project_id("store"),
+                # v0.4.0 Item 4a — random UUID per store. Replaces
+                # the OS hostname previously written into version.json
+                # markers; identifies the source of writes for stale-
+                # ness detection without leaking machine identity to
+                # anyone watching the synced filesystem.
+                "node_id": str(_uuid.uuid4()),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+            {},
+            indent=2,
         )
 
 
@@ -740,23 +740,22 @@ def _ensure_single_project_at(root: Path, name: str, description: str) -> Path:
     (root / "sessions").mkdir(parents=True, exist_ok=True)
     meta_file = root / "meta.json"
     if not meta_file.exists():
-        meta_file.write_text(
-            json.dumps(
-                {
-                    "name": name,
-                    "description": description,
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                    "project_id": build_project_id("proj"),
-                },
-                indent=2,
-            ),
-            encoding="utf-8",
+        write_json_if_changed(
+            meta_file,
+            {
+                "name": name,
+                "description": description,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "project_id": build_project_id("proj"),
+            },
+            {},
+            indent=2,
         )
     else:
         meta = json.loads(meta_file.read_text(encoding="utf-8"))
         if "project_id" not in meta:
             meta["project_id"] = build_project_id("proj")
-            meta_file.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+            write_json_if_changed(meta_file, meta, {}, indent=2)
     return root
 
 
