@@ -201,8 +201,6 @@ async def ingest_data(
         "documents_ingested": None,
         "error": None,
     }
-    rid = getattr(req.state, "request_id", job_id)
-    surface = getattr(req.state, "surface", "api")
 
     def _make_progress_callback(job: dict):
         def _cb(phase: str, **kwargs) -> None:
@@ -217,7 +215,6 @@ async def ingest_data(
         return _cb
 
     def process_ingestion():
-        from axon import governance as gov
         from axon.loaders import DirectoryLoader
 
         # Capture reference once so repeated dict lookups can't KeyError if the
@@ -225,17 +222,6 @@ async def ingest_data(
         job = _api._jobs.get(job_id)
         if job is None:
             return
-        project = getattr(brain, "_active_project", "default")
-        gov.emit(
-            "ingest_started",
-            "file",
-            str(requested_path),
-            project=project,
-            status="started",
-            details={"job_id": job_id},
-            surface=surface,
-            request_id=rid,
-        )
         try:
             job["phase"] = "loading"
             loader_mgr = DirectoryLoader()
@@ -255,31 +241,12 @@ async def ingest_data(
             job["phase"] = "completed"
             job["documents_ingested"] = len(docs)
             job["completed_at"] = datetime.now(timezone.utc).isoformat()
-            gov.emit(
-                "ingest_completed",
-                "file",
-                str(requested_path),
-                project=project,
-                details={"job_id": job_id, "documents_ingested": len(docs)},
-                surface=surface,
-                request_id=rid,
-            )
         except Exception as e:
             logger.error(f"Error during ingestion: {e}")
             job["status"] = "failed"
             job["phase"] = "failed"
             job["error"] = str(e)
             job["completed_at"] = datetime.now(timezone.utc).isoformat()
-            gov.emit(
-                "ingest_failed",
-                "file",
-                str(requested_path),
-                project=project,
-                status="failed",
-                details={"job_id": job_id, "error": "ingest error"},
-                surface=surface,
-                request_id=rid,
-            )
 
     background_tasks.add_task(process_ingestion)
     return {
@@ -683,34 +650,15 @@ async def ingest_upload(
 
 
 @router.post("/delete")
-async def delete_documents(
-    request: DeleteRequest,
-    req: Request,
-):
+async def delete_documents(request: DeleteRequest):
     from axon import api as _api
-    from axon import governance as gov
 
     brain = _api.brain
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
-    rid = getattr(req.state, "request_id", "")
-    surface = getattr(req.state, "surface", "api")
-    project = getattr(brain, "_active_project", "default")
     try:
         _enforce_write_access(brain, "delete")
-        result = brain.delete_documents(request.doc_ids)
-        existing_ids = result["doc_ids"]
-        not_found = result["not_found"]
-        gov.emit(
-            "delete",
-            "document",
-            ",".join(existing_ids[:10]),
-            project=project,
-            details={"deleted": len(existing_ids), "not_found": len(not_found)},
-            surface=surface,
-            request_id=rid,
-        )
-        return result
+        return brain.delete_documents(request.doc_ids)
     except HTTPException:
         raise
     except Exception as e:

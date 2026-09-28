@@ -11,7 +11,7 @@ These auxiliary paths bypass the X-API-Key middleware (`/brand/`, `/gui/`,
 
 > Every endpoint below is also reachable under `/v1/...` (every router is dual-mounted at the root and the `/v1` prefix). The `/v1` mount is the recommended path for clients that pin to a major API version.
 
-> **Operators:** for governance runbooks, maintenance state workflows, and the complete CLI/REPL/MCP reference, see [ADMIN_REFERENCE.md](ADMIN_REFERENCE.md).
+> **Operators:** for operations runbooks, maintenance state workflows, and the complete CLI/REPL/MCP reference, see [ADMIN_REFERENCE.md](ADMIN_REFERENCE.md).
 
 ---
 
@@ -510,23 +510,3 @@ All endpoints return standard HTTP status codes:
 
 Error bodies always include a `"detail"` field with a human-readable message.
 
----
-
-## Governance Routes `/governance/*`
-
-Operator console routes for audit log, project state, and Copilot session management.
-Requires no additional auth beyond the standard `X-API-Key` header.
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/governance/overview` | Aggregated operator status (project, graph, leases, Copilot) |
-| `GET` | `/governance/audit` | Audit log (`?project=&action=&surface=&status=&since=&limit=50`) |
-| `GET` | `/governance/copilot/sessions` | Active + recent Copilot bridge sessions |
-| `GET` | `/governance/projects` | All projects with maintenance + graph state |
-| `POST` | `/governance/graph/rebuild` | Audited graph community rebuild |
-| `POST` | `/governance/project/maintenance` | Audited maintenance state change (`?name=&state=`) |
-| `POST` | `/governance/copilot/session/{id}/expire` | Force-close a stuck Copilot session |
-
-All write routes emit `X-Request-ID` into the audit trail for end-to-end traceability.
-
-See [GOVERNANCE_CONSOLE.md](GOVERNANCE_CONSOLE.md) for full schema, runbooks, and the VS Code panel guide.

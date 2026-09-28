@@ -338,7 +338,7 @@ This matrix applies to **plaintext sharing** only. Sealed sharing works through 
 | **Local disk** (NTFS / ext4 / APFS / ZFS) | Safe | Single-writer owner, many-reader grantees on the same machine works out of the box. |
 | **On-premises SMB3 on Windows Server 2019+** | Safe, with caveats | Grantees must be Windows-native (not WSL). SMB3 leases give the reader a coherent view. Avoid SQLite-backed components on the share. |
 | **DFS Namespace (DFS-N, without DFS-R)** | Thin alias | Pure referral layer over a single SMB server. Inherits whatever that SMB share gives you. |
-| **Azure Files (SMB3.1.1)** | Usable for reads | Continuous-Availability retry window hangs clients for minutes during drops. Keep `.governance.db` on local disk. |
+| **Azure Files (SMB3.1.1)** | Usable for reads | Continuous-Availability retry window hangs clients for minutes during drops. Keep SQLite-backed state (e.g. `.dynamic_graph.db`) on local disk. |
 | **OneDrive** (Personal / Business / SharePoint) | Unsafe for plaintext | Files On-Demand placeholders hang `mmap`; `-wal`/`-shm` sidecars sync out of order and corrupt SQLite; conflict copies silently ignored. Use sealed mode instead. |
 | **Dropbox** (Personal / Business) | Unsafe for plaintext | Same SQLite sidecar reorder; conflicted copy files silently ignored. Use sealed mode instead. |
 | **Google Drive for Desktop** (Mirror or Stream) | Unsafe for plaintext | Same SQLite corruption; `.tmp.drivedownload` clutter; Stream mode cache evicts mid-query. Use sealed mode instead. |
@@ -352,7 +352,7 @@ This matrix applies to **plaintext sharing** only. Sealed sharing works through 
 |---|---|---|
 | Local disk | TurboQuantDB (default) | Single-binary mmap, best recall/size tradeoff. |
 | SMB3 / DFS-N | TurboQuantDB or LanceDB | TurboQuantDB for small/medium corpora; LanceDB's immutable fragments replicate cleanly when the owner compacts on a schedule. |
-| Azure Files | TurboQuantDB | Keep `.governance.db` off the share. |
+| Azure Files | TurboQuantDB | Keep SQLite-backed state (e.g. `.dynamic_graph.db`) off the share. |
 
 Do not use Chroma on any shared, network, or cloud-sync path. Chroma is also not supported in sealed mode (requires SQLCipher — a separate, larger project).
 

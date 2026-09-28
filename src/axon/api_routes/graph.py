@@ -43,7 +43,7 @@ async def get_graph_status():
 
 
 @router.post("/graph/finalize")
-async def finalize_graph(request: Request):
+async def finalize_graph():
     """Trigger an explicit community rebuild.
 
     When the active backend has no community step (e.g. ``dynamic_graph``),
@@ -53,7 +53,6 @@ async def finalize_graph(request: Request):
     import asyncio
 
     from axon import api as _api
-    from axon import governance as gov
 
     brain = _api.brain
     if not brain:
@@ -62,27 +61,12 @@ async def finalize_graph(request: Request):
     backend = getattr(brain, "_graph_backend", None)
     if backend is None:
         raise HTTPException(status_code=503, detail="No graph backend attached")
-    rid = getattr(request.state, "request_id", "")
-    surface = getattr(request.state, "surface", "api")
-    project = getattr(brain, "_active_project", "default")
     try:
         result = await asyncio.to_thread(backend.finalize, True)
         finalize_status = getattr(result, "status", "ok")
         finalize_detail = getattr(result, "detail", "")
         backend_id = getattr(result, "backend_id", "")
         summary_count = getattr(result, "communities_built", 0)
-        gov.emit(
-            "graph_finalize",
-            "graph",
-            project,
-            project=project,
-            details={
-                "community_summary_count": summary_count,
-                "backend_status": finalize_status,
-            },
-            surface=surface,
-            request_id=rid,
-        )
         return {
             "status": finalize_status,
             "community_summary_count": summary_count,

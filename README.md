@@ -112,12 +112,11 @@ Files are ciphertext on disk — cloud providers see only encrypted bytes.
 <tr>
 <td width="50%" valign="top">
 
-### 🛡️ Governance & Agents
-- **Governance Console** — full audit trail of every query
+### 🛡️ Operations & Agents
 - Graceful maintenance states: `normal → draining → readonly → offline`
-- **REST API** — 73 endpoints with Swagger docs at `/docs`
+- **REST API** — 68 endpoints with Swagger docs at `/docs`
 - **MCP server** — 51 tools for Claude Code, Codex, Gemini, Cursor, Copilot
-- **`@axon`** VS Code chat participant with Graph and Governance panels
+- **`@axon`** VS Code chat participant with Graph panels
 
 </td>
 </tr>
@@ -228,7 +227,7 @@ command or dependency needed — the GUI ships with the server.
 
 <br/>
 
-Install the bundled VSIX to unlock the **`@axon` chat participant**, **Knowledge Graph panel**, **Code Graph panel**, and **Governance dashboard** — directly inside VS Code alongside Copilot.
+Install the bundled VSIX to unlock the **`@axon` chat participant**, **Knowledge Graph panel** and **Code Graph panel** — directly inside VS Code alongside Copilot.
 
 ```
 Extensions panel  →  "..."  →  Install from VSIX...
@@ -237,7 +236,7 @@ Extensions panel  →  "..."  →  Install from VSIX...
 
 Or connect via MCP for Copilot agent mode — point `.vscode/mcp.json` at `axon-mcp` and all 51 tools appear in the agent hammer menu automatically.
 
-> The VS Code extension surfaces **39 LM tools** to Copilot Chat, covering core RAG operations, sealed-store security, sharing, and governance.
+> The VS Code extension surfaces **39 LM tools** to Copilot Chat, covering core RAG operations, sealed-store security, and sharing.
 
 **[Full setup guide →](https://github.com/jyunming/Axon/blob/main/docs/SETUP.md)**
 
@@ -300,7 +299,6 @@ Per-call overrides (e.g. force HyDE for one question): `retriever.with_overrides
 | 💻 | **[Code RAG Guide](https://github.com/jyunming/Axon/blob/main/docs/CODE_RAG_GUIDE.md)** | Code graph retrieval and structural search |
 | 🤝 | **[AxonStore](https://github.com/jyunming/Axon/blob/main/docs/AXON_STORE.md)** | Multi-user sharing, revocation, and the lease lifecycle |
 | 🔐 | **[Sharing Guide](https://github.com/jyunming/Axon/blob/main/docs/SHARING.md)** | Plaintext and sealed sharing — which filesystems are safe, OneDrive/Dropbox/Google Drive setup, revocation |
-| 📊 | **[Governance Console](https://github.com/jyunming/Axon/blob/main/docs/GOVERNANCE_CONSOLE.md)** | Audit trail, maintenance runbook, session management |
 | 📈 | **[Evaluation Guide](https://github.com/jyunming/Axon/blob/main/docs/EVALUATION.md)** | RAGAS metrics, running evals, building testsets |
 | 🛠️ | **[Development Guide](https://github.com/jyunming/Axon/blob/main/docs/DEVELOPMENT.md)** | Tests, contributing, pre-commit hooks, packaging & release |
 

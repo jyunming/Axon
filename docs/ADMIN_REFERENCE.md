@@ -371,7 +371,7 @@ axon> Compare @report.pdf with @notes.docx
 
 ## 4. REST API Reference
 
-**73 endpoints** across 12 route files. Base URL: `http://localhost:8420` (default).
+**68 endpoints** across 11 route files. Base URL: `http://localhost:8420` (default).
 
 Interactive docs: `/docs` (Swagger UI), `/redoc` — both branded with the Axon favicon. `/favicon.ico` redirects (302) to `/brand/axon-favicon.svg`; `/brand/*` is a static mount of `src/axon/brand/`. These paths (plus `/gui/`, `/health/live`, `/metrics`) bypass the optional `X-API-Key` middleware so browsers can fetch the docs UI without credentials.
 
@@ -500,19 +500,12 @@ Interactive docs: `/docs` (Swagger UI), `/redoc` — both branded with the Axon 
 | `POST` | `/query/visualize` | Run a query and return HTML with LLM answer, citations, and highlighted graph |
 | `POST` | `/search/visualize` | Same as `/query/visualize` but skips LLM generation |
 
-### 4.8 Governance & Operations
+### 4.8 Maintenance & Operations
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/governance/overview` | Active project count, session count, active lease count |
-| `GET` | `/governance/audit` | Per-query event log. Params: `limit`, `project`, `surface` |
-| `GET` | `/governance/copilot/sessions` | Active Copilot agent sessions |
-| `GET` | `/governance/projects` | Per-project audit statistics |
-| `POST` | `/governance/graph/rebuild` | Rebuild entity graph for a specific project (admin use) |
-| `POST` | `/governance/project/maintenance` | Set project maintenance state: `normal | draining | readonly | offline` |
-| `POST` | `/governance/copilot/session/{session_id}/expire` | Force-expire a Copilot session |
-| `POST` | `/project/maintenance` | Set maintenance state for the active project |
-| `GET` | `/project/maintenance` | Get current maintenance state of the active project |
+| `POST` | `/project/maintenance` | Set a project's maintenance state. JSON body: `{"name": "<project>", "state": "normal" \| "draining" \| "readonly" \| "offline"}` |
+| `GET` | `/project/maintenance` | Get a project's current maintenance state. Query: `?name=<project>` |
 | `GET` | `/registry/leases` | Active write-lease counts per project |
 
 **Maintenance state lifecycle:**
@@ -546,7 +539,7 @@ Exposed metrics: `axon_requests_total` (Counter, labels: `path/method/status`), 
 
 > **Rate limiting:** `/share`, `/ingest`, and `/security` endpoints enforce per-IP rate limiting (default: 10 requests per 60-second window). Requests exceeding the limit receive HTTP `429 Too Many Requests`.
 
-> **Request ID tracking:** every API response includes an `X-Request-ID` header. Governance write routes also emit this value into the audit trail for end-to-end log correlation.
+> **Request ID tracking:** every API response includes an `X-Request-ID` header (echoing the caller's value when one is sent) for end-to-end log correlation.
 
 ---
 
@@ -899,7 +892,7 @@ YAML section: `offline:`
 | `api.allow_origins` | list | `[]` | CORS allowed origins (e.g. `["http://localhost:3000"]`) |
 | `api.max_upload_bytes` | int | `524288000` | Maximum file size per `/ingest/upload` multipart upload in bytes (default 500 MiB); requests exceeding this receive HTTP `413` |
 | `api.max_files_per_request` | int | `1000` | Maximum files per `/ingest/upload` batch request; requests exceeding this receive HTTP `422` |
-| `api.host` | str | `127.0.0.1` | CLI/REPL client-side "where to look for a running server" default (single-instance detection, `axon --governance`, REPL `/governance`). Not read by `axon-api` itself for its bind address — see `--host`/`AXON_HOST` below. |
+| `api.host` | str | `127.0.0.1` | CLI/REPL client-side "where to look for a running server" default (single-instance detection and CLI/REPL commands that proxy to a running server). Not read by `axon-api` itself for its bind address — see `--host`/`AXON_HOST` below. |
 | `api.port` | int | `8420` | Both the client-side default above *and* a fallback the server itself binds to when neither `--port` nor `AXON_PORT` is set (see §1's precedence order) |
 
 Environment variables for the API server:
@@ -975,51 +968,37 @@ YAML section: `repl:`
 
 ---
 
-## 7. Governance Runbook
+## 7. Operations Runbook
 
 ### 7.1 Check System Health
 
 ```bash
 curl http://localhost:8420/health
-curl http://localhost:8420/governance/overview
+curl http://localhost:8420/registry/leases
 ```
 
-### 7.2 Audit Query Activity
-
-```bash
-# Last 50 queries across all projects
-curl "http://localhost:8420/governance/audit?limit=50"
-# Filter by project
-curl "http://localhost:8420/governance/audit?project=my-project&limit=20"
-# Filter by surface (api | mcp | vscode | repl | cli)
-curl "http://localhost:8420/governance/audit?surface=mcp"
-```
-
-### 7.3 Put a Project Into Maintenance
+### 7.2 Put a Project Into Maintenance
 
 ```bash
 # Check leases first
 curl http://localhost:8420/registry/leases
 # Wait for active_leases == 0, then transition
-curl -X POST http://localhost:8420/governance/project/maintenance \
+curl -X POST http://localhost:8420/project/maintenance \
   -H "Content-Type: application/json" \
-  -d '{"project": "my-project", "state": "readonly"}'
+  -d '{"name": "my-project", "state": "readonly"}'
 # Fully offline
-curl -X POST http://localhost:8420/governance/project/maintenance \
-  -d '{"project": "my-project", "state": "offline"}'
+curl -X POST http://localhost:8420/project/maintenance \
+  -H "Content-Type: application/json" \
+  -d '{"name": "my-project", "state": "offline"}'
 # Restore
-curl -X POST http://localhost:8420/governance/project/maintenance \
-  -d '{"project": "my-project", "state": "normal"}'
+curl -X POST http://localhost:8420/project/maintenance \
+  -H "Content-Type: application/json" \
+  -d '{"name": "my-project", "state": "normal"}'
+# Inspect the current state
+curl "http://localhost:8420/project/maintenance?name=my-project"
 ```
 
-### 7.4 Force-Expire a Stuck Session
-
-```bash
-curl http://localhost:8420/governance/copilot/sessions
-curl -X POST http://localhost:8420/governance/copilot/session/<session_id>/expire
-```
-
-### 7.5 Rebuild GraphRAG Communities
+### 7.3 Rebuild GraphRAG Communities
 
 ```bash
 curl http://localhost:8420/graph/status
@@ -1075,7 +1054,6 @@ curl -X POST http://localhost:8420/graph/finalize
 | Migrate vectors | — | — | ✓ | — |
 | Maintenance state | ✓ | — | — | — |
 | Lease registry | ✓ | — | — | ✓ |
-| Governance audit | ✓ | — | — | — |
 | Self-update (`axon update`) | — | ✓ | ✓ | — |
 
 `axon update` and its startup update-check are deliberately CLI/REPL-only
@@ -1089,7 +1067,6 @@ footgun `axon update` refuses via its single-instance-lock check.
 
 *See [API_REFERENCE.md](API_REFERENCE.md) for full request/response schemas.*
 *See [MCP_TOOLS.md](MCP_TOOLS.md) for MCP tool signatures.*
-*See [GOVERNANCE_CONSOLE.md](GOVERNANCE_CONSOLE.md) for the full audit and monitoring runbook.*
 *See [EVALUATION.md](EVALUATION.md) for RAGAS metrics, smoke tests, and building testsets.*
 *See [OFFLINE_GUIDE.md](OFFLINE_GUIDE.md) for air-gap setup, model pre-download, and local-assets-only mode.*
 *See [SHARING.md](SHARING.md) for plaintext and sealed sharing setup, OneDrive/Dropbox/Google Drive walkthroughs, and the filesystem compatibility matrix.*

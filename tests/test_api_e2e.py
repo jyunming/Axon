@@ -79,7 +79,7 @@ class TestApiUpdateCheckBackgroundTask:
 
         # _background_tasks is a module-level global shared across the whole
         # test session — other tests elsewhere that also exercise lifespan()
-        # (TestApiE2E, test_governance.py, etc.) may leave an entry still
+        # (TestApiE2E, etc.) may leave an entry still
         # pending when this test starts. Track the delta, not an absolute
         # count.
         pre_existing = set(api_module._background_tasks)

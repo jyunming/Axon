@@ -304,8 +304,8 @@ Served by `axon-api` at no extra cost. If the API is running, just open:
 
 **[http://localhost:8420/gui/](http://localhost:8420/gui/)**
 
-Features: chat, document ingest, graph explorer, knowledge base, governance
-console, project switcher, settings panel.
+Features: chat, document ingest, graph explorer, knowledge base, project
+switcher, settings panel.
 
 **Ingest:** the paperclip / upload button.
 
@@ -520,6 +520,5 @@ To run Axon with no internet at all, or to enforce that all model files are pre-
 | [WEB_SEARCH.md](WEB_SEARCH.md) | Enabling Brave Search fallback when your knowledge base doesn't have the answer |
 | [CODE_RAG_GUIDE.md](CODE_RAG_GUIDE.md) | Code graph retrieval — querying your codebase structurally |
 | [AXON_STORE.md](AXON_STORE.md) | Sharing your knowledge base with teammates using AxonStore |
-| [GOVERNANCE_CONSOLE.md](GOVERNANCE_CONSOLE.md) | Audit trail, maintenance states, session management |
 | [OFFLINE_GUIDE.md](OFFLINE_GUIDE.md) | Running with no internet / pre-downloaded models |
 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | Common errors and fixes |

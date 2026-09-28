@@ -99,8 +99,6 @@ class AxonApp {
             }
         } else if (viewId === 'files') {
             await this.loadFiles();
-        } else if (viewId === 'governance') {
-            await this.loadAuditLogs();
         }
     }
     setupActions() {
@@ -188,9 +186,6 @@ class AxonApp {
                     }
                     if (this.currentView === 'files') {
                         await this.loadFiles();
-                    }
-                    if (this.currentView === 'governance') {
-                        await this.loadAuditLogs();
                     }
                     this.showNotice(`Active project switched to ${nextProject}.`, 'success');
                 } catch (error) {
@@ -366,37 +361,6 @@ class AxonApp {
             totalDocs.textContent = '0';
             totalChunks.textContent = '0';
             fileList.replaceChildren(this.createEmptyState('Err', 'Error loading Knowledge Base.'));
-        }
-    }
-    async loadAuditLogs() {
-        const logsContainer = document.getElementById('audit-logs');
-        try {
-            const response = await api.getAuditLogs();
-            const logs = Array.isArray(response) ? response : (response.events || []);
-            logsContainer.replaceChildren();
-            if (logs.length === 0) {
-                logsContainer.appendChild(this.createEmptyState('Log', 'No audit logs.'));
-                return;
-            }
-            logs.forEach(log => {
-                const item = document.createElement('div');
-                item.className = 'file-item';
-                const timestamp = document.createElement('span');
-                timestamp.textContent = log.timestamp
-                    ? new Date(log.timestamp).toLocaleTimeString()
-                    : 'Unknown';
-                const action = document.createElement('span');
-                action.textContent = log.action || 'unknown';
-                const actor = document.createElement('span');
-                actor.textContent = log.actor || log.user || 'system';
-                const project = document.createElement('span');
-                project.textContent = log.project || 'global';
-                item.append(timestamp, action, actor, project);
-                logsContainer.appendChild(item);
-            });
-        } catch (error) {
-            console.error('Audit log load failed:', error);
-            logsContainer.replaceChildren(this.createEmptyState('Err', 'Error loading logs.'));
         }
     }
 }

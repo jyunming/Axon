@@ -79,12 +79,6 @@ EXPECTED_MCP_TOOL_NAMES = {
     "graph_conflicts",
     "graph_retrieve",
     "get_active_leases",
-    # Governance (added by parity sweep B1)
-    "governance_overview",
-    "governance_audit",
-    "governance_sessions",
-    "governance_projects",
-    "governance_graph_rebuild",
     # Streaming + mount (added by parity sweep B1)
     "query_stream",
     "mount_refresh",

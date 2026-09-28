@@ -285,10 +285,6 @@ class AxonAPI {
             results
         };
     }
-    // Governance
-    async getAuditLogs(limit = 50) {
-        return this.request(`/governance/audit?limit=${limit}`);
-    }
 }
 
 export default new AxonAPI();

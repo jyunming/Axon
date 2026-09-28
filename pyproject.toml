@@ -249,7 +249,6 @@ Documentation = "https://github.com/jyunming/Axon/tree/main/docs"
 "Offline Guide" = "https://github.com/jyunming/Axon/blob/main/docs/OFFLINE_GUIDE.md"
 "Code RAG Guide" = "https://github.com/jyunming/Axon/blob/main/docs/CODE_RAG_GUIDE.md"
 "AxonStore Guide" = "https://github.com/jyunming/Axon/blob/main/docs/AXON_STORE.md"
-"Governance Console" = "https://github.com/jyunming/Axon/blob/main/docs/GOVERNANCE_CONSOLE.md"
 "Issue Tracker" = "https://github.com/jyunming/Axon/issues"
 "Release Notes" = "https://github.com/jyunming/Axon/releases"
 Security = "https://github.com/jyunming/Axon/blob/main/SECURITY.md"
@@ -412,7 +411,6 @@ omit = [
     "*/axon/graph_rag.py",
     "*/axon/query_router.py",
     "*/axon/vector_store.py",
-    "*/axon/governance.py",
     "*/axon/dynamic_graph/*",
     # federated_backend.py is deliberately NOT omitted — it carries the
     # long-term + volatile fusion and now has a dedicated test suite, so its

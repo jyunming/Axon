@@ -1,9 +1,9 @@
 """Path classification for share-mount / cloud-sync safety.
 
-Provides predicates used by SQLite-backed components (governance audit,
-dynamic graph) to recognise paths that sit on filesystems with unreliable
-locking or atomic-rename semantics: consumer cloud-sync folders (OneDrive,
-Dropbox, Google Drive), Windows UNC shares, and WSL-mounted Windows drives.
+Provides predicates used by SQLite-backed components (e.g. the dynamic
+graph) to recognise paths that sit on filesystems with unreliable locking
+or atomic-rename semantics: consumer cloud-sync folders (OneDrive, Dropbox,
+Google Drive), Windows UNC shares, and WSL-mounted Windows drives.
 
 Rationale: SQLite's own maintainers warn that placing a database on such a
 filesystem can produce silent corruption (https://sqlite.org/useovernet.html).
