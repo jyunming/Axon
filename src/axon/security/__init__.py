@@ -266,38 +266,19 @@ def revoke_sealed_share(
 
 
 def validate_received_sealed_shares(user_dir: Path) -> list[str]:
-    """Validate every received sealed mount; remove ones whose owner-side
-    wrap file has disappeared (soft-revoked) or whose target project is
-    no longer accessible.
+    """Reconcile the grantee's received shares (sealed AND plain).
+
+    Thin alias of :func:`axon.share_validity.reconcile_received_mounts`
+    so every surface decides validity the same way: a soft-revoked
+    (wrap deleted) sealed mount is removed with its cached DEK kept, an
+    expired one (signed ``.expiry`` sidecar) is removed with its cached DEK
+    deleted, and an unreachable owner project is KEPT (access is denied
+    until it can be verified again).
     Returns the list of mount names that were removed.
     """
-    try:
-        from axon.mounts import (
-            list_mount_descriptors,
-            remove_mount_descriptor,
-            validate_mount_descriptor,
-        )
-    except ImportError:
-        return []
-    removed: list[str] = []
-    for desc in list_mount_descriptors(user_dir):
-        if desc.get("mount_type") != "sealed":
-            continue
-        ok, _reason = validate_mount_descriptor(desc)
-        if ok:
-            # Also verify the per-share wrap still exists in the owner
-            # project — soft-revoke deletes the wrap file in place.
-            target = desc.get("target_project_dir", "")
-            key_id = desc.get("share_key_id", "")
-            if target and key_id:
-                wrap = Path(target) / ".security" / "shares" / f"{key_id}.wrapped"
-                if not wrap.is_file():
-                    ok = False
-        if not ok:
-            mount_name = desc.get("mount_name") or desc.get("name") or ""
-            if mount_name and remove_mount_descriptor(user_dir, mount_name):
-                removed.append(mount_name)
-    return removed
+    from axon.share_validity import reconcile_received_mounts
+
+    return reconcile_received_mounts(user_dir)
 
 
 def list_sealed_shares(user_dir: Path) -> dict[str, list[dict[str, Any]]]:

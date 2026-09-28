@@ -74,7 +74,7 @@ axon --project mounts/owner_research
 axon --share-revoke <key_id>
 ```
 
-This marks the share as revoked in the manifest. The grantee loses access on the next switch or query.
+This marks the share as revoked in the owner's share manifest. The grantee is refused on their next project switch and on their next query — every surface (CLI, REPL, REST, MCP, VS Code) runs the same check — and their mount entry is removed the next time they list shares or projects. See [How share validity is decided](#how-share-validity-is-decided).
 
 ---
 
@@ -233,7 +233,7 @@ Or in the REPL:
 axon> /share revoke ssk_abc123 --project research
 ```
 
-Marks the share as revoked and deletes both the `.wrapped` file and its `.kek` sidecar so the share string cannot be redeemed again. A grantee who has already redeemed still has the DEK cached in their OS keyring — soft revoke blocks new redemptions but does not remove the cached key, so a cooperative grantee can continue querying indefinitely. Use when the grantee is cooperative or has simply lost access to the machine; use hard revoke when you need to guarantee termination of access.
+Deletes the share's `.wrapped` file (plus its `.kek` and `.expiry` sidecars) so the share string cannot be redeemed again. Once that deletion has synced to the grantee, Axon refuses the mount on their next switch or query and removes the mount entry on their next share/project listing. The grantee's **cached DEK is not deleted** from their OS keyring, though — soft revoke is enforced by the grantee's Axon client, so a grantee running modified software could still decrypt the ciphertext they already have. Use soft revoke when the grantee is cooperative or has simply lost access to the machine; use hard revoke when you need to guarantee termination of access.
 
 **Hard revoke** (slow, re-encrypts everything with a new DEK):
 
@@ -263,7 +263,7 @@ axon --share-list
 |---|---|
 | Cloud provider reads your files (OneDrive, Dropbox, etc.) | Yes — AES-256-GCM ciphertext only |
 | Another OneDrive collaborator reads your project | Yes — they do not have the decryption key |
-| Grantee continues querying after soft revoke | Partial — cached DEK in OS keyring remains valid indefinitely; soft revoke only blocks new redemptions |
+| Grantee continues querying after soft revoke | Partial — Axon refuses the mount once the wrap deletion has synced, but the cached DEK stays in the grantee's OS keyring, so modified client software could still decrypt; use hard revoke for a cryptographic guarantee |
 | Grantee continues querying after hard revoke | Yes — new DEK, old cached key fails with authentication error |
 | Unencrypted temp files on grantee disk during a query | Partial — ephemeral cache lives in OS temp dir during the query session, wiped securely on exit |
 
@@ -275,12 +275,40 @@ axon --share-list
 | `SecurityError: Project DEK file missing` | Project is not sealed, or DEK file was not synced | Run `axon --project-seal <name>` if owner; wait for sync if grantee |
 | `CacheCapacityError: Not enough disk space` | Temp dir needs at least 1.1× the project size free | Free space in OS temp dir or set `TMPDIR` to a larger volume |
 | `SecurityError: Wrapped DEK won't unwrap` / `InvalidTag` | Hard revoke was performed — grantee's cached DEK is stale | Owner must generate a new share; grantee redeems it |
-| `Sealed-share wrap file missing` | Owner revoked or the sync has not delivered the wrap file yet | Wait for sync to complete, then retry |
-| `ShareExpiredError: Sealed share <id> expired at <ts>` | The expiry sidecar's `expires_at` has passed | Owner generates a fresh share with a new `--ttl-days`; grantee redeems. Sealed shares cannot be extended in place — see [Renewing a sealed share](#renewing-a-sealed-share). |
-| `ShareExpiredError: ... signature verification failed` | Sidecar tampered, owner pubkey rotated, or wrong sidecar synced | Owner regenerates the share; grantee redeems. Local DEK + cache + mount descriptor are auto-destroyed; encrypted source files on the synced FS are untouched. |
+| `... has been revoked by the owner (share wrap removed)` | The owner soft- or hard-revoked this share | Ask the owner for a new share |
+| `... cannot be verified` (state `unverifiable`) | The owner's project, share directory, sealed marker or `.expiry` file is not readable yet (offline, sync incomplete, cloud placeholder) | Wait for sync / make the folder "Always keep on this device", then retry — the mount is kept, nothing is deleted |
+| `Share '<project>' (key <id>) expired at <ts>` (state `expired`) | The expiry sidecar's `expires_at` has passed | Owner generates a fresh share with a new `--ttl-days`; grantee redeems. Sealed shares cannot be extended in place — see [Renewing a sealed share](#renewing-a-sealed-share). |
+| `... failed signature or format verification; treating the share as expired` (reason `expiry_unverified`) | Sidecar tampered, owner pubkey rotated, or wrong sidecar synced | Owner regenerates the share; grantee redeems. Local DEK + cache + mount descriptor are auto-destroyed; encrypted source files on the synced FS are untouched. |
 | `404 Not Found` from `POST /share/extend` on a sealed key | Sealed shares (`ssk_*`) are not in the plaintext manifest | Mint a fresh sealed share with `--ttl-days` and revoke the old one |
 | OneDrive shows "Files On-Demand" cloud icons on project files | Files are placeholders and will fail mid-query | Right-click the project folder → "Always keep on this device" |
 | Google Drive Stream mode evicts files | Stream mode removes cached files to free disk space | Switch to Mirror mode in Google Drive preferences |
+
+---
+
+## How share validity is decided
+
+Every surface — `axon --project mounts/...`, REPL `/project switch`, REST `/project/switch`, MCP, VS Code, the per-query check that runs before every retrieval, `@mounts`/`@store` scopes, and the share/project listings — asks one function (`axon.share_validity.share_status`) and gets the same answer. No extra record is kept for this: the authority is the owner-side file that already exists for each share.
+
+| Share kind | Authoritative record (on the owner's synced store) |
+|---|---|
+| Plaintext (`sk_*`) | The key's entry in `<owner>/.shares/.share_manifest.json` (`revoked`, `expires_at`) |
+| Sealed (`ssk_*`) | `<project>/.security/shares/<key_id>.wrapped` exists (deleted on revoke) + the owner-signed `<key_id>.expiry` sidecar, if any |
+
+The grantee's `mounts/<name>/mount.json` and the `received` entries in `.share_keys.json` are only pointers to those records.
+
+| State | Typical `reason` | Access | What happens to the grantee's mount |
+|---|---|---|---|
+| `valid` | `ok` | allowed | kept |
+| `revoked` | `revoked` (plain), `wrap_absent` (sealed) | denied | mount entry removed on the next listing; a sealed share's cached DEK is **kept** |
+| `expired` | `expired`, `expiry_unverified` (sealed sidecar tampered/malformed) | denied | mount entry removed; a sealed share's cached DEK is **deleted** (auto-destroy) |
+| `unverifiable` | `manifest_unreadable`, `record_absent`, `target_missing`, `shares_dir_missing`, `sealed_marker_missing`, `expiry_unreadable` | denied | **kept** — nothing is deleted |
+| `invalid` | `key_id_missing`, `target_unset`, `descriptor_inactive`, … | denied | kept (the local descriptor itself is malformed; re-redeem) |
+
+**Offline / sync rule:** if the owner's record cannot be read — the owner's store is offline, a sync is incomplete, or the file is a cloud placeholder that fails to open — the share is `unverifiable`: access is refused until the record is readable again, but the mount is never deleted, so it comes back by itself once sync catches up. Only a record that positively says *revoked* or *expired* removes anything. Plaintext expiry keeps a 5-minute clock-skew allowance; sealed expiry is checked strictly against the signed timestamp.
+
+`GET /projects` (`shared_mounts`), `GET /share/list` and `list_share_mounts()` report the decision as additive `state` / `reason` fields; `is_broken` is simply "not `valid`". The owner-side view uses the same records: `POST /project/delete` is blocked only by shares that are still `valid` (plaintext or sealed) — revoked or expired shares no longer block deletion. The owner's sealed view reads the `.expiry` timestamp without verifying its signature (that needs the unlocked master key).
+
+A corrupt `.share_manifest.json` or `.share_keys.json` is never silently rewritten: generate / revoke / extend refuse with a "refusing to overwrite" error (REST: `409`) naming the file, so revocation records can't be lost to a truncated sync.
 
 ---
 

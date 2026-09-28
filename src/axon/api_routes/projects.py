@@ -176,14 +176,12 @@ async def get_projects():
     user_dir: Path | None = None
     if brain:
         user_dir = Path(brain.config.projects_root)
+        # One reconcile pass covers plain AND sealed received shares
+        # (axon.share_validity.reconcile_received_mounts).
         try:
             _shares.validate_received_shares(user_dir)
         except Exception as exc:
             logger.warning(f"Could not validate received shares: {exc}")
-        try:
-            _security.validate_received_sealed_shares(user_dir)
-        except Exception as exc:
-            logger.warning(f"Could not validate received sealed shares: {exc}")
     try:
         on_disk = _list_projects()
     except Exception as exc:
@@ -209,6 +207,8 @@ async def get_projects():
                     "project": m["project"],
                     "is_broken": m["is_broken"],
                     "is_shared": True,
+                    "state": m.get("state", "valid"),
+                    "reason": m.get("reason", "ok"),
                 }
                 for m in mounts
                 if not m["is_broken"]
@@ -384,11 +384,30 @@ async def delete_project_endpoint(name: str):
         )
     if brain:
         user_dir = Path(brain.config.projects_root)
+        # Only shares that are still VALID per their authoritative record
+        # block deletion — plain (owner manifest) and sealed (wrap present,
+        # expiry not passed) alike. Revoked or expired shares do not.
+        from axon.share_validity import owner_share_status
+
         shares_info = _shares.list_shares(user_dir)
         active_grantees = [
             s["grantee"]
             for s in shares_info.get("sharing", [])
-            if s["project"] == name and not s.get("revoked", False)
+            if s.get("project") == name
+            and owner_share_status(user_dir, name, s.get("key_id", ""), "plain").ok
+        ]
+        try:
+            from axon import security as _security
+
+            sealed_sharing = _security.list_sealed_shares(user_dir).get("sharing", [])
+        except Exception as exc:
+            logger.warning(f"Could not list sealed shares for delete check: {exc}")
+            sealed_sharing = []
+        active_grantees += [
+            f"sealed share {s['key_id']}"
+            for s in sealed_sharing
+            if s.get("project") == name
+            and owner_share_status(user_dir, name, s.get("key_id", ""), "sealed").ok
         ]
         if active_grantees:
             raise HTTPException(

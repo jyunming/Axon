@@ -223,6 +223,37 @@ never reaches. Nothing a default install can do was removed.
   - Backend authors: `upsert_fact()` is now a required `GraphBackend` Protocol
     method returning a `FactUpdateResult`.
 
+### 🔄 Changed
+
+- **One answer to "is this share still valid?"** Six places used to decide
+  share validity on their own and disagreed: a revoked plaintext share was
+  refused by REST but still mountable from the CLI/REPL; a soft-revoked sealed
+  share kept working everywhere except `/share/list`; an expired sealed share
+  stayed listed; an unreachable owner deleted sealed mounts but let plaintext
+  ones through; revoking an old plaintext key could delete a newer sealed mount
+  that reused the mount name. Every surface — `switch_project` (CLI, REPL, REST,
+  MCP, VS Code), the per-query check, `@mounts`/`@store` scopes,
+  `list_share_mounts`, `/projects`, `/share/list`, CLI/REPL share list and
+  project-delete gating — now asks `axon.share_validity`. No new record is
+  introduced: the authority is the owner-side file that already existed
+  (plaintext → the `.share_manifest.json` entry; sealed → the `.wrapped` file +
+  the signed `.expiry` sidecar). Revoked/expired shares are refused and their
+  mount entry removed (an expired sealed share also has its cached DEK wiped);
+  a share whose owner record can't be read (offline, sync in flight, cloud
+  placeholder) is now **refused but kept** instead of being allowed (plaintext)
+  or deleted (sealed). `/projects` `shared_mounts`, `/share/list` records and
+  `list_share_mounts()` gain additive `state` / `reason` fields. Only shares
+  that are still valid (plaintext or sealed) block `POST /project/delete`.
+  See [How share validity is decided](docs/SHARING.md#how-share-validity-is-decided).
+- **A corrupt share store is never rewritten.** `generate` / `revoke` /
+  `extend` used to read an unparseable `.share_manifest.json` /
+  `.share_keys.json` as `{}` and write it back, silently dropping revocation
+  tombstones. They now refuse with a "refusing to overwrite" error naming the
+  file (REST `409`).
+- Project and mount listings share one directory-scan helper
+  (`axon._dir_scan`); a `meta.json` that parses to a non-object no longer
+  crashes `list_projects`.
+
 ### 🐛 Fixes
 
 - **`axon --graph-status`, `--graph-conflicts` and `--graph-retrieve` work

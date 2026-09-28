@@ -91,12 +91,11 @@ notes — full detail lives there. This is a scannable index.
   in `llm.py` each re-implement the same per-provider message-building
   boilerplate independently (~15 near-duplicate copies across 3 methods ×
   5 OpenAI-dialect providers).
-- **Projects/Sharing** — the same defensive "scan a directory, parse each
-  JSON, skip on error" loop is duplicated 4 times across
-  `list_projects`/`_list_sub_projects`/`list_mount_descriptors`/
-  `list_share_mounts`; two independent "is this share still valid" checks
-  answer a similar question from different sources of truth with no
-  cross-reference; "resolve a project dir against an explicit `user_dir`" now
+- **Projects/Sharing** — the "scan a directory, parse each JSON, skip on
+  error" loop and the six independent "is this share still valid" checks
+  were consolidated in PR6 (`_dir_scan.iter_json_children`,
+  `share_validity.share_status`) — don't reintroduce either; "resolve a
+  project dir against an explicit `user_dir`" now
   exists three ways (`projects.project_dir`, `seal._resolve_project_dir`,
   `project_pack._resolve_project_dir` — the last two deliberately, see their
   docstrings).
@@ -785,7 +784,7 @@ Query entry points:
 Retrieval pipeline internals (still worth reusing/extending rather than reimplementing):
 - `_execute_retrieval(query, filters=None, cfg=None)` — outer wrapper: mount-revocation check, mount refresh, and (v0.4.0) wraps the retrieval body in the sealed-project ephemeral mount/unmount window — `query_router.py:842`
 - `_execute_retrieval_body(query, filters=None, cfg=None)` — the actual multi-channel retrieval: runs query transforms, dense vector search (+HyDE embedding, +sentence-window channel), BM25/hybrid fusion (RRF or weighted), similarity-threshold filtering, CRAG-Lite confidence correction / legacy web-fallback, MMR dedup, code-lexical-boost, GraphRAG entity expansion, code-graph expansion — `query_router.py:878` (SPLADE sparse fusion, previously an optional stage here, was removed entirely in `7126dbb` — never enabled once in five months, no REST/MCP/CLI/REPL surface)
-- `_check_mount_revocation()` — raises `PermissionError` if the active mounted share was revoked or has expired since switch — `query_router.py:752`
+- `_check_mount_revocation()` — per-query guard: raises `PermissionError` (`share_validity.ShareInvalidError`) unless `share_validity.share_status` says the active mount (plain or sealed) is still VALID; a sealed EXPIRED share triggers `_auto_destroy_expired_share` first — `query_router.py:752`
 - `_maybe_refresh_mount()` — per-query or TTL-gated (`"switch"` mode) re-check of the owner's version marker before retrieval; lets `MountSyncPendingError` propagate — `query_router.py:790`
 - `_execute_web_search(query, count=5)` — Brave Search API call, normalized into the same result-dict shape as local retrieval hits (`is_web=True`) — `query_router.py:713`
 - `_merge_graph_slots(results, top_k, budget)` (staticmethod) — merges base + graph-expanded results after rerank while guaranteeing at least `min(budget, n_expanded)` graph-expanded chunks survive top-k truncation — `query_router.py:1305`
@@ -877,7 +876,8 @@ Role: Module-level (no class) functions implementing the "AxonStore" on-disk lay
 - `set_active_project(name)` — persist the active project name to disk (non-fatal on write failure) — `projects.py:643`
 - `delete_project(name)` — delete a project's directory tree; refuses `"default"` and projects with children (`ProjectHasChildrenError`), retries on `PermissionError`, resets active project if needed — `projects.py:657`
 - `ensure_user_project(user_dir)` — idempotently scaffold a fresh AxonStore user namespace (`default/`, `mounts/`, `.shares/`, `projects/`, `store_meta.json`) — `projects.py:695`
-- `list_share_mounts(user_dir)` — list all received share mounts for a user by reading `mounts/` descriptors, flagging broken ones via `validate_mount_descriptor` — `projects.py:783`
+- `list_share_mounts(user_dir)` — list all received share mounts for a user (`list_mount_descriptors` + `share_validity.share_status`); `is_broken` = not VALID, plus additive `state`/`reason` — `projects.py`
+- `_project_entry(entry, full_name, meta)` — the one builder for a `list_projects` / sub-project dict (tolerates `{}` meta so sealed projects stay listed) — `projects.py`
 
 ### src/axon/sessions.py
 Role: Lightweight JSON-file persistence for REPL chat sessions (per-project directory, capped at 50 most-recent, auto-evicting oldest). Distinct from AxonStore's project/session *directories* — this is the actual read/write/list layer for session transcripts.
@@ -896,9 +896,10 @@ Role: AxonStore share-key lifecycle — generation, redemption, revocation, TTL 
 
 - `generate_share_key(owner_user_dir, project, grantee, *, ttl_days=None)` — mint a read-only share key + base64 `share_string` for out-of-band transmission; optional TTL expiry — `shares.py:136`
 - `redeem_share_key(grantee_user_dir, share_string)` — validate a share string (revocation/expiry/HMAC checks) and create the grantee's `mounts/` descriptor via `mounts.create_mount_descriptor` — `shares.py:217`
-- `revoke_share_key(owner_user_dir, key_id)` — lazily revoke a share key in both the private key store and public manifest (grantee descriptor removed on next validation) — `shares.py:308`
+- `revoke_share_key(owner_user_dir, key_id)` — revoke a share key in both the private key store and public manifest; grantees are denied from their next switch/query (`share_validity`), descriptor removed on next reconcile — `shares.py`
 - `list_shares(user_dir)` — return `{"sharing": [...], "shared": [...]}` — both issued and received shares, with computed `expired` flag — `shares.py:366`
-- `validate_received_shares(user_dir)` — scan all received shares against owners' manifests; remove mount descriptors for revoked/expired shares (lock-guarded to avoid TOCTOU with concurrent redemption) — `shares.py:399`
+- `validate_received_shares(user_dir)` — one-line alias of `share_validity.reconcile_received_mounts` (plain AND sealed); kept so existing callers/patches keep working — `shares.py`
+- `ShareStoreCorruptError(RuntimeError)` / `_read_json_strict(path)` — strict read used by generate/revoke/extend: missing → `{}`, corrupt/non-dict → raise naming the file ("refusing to overwrite"; REST 409). The lenient `_read_json` stays for read-only paths — `shares.py`
 - `extend_share_key(owner_user_dir, key_id, *, ttl_days)` — renew or clear (`ttl_days=None`) a share key's expiry, mirrored to manifest — `shares.py:458`
 
 Internal helpers worth knowing about (not typically called externally, but relevant to correctness): `_is_expired(expires_at, now=None)` fail-closed TTL check with 5-minute clock-skew leeway (`shares.py:50`); `_compute_hmac(...)` binds token to key_id/project/grantee/owner_store_path (`shares.py:125`); `_write_json(path, data)` writes a share file **without any atomic-replace step** — a bare `path.write_text(...)` followed by a `chmod` (`shares.py:110`) — see "Possible internal overlap" below.
@@ -911,9 +912,22 @@ Role: CRUD for the canonical `mount.json` descriptor model representing a receiv
 - `mount_descriptor_path(user_dir, mount_name)` — path to a specific `mount.json` — `mounts.py:53`
 - `create_mount_descriptor(grantee_user_dir, mount_name, owner, project, owner_user_dir, target_project_dir, share_key_id)` — write a new `mount.json` (reads owner's `project_id`/`graph_backend`/`store_id` where available); always `readonly: true`; the write is a bare `write_text()`, not atomic-replaced — `mounts.py:63`
 - `load_mount_descriptor(user_dir, mount_name)` — load one descriptor, or `None` if absent/corrupt — `mounts.py:128`
-- `list_mount_descriptors(user_dir)` — return all active, non-revoked mount descriptors under a user — `mounts.py:139`
+- `list_mount_descriptors(user_dir)` — return all active, non-revoked mount descriptors under a user, sorted (via `_dir_scan.iter_json_children`) — `mounts.py:139`
 - `remove_mount_descriptor(user_dir, mount_name)` — delete a mount's descriptor directory (`rmtree`) — `mounts.py:160`
-- `validate_mount_descriptor(descriptor)` — check revoked/state/target-existence and return `(bool, reason)` — `mounts.py:172`
+- `validate_mount_descriptor(descriptor)` — LOCAL checks only (revoked/state/target-existence), returns `(bool, reason)`; whether the owner still authorises the share is `share_validity.share_status` — `mounts.py:172`
+
+### src/axon/share_validity.py
+Role: **New in PR6** — the single answer to "is this received share still valid?", used by every surface (switch_project, per-query guard, `@mounts`/`@store` scopes, `list_share_mounts`, REST `/projects` + `/share/list` + delete gating, CLI/REPL share list via the aliases). No new record: authority is the owner-side file that already exists — plain → the key's entry in `<owner>/.shares/.share_manifest.json`; sealed → `<project>/.security/shares/<kid>.wrapped` presence + the signed `<kid>.expiry` sidecar. (Writing sealed shares into `.share_manifest.json` — "reading B" — was considered and deliberately NOT done.)
+
+- `ShareState` (`VALID`/`REVOKED`/`EXPIRED`/`UNVERIFIABLE`/`INVALID`) and `ShareStatus(state, reason, detail, kind, key_id, authority, expires_at)` with `.ok` / `.terminal` / `.as_dict()`; `detail` is built only from key_id/names/paths/timestamps — never tokens, share strings, HMACs, DEKs or exception text
+- `share_status(descriptor, now=None)` — pure, read-only (never mkdirs in the owner store). Order: descriptor sanity (INVALID) → target dir (UNVERIFIABLE) → plain: manifest readable / record present (UNVERIFIABLE) → revoked → expired (5-min leeway) → sealed: marker + shares dir (UNVERIFIABLE) → wrap (REVOKED) → `.expiry` readable (OSError → UNVERIFIABLE, never the expired/auto-destroy path) → `security.share._check_expiry_or_raise` (EXPIRED)
+- `require_valid(descriptor)` — raises `ShareInvalidError(PermissionError)` carrying `.status`
+- `owner_share_status(owner_user_dir, project, key_id, kind)` — owner-side view from the same records (a sealed `.expiry` only counts if its signature verifies against the owner's signing key — grantees can write the shared folder — otherwise, or with the store locked, the share stays VALID); used for delete gating
+- `load_owner_manifest(owner_user_dir)` — strict manifest read, `None` = unusable as an authority
+- `reconcile_received_mounts(user_dir, now=None)` — the ONLY function with side effects: REVOKED → remove descriptor (sealed DEK kept); EXPIRED → remove descriptor (+ `delete_grantee_dek` for sealed); UNVERIFIABLE/INVALID → keep; prunes `received` records whose descriptor is gone or now carries a different key_id; holds `shares._lock` throughout
+
+### src/axon/_dir_scan.py
+Role: **New in PR6** — `iter_json_children(root, filename, *, on_error="skip"|"empty", exclude=())` yields `(child_dir, dict)` for each child dir holding `filename`, sorted, catching `(OSError, ValueError)` (incl. `UnicodeDecodeError` — sealed `meta.json` is ciphertext) and treating non-dict JSON like unparseable. Adopted by `list_projects`, `_list_sub_projects`, `list_mount_descriptors`. Not adopted (different shape): `list_descendants`/`has_children`, `AxonBrain._authoritative_project_dirs`, the security walkers.
 
 ### src/axon/access.py
 Role: Small, centralized write-permission policy for projects — consolidates checks that used to be ad-hoc `AxonBrain` methods. Two functions only; this is the single place to extend write-gating logic (e.g. new maintenance states, new read-only scopes) rather than re-deriving it per call site.
@@ -933,8 +947,8 @@ Internal helpers worth knowing about: `_resolve_project_dir(name, user_dir)` mir
 
 **Possible internal overlap**
 
-- **Project listing walks meta.json twice, in two shapes.** `projects.list_projects()` / `_list_sub_projects()` (`projects.py:556`, `:471`) build a recursive tree of project dicts (name/description/created_at/path/maintenance_state/graph_backend/children) purely by reading `meta.json` files directly. `mounts.list_mount_descriptors()` and `projects.list_share_mounts()` independently do a similar directory-scan-plus-JSON-parse pattern over `mounts/`. There's no shared "scan a directory of dirs, parse each meta/descriptor JSON, skip on parse error" helper — the same defensive try/except JSON-read loop is duplicated four times (`_list_sub_projects`, `list_projects`, `list_mount_descriptors`, `list_share_mounts`). Still present, unchanged since the 2026-08-28 audit. A shared internal iterator could reduce duplication if this file set is ever refactored.
-- **Two independent "is this share still good" checks.** `mounts.validate_mount_descriptor()` (`mounts.py:172`) checks `revoked`/`state`/target-existence on a descriptor, while `shares.validate_received_shares()` (`shares.py:399`) separately re-derives revoked/expired status by re-reading the *owner's* manifest and comparing key_ids. These overlap conceptually (both answer "is this mount still valid?") but check different sources of truth (local descriptor state vs. owner's manifest) — worth documenting clearly so a future caller doesn't assume one implies the other, since a descriptor can look locally "active" while the owner's manifest already shows it revoked (that's exactly the gap `validate_received_shares` exists to close, but it's not obvious from `validate_mount_descriptor` alone). Still present, unchanged.
+- **Directory-scan-plus-JSON-parse loop (resolved in PR6).** `list_projects`, `_list_sub_projects` and `list_mount_descriptors` now share `_dir_scan.iter_json_children`; `list_share_mounts` builds on `list_mount_descriptors`. Known leftover: `_list_sub_projects` follows symlinked sub-project dirs with no loop guard (unlike `list_descendants`) — flagged, not fixed.
+- **Share-validity checks (resolved in PR6).** The six call sites that each decided validity (`validate_received_shares`, `validate_received_sealed_shares`, `switch_project`, `_check_mount_revocation`, `list_share_mounts`, delete gating) now all go through `share_validity`. `mounts.validate_mount_descriptor` remains as the local-only precheck. Known leftover: plain `redeem_share_key` still reads the owner's mode-600 `.share_keys.json` to verify the HMAC — flagged, not changed.
 - **Metadata writes are atomic (resolved).** `shares._write_json()`, `mounts.create_mount_descriptor()`, `projects.py`'s `meta.json` / `store_meta.json` / active-project writers and `sessions._save_session()` used to write with a bare `write_text()` / `open("w")`, so a crash mid-write could leave a truncated `meta.json` or descriptor. They now all go through `_atomic_persist.write_json_if_changed(..., indent=2)` (`write_text_if_changed` for the active-project file), keeping the files' human-readable format. A temp file orphaned by a process killed mid-write is skipped by `project_pack` and the sealed plaintext cache (`is_atomic_tmp`), and removed by `project_seal` (`remove_orphaned_tmps`, which leaves a live writer's temp alone).
 - **`project_pack._resolve_project_dir()` is a third independent copy of the "resolve a project name against an explicit user_dir, honoring `subs/` nesting" pattern**, after `projects.project_dir()` (resolves against the process-global `PROJECTS_ROOT`) and `security.seal._resolve_project_dir()` (`seal.py:256`, resolves against an explicit `user_dir` for the same reason: CLI's early-exit path never calls `set_projects_root()`). `project_pack.py:49`'s docstring explicitly acknowledges duplicating rather than importing `seal`'s version. Not a bug — each copy exists for a documented reason — but a shared `resolve_project_dir_at(name, user_dir)` helper (in `projects.py`, imported by both `seal.py` and `project_pack.py`) would remove the third near-identical implementation.
 
@@ -961,7 +975,7 @@ Role: Public facade / stub-preserving router. Every function here lazily imports
 - `generate_sealed_share(owner_user_dir, project, grantee, key_id, *, expires_at=None)` — routes to `share.generate_sealed_share` — `__init__.py:197`
 - `redeem_sealed_share(user_dir, share_string)` — routes to `share.redeem_sealed_share` — `__init__.py:226`
 - `revoke_sealed_share(owner_user_dir, project, key_id, *, rotate=False)` — routes to `share.revoke_sealed_share` (soft or hard) — `__init__.py:244`
-- `validate_received_sealed_shares(user_dir)` — walks every sealed mount descriptor, removes any whose owner-side wrap file has disappeared (soft-revoke detection); returns removed mount names — `__init__.py:268`
+- `validate_received_sealed_shares(user_dir)` — one-line alias of `share_validity.reconcile_received_mounts` (sealed AND plain); returns removed mount names — `__init__.py:268`
 - `list_sealed_shares(user_dir)` — returns `{"sharing": [...], "shared": [...]}` — owned projects' active wraps + redeemed sealed mounts — `__init__.py:303`
 - `resolve_owned_sealed_project_path(project_name, user_dir)` — resolves on-disk path for a sealed project this user owns; raises `SecurityError` if not sealed — `__init__.py:343`
 - `project_rotate_keys(project_root)` — thin wrapper over `share._hard_revoke` with `key_id=""`, i.e. "rotate DEK without revoking a specific share" — `__init__.py:359`

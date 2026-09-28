@@ -47,6 +47,10 @@ def mount_descriptor_dir(user_dir: Path, mount_name: str) -> Path:
     expected_root = mounts_root(user_dir).resolve()
     if not candidate.is_relative_to(expected_root):
         raise ValueError(f"Invalid mount_name — path traversal detected: {mount_name!r}")
+    # "", "." etc. resolve to the mounts root itself; removing that would
+    # delete every received share, not one mount.
+    if candidate == expected_root:
+        raise ValueError(f"Invalid mount_name — names the mounts root itself: {mount_name!r}")
     return mounts_root(user_dir) / mount_name
 
 
@@ -140,23 +144,13 @@ def load_mount_descriptor(user_dir: Path, mount_name: str) -> dict[str, Any] | N
 
 def list_mount_descriptors(user_dir: Path) -> list[dict[str, Any]]:
     """Return all valid, active (non-revoked) mount descriptors under *user_dir*."""
-    root = mounts_root(user_dir)
-    if not root.exists():
-        return []
-    results = []
-    for entry in sorted(root.iterdir()):
-        if not entry.is_dir():
-            continue
-        path = entry / "mount.json"
-        if not path.exists():
-            continue
-        try:
-            desc = json.loads(path.read_text(encoding="utf-8"))
-            if not desc.get("revoked") and desc.get("state") == "active":
-                results.append(desc)
-        except Exception:
-            continue
-    return results
+    from axon._dir_scan import iter_json_children
+
+    return [
+        desc
+        for _child, desc in iter_json_children(mounts_root(user_dir), "mount.json", on_error="skip")
+        if not desc.get("revoked") and desc.get("state") == "active"
+    ]
 
 
 def remove_mount_descriptor(user_dir: Path, mount_name: str) -> bool:
@@ -173,6 +167,9 @@ def remove_mount_descriptor(user_dir: Path, mount_name: str) -> bool:
 
 def validate_mount_descriptor(descriptor: dict[str, Any]) -> tuple[bool, str]:
     """Check whether *descriptor* points to a valid, accessible project.
+    Local checks only (flags + target directory present). Whether the owner
+    still authorises the share is decided by
+    :func:`axon.share_validity.share_status`.
     Returns:
         ``(True, "")`` when valid, or ``(False, reason)`` when not.
     """

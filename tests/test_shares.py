@@ -931,11 +931,16 @@ class TestCheckMountRevocationExpiryBranch:
 
         from axon.query_router import QueryRouterMixin
 
+        # share_validity requires the target project dir to exist (a missing
+        # target is UNVERIFIABLE → denied), so point it at a real directory.
+        target = manifest_path.parent.parent / "myproject"
+        target.mkdir(parents=True, exist_ok=True)
         stub = SimpleNamespace(
             _active_project_kind="mounted",
             _active_mount_descriptor={
                 "project": "myproject",
                 "owner_user_dir": str(manifest_path.parent.parent),
+                "target_project_dir": str(target),
                 "share_key_id": key_id,
             },
         )
@@ -1146,3 +1151,51 @@ class TestValidateReceivedSharesTOCTOU:
         # Must not crash; valid record should still be pruned.
         removed = shares.validate_received_shares(grantee_dir)
         assert good_mount in removed
+
+
+class TestStrictShareStoreWrites:
+    """Writers (generate/revoke/extend) refuse to rewrite a corrupt store file
+    instead of silently starting from ``{}`` and dropping tombstones."""
+
+    def test_read_json_strict_missing_is_empty(self, tmp_path):
+        from axon.shares import _read_json_strict
+
+        assert _read_json_strict(tmp_path / "absent.json") == {}
+
+    @pytest.mark.parametrize("content", ["{ nope", "[]", '{"issued": {"not": "a list"}}'])
+    def test_read_json_strict_rejects_corrupt(self, tmp_path, content):
+        from axon.shares import ShareStoreCorruptError, _read_json_strict
+
+        path = tmp_path / ".share_manifest.json"
+        path.write_text(content, encoding="utf-8")
+        with pytest.raises(ShareStoreCorruptError, match="refusing to overwrite") as ei:
+            _read_json_strict(path)
+        assert str(path) in str(ei.value)
+        assert isinstance(ei.value, RuntimeError)
+
+    def test_corrupt_keys_file_blocks_generate_without_touching_manifest(self, tmp_path):
+        from axon import shares
+
+        owner_dir = _make_user_dir(tmp_path, "alice")
+        shares.generate_share_key(owner_dir, "myproject", "bob")
+        keys_path = owner_dir / ".shares" / ".share_keys.json"
+        manifest_path = owner_dir / ".shares" / ".share_manifest.json"
+        keys_path.write_text("{ truncated", encoding="utf-8")
+        manifest_before = manifest_path.read_bytes()
+        with pytest.raises(shares.ShareStoreCorruptError):
+            shares.generate_share_key(owner_dir, "myproject", "carol")
+        assert manifest_path.read_bytes() == manifest_before
+
+    def test_validate_aliases_share_one_implementation(self, tmp_path, monkeypatch):
+        """Both legacy entry points delegate to share_validity.reconcile."""
+        from axon import security, share_validity, shares
+
+        calls = []
+        monkeypatch.setattr(
+            share_validity,
+            "reconcile_received_mounts",
+            lambda user_dir, now=None: calls.append(user_dir) or ["m"],
+        )
+        assert shares.validate_received_shares(tmp_path) == ["m"]
+        assert security.validate_received_sealed_shares(tmp_path) == ["m"]
+        assert calls == [tmp_path, tmp_path]

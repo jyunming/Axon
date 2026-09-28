@@ -228,6 +228,8 @@ async def share_generate(request: ShareGenerateRequest, req: Request):
             grantee=request.grantee,
             ttl_days=request.ttl_days,
         )
+    except _shares.ShareStoreCorruptError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     return result
@@ -348,6 +350,8 @@ async def share_revoke(request: ShareRevokeRequest):
         return result
     try:
         result = _shares.revoke_share_key(owner_user_dir=user_dir, key_id=request.key_id)
+    except _shares.ShareStoreCorruptError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return result
@@ -370,6 +374,8 @@ async def share_extend(request: ShareExtendRequest):
             key_id=request.key_id,
             ttl_days=request.ttl_days,
         )
+    except _shares.ShareStoreCorruptError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         msg = str(e)
         # 404 when the key is unknown; 409 when it is revoked (irreversible);
@@ -386,27 +392,64 @@ async def share_extend(request: ShareExtendRequest):
 
 @router.get("/share/list")
 async def share_list():
-    """List shares for the current user: both issued (sharing) and received (shared)."""
+    """List shares for the current user: both issued (sharing) and received (shared).
+
+    Every record carries additive ``state`` / ``reason`` fields from
+    :mod:`axon.share_validity` (``valid`` / ``revoked`` / ``expired`` /
+    ``unverifiable`` / ``invalid``).
+    """
     from axon import api as _api
     from axon import security as _security
     from axon import shares as _shares
+    from axon.mounts import load_mount_descriptor
+    from axon.share_validity import owner_share_status, share_status
 
     user_dir = _api._get_user_dir()
-    removed_open = _shares.validate_received_shares(user_dir)
-    removed_sealed = _security.validate_received_sealed_shares(user_dir)
+    # One reconcile pass covers plain AND sealed received shares.
+    removed = list(_shares.validate_received_shares(user_dir) or [])
     open_result = _shares.list_shares(user_dir)
     sealed_result = _security.list_sealed_shares(user_dir)
 
-    def _tag(records: list[dict], security_mode: str) -> list[dict]:
-        return [{**record, "security_mode": security_mode} for record in records]
+    def _owner_state(record: dict, kind: str) -> dict:
+        try:
+            st = owner_share_status(
+                user_dir, record.get("project", ""), record.get("key_id", ""), kind
+            )
+            return st.as_dict()
+        except Exception as exc:  # additive field — never fail the listing
+            logger.debug(f"share state for {record.get('key_id')} unavailable: {exc}")
+            return {}
+
+    def _received_state(record: dict, descriptor: dict | None) -> dict:
+        try:
+            if descriptor is None:
+                mount = record.get("mount") or record.get("mount_name")
+                descriptor = load_mount_descriptor(user_dir, mount) if mount else None
+            if descriptor is None:
+                return {"state": "invalid", "reason": "descriptor_missing"}
+            return share_status(descriptor).as_dict()
+        except Exception as exc:  # additive field — never fail the listing
+            logger.debug(f"share state for {record.get('key_id')} unavailable: {exc}")
+            return {}
 
     result = {
-        "sharing": _tag(open_result.get("sharing", []), "open")
-        + _tag(sealed_result.get("sharing", []), "sealed_v1"),
-        "shared": _tag(open_result.get("shared", []), "open")
-        + _tag(sealed_result.get("shared", []), "sealed_v1"),
+        "sharing": [
+            {**r, "security_mode": "open", **_owner_state(r, "plain")}
+            for r in open_result.get("sharing", [])
+        ]
+        + [
+            {**r, "security_mode": "sealed_v1", **_owner_state(r, "sealed")}
+            for r in sealed_result.get("sharing", [])
+        ],
+        "shared": [
+            {**r, "security_mode": "open", **_received_state(r, None)}
+            for r in open_result.get("shared", [])
+        ]
+        + [
+            {**r, "security_mode": "sealed_v1", **_received_state(r, r)}
+            for r in sealed_result.get("shared", [])
+        ],
     }
-    removed = [*removed_open, *removed_sealed]
     if removed:
         result["removed_stale"] = removed
     return result

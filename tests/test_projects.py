@@ -961,6 +961,33 @@ class TestListShareMounts:
 
         assert "bob_research" in names
 
+    def test_entries_carry_share_validity_state(self, tmp_path):
+        """is_broken / state / reason come from share_validity.share_status —
+        the same answer switch_project and the per-query guard give."""
+        from axon import shares
+        from axon.projects import list_share_mounts
+
+        owner = tmp_path / "AxonStore" / "bob"
+        (owner / "research").mkdir(parents=True)
+        (owner / "research" / "meta.json").write_text("{}", encoding="utf-8")
+        grantee = tmp_path / "AxonStore" / "alice"
+        grantee.mkdir(parents=True)
+        gen = shares.generate_share_key(owner, "research", "alice")
+        shares.redeem_share_key(grantee, gen["share_string"])
+
+        [entry] = list_share_mounts(grantee)
+        assert (entry["is_broken"], entry["state"], entry["reason"]) == (False, "valid", "ok")
+
+        shares.revoke_share_key(owner, gen["key_id"])
+        [entry] = list_share_mounts(grantee)
+        assert (entry["is_broken"], entry["state"], entry["reason"]) == (
+            True,
+            "revoked",
+            "revoked",
+        )
+        # Keys/paths only — the listing never carries the owner's token.
+        assert set(entry) == {"name", "target", "is_broken", "owner", "project", "state", "reason"}
+
 
 class TestSetActiveProjectPermissionError:
 

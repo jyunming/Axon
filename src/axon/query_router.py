@@ -750,42 +750,35 @@ class QueryRouterMixin:
             return []
 
     def _check_mount_revocation(self) -> None:
-        """Raise PermissionError if the active mounted share has been revoked since switch."""
+        """Raise PermissionError unless the active mounted share is still VALID.
+
+        Runs before every retrieval and uses the same decision as
+        ``switch_project`` (:func:`axon.share_validity.share_status`) for
+        plain AND sealed shares: revoked, expired and unverifiable shares
+        (owner record unreadable) are all denied. A sealed share whose signed
+        expiry has passed also triggers the auto-destroy flow (cached DEK,
+        plaintext cache and mount descriptor are wiped) before denying.
+        """
         if getattr(self, "_active_project_kind", None) != "mounted":
             return
         desc = getattr(self, "_active_mount_descriptor", None)
         if not desc:
             return
-        owner_user_dir = desc.get("owner_user_dir", "")
-        key_id = desc.get("share_key_id", "")
-        if not owner_user_dir or not key_id:
+        from axon.share_validity import ShareInvalidError, ShareState, share_status
+
+        status = share_status(desc)
+        if status.ok:
             return
-        import json as _json
-        from pathlib import Path as _Path
-
-        manifest_path = _Path(owner_user_dir) / ".shares" / ".share_manifest.json"
-        try:
-            manifest = _json.loads(manifest_path.read_text(encoding="utf-8"))
-        except Exception:
-            return  # Can't reach owner manifest — leave mounted
-        for record in manifest.get("issued", []):
-            if record.get("key_id") != key_id:
-                continue
-            if record.get("revoked"):
-                raise PermissionError(
-                    f"Share '{desc.get('project', '')}' has been revoked by the owner. "
-                    "Run `/project switch default` to continue with your own projects."
-                )
-            # Issue #54: also enforce expires_at as a hard cutoff so a
-            # forgotten share doesn't leak indefinitely.
-            from axon.shares import _is_expired
-
-            if _is_expired(record.get("expires_at")):
-                raise PermissionError(
-                    f"Share '{desc.get('project', '')}' expired at "
-                    f"{record.get('expires_at')}. Ask the owner to extend "
-                    "(`/share extend`) and re-redeem."
-                )
+        err = ShareInvalidError(status)
+        if status.kind == "sealed" and status.state is ShareState.EXPIRED:
+            destroy = getattr(self, "_auto_destroy_expired_share", None)
+            if destroy is not None:
+                mount_name = desc.get("mount_name")
+                # Never call it with an empty name: "mounts/" would resolve to
+                # the whole mounts root and wipe every received share.
+                if isinstance(mount_name, str) and mount_name:
+                    destroy(f"mounts/{mount_name}", status.key_id, err)
+        raise err
 
     def _maybe_refresh_mount(self) -> None:
         """Re-check the owner's version marker before retrieval and reopen

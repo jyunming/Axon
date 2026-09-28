@@ -14640,6 +14640,9 @@ class TestProjectSwitchKinds:
                 },
             ),
             patch("axon.mounts.validate_mount_descriptor", return_value=(True, "")),
+            # Owner-side share validity is covered in test_share_validity.py;
+            # this test is only about the kind bookkeeping.
+            patch("axon.share_validity.require_valid"),
             patch.object(GraphRagEngine, "_load_entity_graph", return_value={}),
             patch.object(GraphRagEngine, "_load_relation_graph", return_value={}),
             patch.object(GraphRagEngine, "_load_community_levels", return_value={}),
