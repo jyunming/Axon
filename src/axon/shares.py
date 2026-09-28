@@ -13,14 +13,15 @@ Share flow:
   2. Grantee calls redeem_share_key()  -> descriptor created in grantee's mounts/
   3. Owner calls revoke_share_key()    -> marks revoked in manifest (lazy invalidate)
   4. Owner calls extend_share_key()    -> bumps expires_at when the share is still in use
-  5. Grantee's Axon calls validate_received_shares() on next access -> removes stale descriptors
+  5. Grantee's Axon checks the owner's manifest on every switch/query
+     (axon.share_validity); validate_received_shares() removes stale descriptors
 
 Expiry (issue #54)
 ------------------
 Each share record carries an optional ``expires_at`` ISO timestamp. When set,
-``redeem_share_key`` and ``validate_received_shares`` treat past-expiry the
-same as revoked: the mount descriptor is removed and the grantee loses
-access. Owners can renew via :func:`extend_share_key`. ``ttl_days=None``
+``redeem_share_key`` and :mod:`axon.share_validity` treat past-expiry the
+same as revoked: access is denied on the next switch or query, and the
+mount descriptor is removed on the next reconcile. Owners can renew via :func:`extend_share_key`. ``ttl_days=None``
 preserves the original "never expires" behaviour for backward compatibility.
 """
 
@@ -99,12 +100,46 @@ def _keys_path(user_dir: Path) -> Path:
 
 
 def _read_json(path: Path) -> dict:
+    """Lenient read for read-only paths: missing / corrupt -> ``{}``."""
     if not path.exists():
         return {}
     try:
         return json.loads(path.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
     except Exception:
         return {}
+
+
+class ShareStoreCorruptError(RuntimeError):
+    """A share store file exists but cannot be parsed; writers refuse to
+    overwrite it (rewriting from ``{}`` would silently drop revocation
+    tombstones and issued records)."""
+
+
+def _read_json_strict(path: Path) -> dict:
+    """Strict read for read-modify-write paths.
+
+    Missing file -> ``{}`` (a fresh store). A file that exists but is
+    unreadable, not valid JSON, not a JSON object, or whose ``issued`` /
+    ``received`` field is not a list raises :class:`ShareStoreCorruptError`
+    naming the file -- never its contents.
+    """
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ShareStoreCorruptError(
+            f"Share store file {path} is unreadable or corrupt ({type(exc).__name__}); "
+            "refusing to overwrite it. Restore it from backup or fix it by hand."
+        ) from None
+    if not isinstance(data, dict) or any(
+        not isinstance(data.get(field, []), list) for field in ("issued", "received")
+    ):
+        raise ShareStoreCorruptError(
+            f"Share store file {path} does not have the expected structure; "
+            "refusing to overwrite it. Restore it from backup or fix it by hand."
+        )
+    return data
 
 
 def _write_json(path: Path, data: dict) -> None:
@@ -192,13 +227,16 @@ def generate_share_key(
         "revoked_at": None,
     }
     with _lock:
+        # Read BOTH files strictly before writing either, so a corrupt
+        # manifest can't leave a half-minted key behind (or be rewritten
+        # from {} and lose revocation tombstones).
+        keys = _read_json_strict(_keys_path(owner_user_dir))
+        manifest = _read_json_strict(_manifest_path(owner_user_dir))
         # Update private keys file
-        keys = _read_json(_keys_path(owner_user_dir))
         keys.setdefault("issued", [])
         keys["issued"].append(issued_record)
         _write_json(_keys_path(owner_user_dir), keys)
         # Update public manifest
-        manifest = _read_json(_manifest_path(owner_user_dir))
         manifest.setdefault("issued", [])
         manifest["issued"].append(manifest_record)
         _write_json(_manifest_path(owner_user_dir), manifest)
@@ -308,9 +346,10 @@ def redeem_share_key(
 
 
 def revoke_share_key(owner_user_dir: Path, key_id: str) -> dict[str, Any]:
-    """Revoke a share key (lazy — does not remove grantee's descriptor immediately).
-    The grantee's mount descriptor will be removed the next time they call
-    validate_received_shares() or attempt to list/access the shared project.
+    """Revoke a share key.
+    The grantee is denied on their next switch or query (every access checks
+    the owner's manifest via :mod:`axon.share_validity`); their mount
+    descriptor is removed on the next reconcile (share/project listing).
     Args:
         owner_user_dir: Path to the owner's user directory.
         key_id: The key_id to revoke (e.g. 'sk_a1b2c3d4').
@@ -321,10 +360,14 @@ def revoke_share_key(owner_user_dir: Path, key_id: str) -> dict[str, Any]:
     """
     now = datetime.now(timezone.utc).isoformat()
     with _lock:
+        # Strict reads of both files before any write (see generate_share_key).
+        keys = _read_json_strict(_keys_path(owner_user_dir))
+        manifest = _read_json_strict(_manifest_path(owner_user_dir))
         # Update private keys file
-        keys = _read_json(_keys_path(owner_user_dir))
         issued = keys.get("issued", [])
-        record = next((r for r in issued if r["key_id"] == key_id), None)
+        record = next(
+            (r for r in issued if isinstance(r, dict) and r.get("key_id") == key_id), None
+        )
         if record is None:
             raise ValueError(f"Key '{key_id}' not found.")
         if record.get("revoked"):
@@ -333,9 +376,10 @@ def revoke_share_key(owner_user_dir: Path, key_id: str) -> dict[str, Any]:
         record["revoked_at"] = now
         _write_json(_keys_path(owner_user_dir), keys)
         # Update public manifest — upsert so grantees always see the revocation
-        manifest = _read_json(_manifest_path(owner_user_dir))
         issued = manifest.setdefault("issued", [])
-        manifest_record = next((r for r in issued if r["key_id"] == key_id), None)
+        manifest_record = next(
+            (r for r in issued if isinstance(r, dict) and r.get("key_id") == key_id), None
+        )
         if manifest_record is not None:
             manifest_record["revoked"] = True
             manifest_record["revoked_at"] = now
@@ -399,62 +443,19 @@ def list_shares(user_dir: Path) -> dict[str, list]:
 
 
 def validate_received_shares(user_dir: Path) -> list[str]:
-    """Check all received shares for revocation; update descriptors and remove stale symlinks.
-    Scans received share records against the owner's manifest.  When a share has
-    been revoked, the ``mounts/`` descriptor is removed (primary).
-    Args:
-        user_dir: Path to the grantee's user directory.
-    Returns:
-        List of mount names that were removed due to revocation.
-    """
-    from axon.mounts import remove_mount_descriptor
+    """Reconcile the grantee's received shares (plain AND sealed).
 
-    # Hold the lock across the whole read-modify-write — otherwise a
-    # concurrent redeem_share_key() that appends a new received record
-    # between our read and write would be silently clobbered by the
-    # write below (lost-update TOCTOU).
-    with _lock:
-        keys = _read_json(_keys_path(user_dir))
-        received = keys.get("received", [])
-        removed: list[str] = []
-        updated = False
-        for record in list(received):
-            manifest_path = Path(record.get("owner_manifest_path", ""))
-            if not manifest_path.exists():
-                continue  # Can't check — leave descriptor in place
-            try:
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            except Exception:
-                continue
-            key_id = record.get("key_id")
-            if not key_id:
-                continue  # skip malformed received record
-            manifest_record = next(
-                (
-                    r
-                    for r in manifest.get("issued", [])
-                    if isinstance(r, dict) and r.get("key_id") == key_id
-                ),
-                None,
-            )
-            if manifest_record and (
-                manifest_record.get("revoked") or _is_expired(manifest_record.get("expires_at"))
-            ):
-                # .get() not [] — a corrupt record missing 'mount_name' must
-                # not crash the loop and abandon stale descriptors in place.
-                mount_name = record.get("mount_name")
-                if not mount_name:
-                    received.remove(record)
-                    updated = True
-                    continue
-                remove_mount_descriptor(user_dir, mount_name)
-                removed.append(mount_name)
-                received.remove(record)
-                updated = True
-        if updated:
-            keys["received"] = received
-            _write_json(_keys_path(user_dir), keys)
-    return removed
+    Thin alias of :func:`axon.share_validity.reconcile_received_mounts`, kept
+    so every existing caller (REST ``/share/list`` + ``/projects`` +
+    ``/project/switch``, CLI ``--share-list``, REPL ``/share list``) gets the
+    same answer as ``switch_project`` and the per-query check.
+
+    Returns:
+        Mount names whose descriptors were removed (revoked or expired).
+    """
+    from axon.share_validity import reconcile_received_mounts
+
+    return reconcile_received_mounts(user_dir)
 
 
 def extend_share_key(
@@ -483,10 +484,14 @@ def extend_share_key(
     if ttl_days is not None:
         new_expires_at = _iso(now_dt + timedelta(days=int(ttl_days)))
     with _lock:
+        # Strict reads of both files before any write (see generate_share_key).
+        keys = _read_json_strict(_keys_path(owner_user_dir))
+        manifest = _read_json_strict(_manifest_path(owner_user_dir))
         # Update private keys file
-        keys = _read_json(_keys_path(owner_user_dir))
         issued = keys.get("issued", [])
-        record = next((r for r in issued if r["key_id"] == key_id), None)
+        record = next(
+            (r for r in issued if isinstance(r, dict) and r.get("key_id") == key_id), None
+        )
         if record is None:
             raise ValueError(f"Key '{key_id}' not found.")
         if record.get("revoked"):
@@ -497,9 +502,10 @@ def extend_share_key(
         record["expires_at"] = new_expires_at
         _write_json(_keys_path(owner_user_dir), keys)
         # Mirror to the public manifest so grantees see the new expiry.
-        manifest = _read_json(_manifest_path(owner_user_dir))
         issued_m = manifest.setdefault("issued", [])
-        manifest_record = next((r for r in issued_m if r["key_id"] == key_id), None)
+        manifest_record = next(
+            (r for r in issued_m if isinstance(r, dict) and r.get("key_id") == key_id), None
+        )
         if manifest_record is not None:
             manifest_record["expires_at"] = new_expires_at
         else:

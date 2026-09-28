@@ -183,12 +183,12 @@ The sidecar lives next to the wrap file (`<key_id>.wrapped`) and rides the same 
 
 ### 4.2 Auto-destroy lifecycle
 
-On every grantee mount of a sealed project, `get_grantee_dek` reads the expiry sidecar and:
+On every grantee switch to a sealed mount, before every query against it, and on every share/project listing, `axon.share_validity.share_status` reads the expiry sidecar and:
 
 1. Verifies the Ed25519 signature with the owner pubkey recorded in the mount descriptor.
 2. Compares `expires_at` against `datetime.now(UTC)`.
 
-If the sidecar is missing the mount proceeds normally (TTL-less share). If the signature fails to verify, or `expires_at` has elapsed, `get_grantee_dek` raises `ShareExpiredError` and `_auto_destroy_expired_share` immediately wipes four pieces of local state:
+If the sidecar is missing the mount proceeds normally (TTL-less share). If the sidecar exists but cannot be *read* (cloud placeholder, sync in flight) the share is `unverifiable` — access is refused but nothing is destroyed. If the signature fails to verify, or `expires_at` has elapsed, the share is `expired`: the switch or query is refused and `_auto_destroy_expired_share` (or, from a listing, the reconcile pass) immediately wipes four pieces of local state:
 
 1. **DEK from the OS keyring** at `axon.share.<key_id>`.
 2. **DEK from the file fallback** at `<grantee-user-dir>/.security/shares/<key_id>.dek.wrapped` (used when the keyring is unavailable or in `keyring_mode=never`).
@@ -276,8 +276,8 @@ curl -X POST http://localhost:8420/share/revoke \
 ```
 
 Revocation effects:
-- **Plaintext share**: marks the key as revoked in the owner's manifest (`.share_manifest.json`). Validated lazily — at `POST /project/switch` and on `/project list` / `/share list` operations. There is no per-read HTTP 403.
-- **Sealed share, soft**: deletes `.security/shares/<key_id>.wrapped` AND `<key_id>.kek` so fresh redeems fail. Cached DEKs in grantees' OS keyrings keep working.
+- **Plaintext share**: marks the key as revoked in the owner's manifest (`.share_manifest.json`). Every grantee switch (all surfaces) and every query re-checks that manifest, so the revoked grantee is refused from the next switch or query; the mount entry itself is removed on the next `/projects` / `/share/list` (or CLI/REPL share list). See [How share validity is decided](SHARING.md#how-share-validity-is-decided).
+- **Sealed share, soft**: deletes `.security/shares/<key_id>.wrapped` AND `<key_id>.kek` so fresh redeems fail. Once the deletion syncs, Axon refuses the grantee's mount on the next switch or query and drops it on the next listing, but the cached DEK in the grantee's OS keyring is not wiped — use hard revoke for a cryptographic cutoff.
 - **Sealed share, hard (`rotate=true`)**: re-encrypts the full project, returns an `invalidated_share_key_ids` list so the owner knows which surviving grantees need fresh shares (legacy projects without `.kek` sidecars).
 
 ---
@@ -292,8 +292,8 @@ View all outgoing shares (grants you created) and incoming mounts (shares you re
 curl http://localhost:8420/share/list
 # Response:
 # {
-#   "sharing": [{"key_id": "sk_a1b2c3d4", "project": "my-project", "grantee": "bob", "revoked": false, "created_at": "..."}],
-#   "shared":  [{"key_id": "sk_...", "owner": "carol", "project": "research", "mount": "carol_research", "redeemed_at": "..."}]
+#   "sharing": [{"key_id": "sk_a1b2c3d4", "project": "my-project", "grantee": "bob", "revoked": false, "created_at": "...", "state": "valid", "reason": "ok"}],
+#   "shared":  [{"key_id": "sk_...", "owner": "carol", "project": "research", "mount": "carol_research", "redeemed_at": "...", "state": "valid", "reason": "ok"}]
 # }
 ```
 
@@ -303,7 +303,7 @@ curl http://localhost:8420/share/list
 /share list
 ```
 
-Revoked entries in `sharing` are shown with `"revoked": true`. Entries in `shared` do not include a `revoked` field — revoked mounts are removed lazily from the grantee's list on the next project list or switch operation.
+Revoked entries in `sharing` are shown with `"revoked": true`. Every record also carries `state` (`valid` / `revoked` / `expired` / `unverifiable` / `invalid`) and a `reason` code from the same check the switch and query paths use. Revoked or expired mounts are removed from the grantee's `shared` list by the reconcile pass this call runs (reported under `removed_stale`); `unverifiable` mounts are kept but refused.
 
 ---
 

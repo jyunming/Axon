@@ -454,7 +454,7 @@ Interactive docs: `/docs` (Swagger UI), `/redoc` — both branded with the Axon 
 | `GET` | `/projects` | List all projects with tree structure and metadata |
 | `POST` | `/project/new` | Create a new named project. Optional `graph_backend` field (`graphrag`/`dynamic_graph`/`none`, default `graphrag`) picks the project's graph backend; immutable once set. See `rag.graph_backend` in §6.8. |
 | `POST` | `/project/switch` | Switch the active project |
-| `POST` | `/project/delete/{name}` | Delete a project and all its stored data |
+| `POST` | `/project/delete/{name}` | Delete a project and all its stored data (`409` while a still-valid plaintext or sealed share of it exists) |
 | `POST` | `/project/rotate-keys` | Rotate sealed-project DEK and re-encrypt all content files |
 | `POST` | `/project/seal` | Encrypt all content files in a project at rest |
 | `POST` | `/project/pack` | Zip a project's entire on-disk footprint for backup, restore, or relocation. Returns the server-side output path |
@@ -474,7 +474,7 @@ Interactive docs: `/docs` (Swagger UI), `/redoc` — both branded with the Axon 
 | `POST` | `/share/redeem` | Mount a shared project (read-only). `share_string` is capped at 16 KB; oversized payloads return 422 before decode |
 | `POST` | `/share/revoke` | Revoke an outgoing share key |
 | `POST` | `/share/extend` | Extend the expiry of an existing share key |
-| `GET` | `/share/list` | List outgoing and incoming shares with revocation status |
+| `GET` | `/share/list` | List outgoing and incoming shares with revocation status and validity `state`/`reason` (see SHARING.md "How share validity is decided") |
 
 ### 4.6 Security (Sealed Store)
 

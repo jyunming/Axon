@@ -4535,13 +4535,30 @@ class TestDeleteProject:
         brain._active_project = "other"
         api_module.brain = brain
 
-        with patch("axon.shares.list_shares") as mock_shares:
-            mock_shares.return_value = {
-                "sharing": [{"project": "shared-proj", "grantee": "bob", "revoked": False}]
-            }
-            resp = client.post("/project/delete/shared-proj")
+        from axon.share_validity import ShareState, ShareStatus
 
-        assert resp.status_code == 409
+        valid = ShareStatus(ShareState.VALID, "ok", "valid", "plain", "sk_1")
+        revoked = ShareStatus(ShareState.REVOKED, "revoked", "revoked", "plain", "sk_1")
+        for status, expected in ((valid, 409), (revoked, 200)):
+            with (
+                patch("axon.shares.list_shares") as mock_shares,
+                patch("axon.share_validity.owner_share_status", return_value=status),
+                patch("axon.projects.delete_project"),
+                patch.object(api_module, "_save_source_hashes"),
+            ):
+                mock_shares.return_value = {
+                    "sharing": [
+                        {
+                            "key_id": "sk_1",
+                            "project": "shared-proj",
+                            "grantee": "bob",
+                            "revoked": False,
+                        }
+                    ]
+                }
+                resp = client.post("/project/delete/shared-proj")
+            # Only shares that are still VALID per the owner manifest block deletion.
+            assert resp.status_code == expected, resp.text
 
     def test_value_error_returns_404(self):
         """projects.py line 220 — ValueError → 404."""
@@ -4918,6 +4935,74 @@ class TestShareRevoke:
             with patch("axon.shares.revoke_share_key", return_value={"status": "revoked"}):
                 resp = client.post("/share/revoke", json={"key_id": "k1"})
         assert resp.status_code == 200
+
+
+class TestShareStoreCorrupt409:
+    """A corrupt .share_manifest.json / .share_keys.json is never rewritten;
+    generate / revoke / extend surface 409 naming the file."""
+
+    def _corrupt_store(self, tmp_path):
+        from axon import shares
+
+        owner = tmp_path / "AxonStore" / "alice"
+        (owner / "proj").mkdir(parents=True)
+        (owner / "proj" / "meta.json").write_text("{}", encoding="utf-8")
+        gen = shares.generate_share_key(owner, "proj", "bob")
+        (owner / ".shares" / ".share_manifest.json").write_text("{ truncated", encoding="utf-8")
+        brain = _make_brain()
+        brain.config.projects_root = str(owner)
+        api_module.brain = brain
+        return owner, gen["key_id"]
+
+    @pytest.mark.parametrize(
+        "method,path,body",
+        [
+            ("post", "/share/generate", {"project": "proj", "grantee": "carol"}),
+            ("post", "/share/revoke", {"key_id": "KEY"}),
+            ("post", "/share/extend", {"key_id": "KEY", "ttl_days": 3}),
+        ],
+    )
+    def test_writer_returns_409(self, tmp_path, method, path, body):
+        owner, key_id = self._corrupt_store(tmp_path)
+        body = {k: (key_id if v == "KEY" else v) for k, v in body.items()}
+        with patch("axon.security.get_sealed_project_record", return_value=None):
+            resp = getattr(client, method)(path, json=body)
+        assert resp.status_code == 409, resp.text
+        assert ".share_manifest.json" in resp.json()["detail"]
+        assert "refusing to overwrite" in resp.json()["detail"]
+        manifest = owner / ".shares" / ".share_manifest.json"
+        assert manifest.read_text(encoding="utf-8") == "{ truncated"
+
+
+class TestShareListValidityFields:
+    def test_records_carry_state_and_reason(self, tmp_path):
+        from axon import shares
+
+        owner = tmp_path / "AxonStore" / "alice"
+        (owner / "proj").mkdir(parents=True)
+        (owner / "proj" / "meta.json").write_text("{}", encoding="utf-8")
+        grantee = tmp_path / "AxonStore" / "bob"
+        grantee.mkdir(parents=True)
+        live = shares.generate_share_key(owner, "proj", "bob")
+        dead = shares.generate_share_key(owner, "proj", "carol")
+        shares.revoke_share_key(owner, dead["key_id"])
+        shares.redeem_share_key(grantee, live["share_string"])
+
+        api_module.brain = _make_brain()
+        with patch("axon.api._get_user_dir", return_value=owner):
+            owner_view = client.get("/share/list").json()
+        states = {r["key_id"]: (r["state"], r["reason"]) for r in owner_view["sharing"]}
+        assert states == {
+            live["key_id"]: ("valid", "ok"),
+            dead["key_id"]: ("revoked", "revoked"),
+        }
+        # pre-existing fields untouched
+        assert all("revoked" in r and "security_mode" in r for r in owner_view["sharing"])
+
+        with patch("axon.api._get_user_dir", return_value=grantee):
+            grantee_view = client.get("/share/list").json()
+        [rec] = grantee_view["shared"]
+        assert (rec["state"], rec["reason"], rec["mount"]) == ("valid", "ok", "alice_proj")
 
 
 # ===========================================================================

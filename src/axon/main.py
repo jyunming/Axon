@@ -922,11 +922,18 @@ Your primary goal is to help the user by answering questions based on the provid
 
         # ── Collect mount dirs ────────────────────────────────────────────────
         def _mount_dirs() -> list[tuple[str, str]]:
-            """Return (vector_path, bm25_path) pairs from active mount descriptors."""
+            """Return (vector_path, bm25_path) pairs from VALID mount descriptors.
+
+            Revoked, expired and unverifiable shares are excluded — the same
+            decision switch_project and the per-query guard make.
+            """
             from axon.mounts import list_mount_descriptors
+            from axon.share_validity import share_status
 
             paths = []
             for desc in list_mount_descriptors(PROJECTS_ROOT):
+                if not share_status(desc).ok:
+                    continue
                 target = desc.get("target_project_dir", "")
                 if target and Path(target).exists():
                     paths.append(
@@ -1360,7 +1367,10 @@ Your primary goal is to help the user by answering questions based on the provid
 
         Called from :meth:`_mount_sealed_project` when
         :func:`axon.security.share.get_grantee_dek` raises
-        :class:`ShareExpiredError`. Performs three local cleanups:
+        :class:`ShareExpiredError`, and — via :mod:`axon.share_validity` —
+        from the ``switch_project`` mount gate and the per-query
+        ``_check_mount_revocation`` guard when a sealed share is EXPIRED.
+        Performs three local cleanups:
 
         1. Delete the cached DEK from the OS keyring AND the file
            fallback at ``<user_dir>/.security/shares/<key_id>.dek.wrapped``.
@@ -1657,6 +1667,23 @@ Your primary goal is to help the user by answering questions based on the provid
             valid, reason = validate_mount_descriptor(desc)
             if not valid:
                 raise ValueError(f"Mounted project '{name}' is not accessible: {reason}")
+            # Owner-side authority check — the same decision the per-query
+            # guard, list_share_mounts and the share listings use
+            # (axon.share_validity): revoked / expired / unverifiable shares
+            # are refused here on every surface (REST, CLI, REPL, MCP).
+            from axon.share_validity import ShareInvalidError, ShareState, require_valid
+
+            try:
+                require_valid(desc)
+            except ShareInvalidError as exc:
+                st = exc.status
+                if st.kind == "sealed" and st.state is ShareState.EXPIRED:
+                    # Same local hygiene _mount_sealed_project used to apply
+                    # when get_grantee_dek raised ShareExpiredError.
+                    self._auto_destroy_expired_share(name, st.key_id, exc)
+                raise ValueError(
+                    f"Mounted project '{name}' is not accessible: {st.detail}"
+                ) from None
             target = Path(desc["target_project_dir"])
             # Sealed mounts route through the cache: descriptor carries
             # mount_type="sealed" + share_key_id; fetch the DEK from the

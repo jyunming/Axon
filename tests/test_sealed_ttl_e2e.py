@@ -573,3 +573,44 @@ class TestReplSurface:
         assert _expires_at.tzinfo is not None
         delta = _expires_at - datetime.now(timezone.utc)
         assert timedelta(days=9, hours=23) <= delta <= timedelta(days=10, hours=1)
+
+
+# ---------------------------------------------------------------------------
+# PR6 — switch_project consults share_validity before mounting
+# ---------------------------------------------------------------------------
+
+
+class TestSwitchProjectExpiredSealed:
+    def test_switch_to_expired_sealed_mount_denies_and_auto_destroys(
+        self, kr_backend, owner_user_dir, grantee_user_dir
+    ):
+        """An expired sealed share is refused at switch time (ValueError, the
+        switch_project contract) AND the local DEK + descriptor are wiped —
+        the same hygiene _mount_sealed_project applied when get_grantee_dek
+        raised ShareExpiredError. Owner files are untouched."""
+        from axon.main import AxonBrain
+        from axon.mounts import load_mount_descriptor
+        from axon.security import keyring as _kr
+        from axon.security.share import _share_keyring_service
+
+        proj = _populate_and_seal(owner_user_dir)
+        past = datetime.now(timezone.utc) - timedelta(seconds=1)
+        share = generate_sealed_share(
+            owner_user_dir, "research", "bob", "ssk_e2e_switch", expires_at=past
+        )
+        redeem = redeem_sealed_share(grantee_user_dir, share["share_string"])
+
+        brain = MagicMock()
+        brain.config = MagicMock()
+        brain.config.projects_root = str(grantee_user_dir)
+        brain._sealed_cache = None
+        brain._pending_seal_mount = None
+        brain._auto_destroy_expired_share = lambda *a: AxonBrain._auto_destroy_expired_share(
+            brain, *a
+        )
+        with pytest.raises(ValueError, match="expired"):
+            AxonBrain.switch_project(brain, f"mounts/{redeem['mount_name']}")
+        brain.close.assert_not_called()
+        assert _kr.get_secret(_share_keyring_service("ssk_e2e_switch"), "dek") is None
+        assert load_mount_descriptor(grantee_user_dir, redeem["mount_name"]) is None
+        assert (proj / ".security" / "shares" / "ssk_e2e_switch.wrapped").is_file()

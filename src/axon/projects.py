@@ -469,36 +469,37 @@ def has_children(name: str) -> bool:
     return any(e.is_dir() and (e / "meta.json").exists() for e in subs_dir.iterdir())
 
 
+def _project_entry(entry: Path, full_name: str, meta: dict) -> dict:
+    """Build one ``list_projects`` / sub-project dict from a project dir + its meta.
+
+    *meta* may be ``{}`` (sealed projects' ``meta.json`` is ciphertext) —
+    the entry is still listed so sealed projects don't disappear.
+    """
+    state = meta.get("maintenance_state", "normal")
+    return {
+        "name": full_name,
+        "description": meta.get("description", ""),
+        "created_at": meta.get("created_at", ""),
+        "path": str(entry),
+        "maintenance_state": (
+            state if isinstance(state, str) and state in _VALID_MAINTENANCE_STATES else "normal"
+        ),
+        "graph_backend": meta.get("graph_backend", "graphrag"),
+        "children": _list_sub_projects(entry, full_name),
+    }
+
+
 def _list_sub_projects(parent_dir: Path, parent_name: str) -> list[dict]:
     """Recursively list sub-project dicts under a parent directory."""
-    subs_dir = parent_dir / "subs"
-    if not subs_dir.exists():
-        return []
-    result: list[dict] = []
-    for entry in sorted(subs_dir.iterdir()):
-        if not entry.is_dir():
-            continue
-        meta_file = entry / "meta.json"
-        if not meta_file.exists():
-            continue
-        try:
-            meta = json.loads(meta_file.read_text(encoding="utf-8"))
-        except Exception:
-            meta = {}
-        full_name = f"{parent_name}/{entry.name}"
-        state = meta.get("maintenance_state", "normal")
-        result.append(
-            {
-                "name": full_name,
-                "description": meta.get("description", ""),
-                "created_at": meta.get("created_at", ""),
-                "path": str(entry),
-                "maintenance_state": state if state in _VALID_MAINTENANCE_STATES else "normal",
-                "graph_backend": meta.get("graph_backend", "graphrag"),
-                "children": _list_sub_projects(entry, full_name),
-            }
-        )
-    result.sort(key=lambda p: p["created_at"], reverse=True)
+    # NOTE: follows symlinked sub-project dirs (no loop guard) — pre-existing
+    # behaviour, tracked as a follow-up.
+    from axon._dir_scan import iter_json_children
+
+    result = [
+        _project_entry(entry, f"{parent_name}/{entry.name}", meta)
+        for entry, meta in iter_json_children(parent_dir / "subs", "meta.json", on_error="empty")
+    ]
+    result.sort(key=lambda p: str(p["created_at"]), reverse=True)
     return result
 
 
@@ -560,34 +561,15 @@ def list_projects() -> list[dict]:
     graph_backend, children. The 'children' list recursively contains
     sub-project dicts in the same format.
     """
-    if not PROJECTS_ROOT.exists():
-        return []
-    result: list[dict] = []
-    for entry in sorted(PROJECTS_ROOT.iterdir()):
-        if not entry.is_dir():
-            continue
-        if entry.name in _RESERVED_NAMES:
-            continue
-        meta_file = entry / "meta.json"
-        if not meta_file.exists():
-            continue
-        try:
-            meta = json.loads(meta_file.read_text(encoding="utf-8"))
-        except Exception:
-            meta = {}
-        state = meta.get("maintenance_state", "normal")
-        result.append(
-            {
-                "name": entry.name,
-                "description": meta.get("description", ""),
-                "created_at": meta.get("created_at", ""),
-                "path": str(entry),
-                "maintenance_state": state if state in _VALID_MAINTENANCE_STATES else "normal",
-                "graph_backend": meta.get("graph_backend", "graphrag"),
-                "children": _list_sub_projects(entry, entry.name),
-            }
+    from axon._dir_scan import iter_json_children
+
+    result = [
+        _project_entry(entry, entry.name, meta)
+        for entry, meta in iter_json_children(
+            PROJECTS_ROOT, "meta.json", on_error="empty", exclude=_RESERVED_NAMES
         )
-    result.sort(key=lambda p: p["created_at"], reverse=True)
+    ]
+    result.sort(key=lambda p: str(p["created_at"]), reverse=True)
     return result
 
 
@@ -781,21 +763,27 @@ def _remove_share_link(link: Path) -> bool:
 
 def list_share_mounts(user_dir: Path) -> list[dict]:
     """List all active received share mounts for *user_dir*.
-    Reads from ``mounts/`` descriptor files (canonical source of truth).
-    Returns list of dicts with: name, target, is_broken, owner, project.
+    Reads from ``mounts/`` descriptor files and evaluates each one with
+    :func:`axon.share_validity.share_status` (the same check used by
+    ``switch_project`` and the per-query guard).
+    Returns list of dicts with: name, target, is_broken, owner, project,
+    state, reason. ``is_broken`` is True for anything that is not VALID.
     """
-    from axon.mounts import list_mount_descriptors, validate_mount_descriptor
+    from axon.mounts import list_mount_descriptors
+    from axon.share_validity import share_status
 
     results = []
     for desc in list_mount_descriptors(user_dir):
-        valid, _ = validate_mount_descriptor(desc)
+        status = share_status(desc)
         results.append(
             {
-                "name": desc["mount_name"],
+                "name": desc.get("mount_name", ""),
                 "target": desc.get("target_project_dir", ""),
-                "is_broken": not valid,
+                "is_broken": not status.ok,
                 "owner": desc.get("owner", ""),
                 "project": desc.get("project", ""),
+                "state": status.state.value,
+                "reason": status.reason,
             }
         )
     return results

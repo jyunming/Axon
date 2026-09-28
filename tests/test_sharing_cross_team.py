@@ -447,10 +447,25 @@ class TestHierarchicalProjectShare:
 
 class TestValidateReceivedSharesEdgeCases:
     def test_validate_skips_missing_manifest_path(self, tmp_path):
-        """When owner_manifest_path doesn't exist, validate silently skips and preserves record."""
+        """When the owner's manifest can't be read, the share is UNVERIFIABLE:
+        nothing is removed and the received record is preserved."""
         from axon import shares
+        from axon.mounts import create_mount_descriptor, load_mount_descriptor
 
         grantee_dir = _make_user_dir(tmp_path, "bob")
+        # The descriptor is the authority for "which mounts exist"; the owner
+        # store it points at has no manifest at all.
+        target = tmp_path / "nonexistent_owner" / "myproject"
+        target.mkdir(parents=True)
+        create_mount_descriptor(
+            grantee_user_dir=grantee_dir,
+            mount_name="alice_myproject",
+            owner="alice",
+            project="myproject",
+            owner_user_dir=tmp_path / "nonexistent_owner",
+            target_project_dir=target,
+            share_key_id="sk_gone",
+        )
         keys_path = grantee_dir / ".shares" / ".share_keys.json"
         keys_path.write_text(
             json.dumps(
@@ -472,9 +487,36 @@ class TestValidateReceivedSharesEdgeCases:
 
         removed = shares.validate_received_shares(grantee_dir)
         assert removed == []
-        # Record preserved — can't confirm revocation without manifest
+        # Record + descriptor preserved — can't confirm revocation without manifest
         keys = json.loads(keys_path.read_text())
         assert len(keys["received"]) == 1
+        assert load_mount_descriptor(grantee_dir, "alice_myproject") is not None
+
+    def test_validate_prunes_received_record_without_descriptor(self, tmp_path):
+        """A received record whose mount descriptor no longer exists is a
+        dangling pointer and is pruned (the descriptor is the local authority)."""
+        from axon import shares
+
+        grantee_dir = _make_user_dir(tmp_path, "bob")
+        keys_path = grantee_dir / ".shares" / ".share_keys.json"
+        keys_path.write_text(
+            json.dumps(
+                {
+                    "received": [
+                        {
+                            "key_id": "sk_gone",
+                            "owner": "alice",
+                            "project": "myproject",
+                            "mount_name": "alice_myproject",
+                            "owner_manifest_path": str(tmp_path / "nope" / "manifest.json"),
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        assert shares.validate_received_shares(grantee_dir) == []
+        assert json.loads(keys_path.read_text())["received"] == []
 
     def test_validate_multiple_keys_removes_only_revoked(self, tmp_path):
         """With two received shares, only the revoked one's mount is removed."""
