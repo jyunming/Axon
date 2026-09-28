@@ -402,6 +402,7 @@ async def delete_project_endpoint(name: str):
         to_remove = [k for k in _api._source_hashes if k == name or k.startswith(f"{name}/")]
         for key in to_remove:
             _api._source_hashes.pop(key, None)
+        _api._save_source_hashes()
         return {"status": "success", "message": f"Project '{name}' deleted."}
     except ProjectHasChildrenError as e:
         raise HTTPException(status_code=400, detail=str(e))

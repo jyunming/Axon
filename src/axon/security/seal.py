@@ -320,6 +320,18 @@ def project_seal(
             orphans_removed,
             project_dir,
         )
+    # Likewise a crashed atomic metadata write (e.g. meta.json's temp file):
+    # _should_seal() skips it, so it would otherwise stay behind as plaintext
+    # inside a project that is meant to be encrypted at rest.
+    from axon._atomic_persist import remove_orphaned_tmps
+
+    tmps_removed = remove_orphaned_tmps(project_dir)
+    if tmps_removed:
+        logger.info(
+            "project_seal: removed %d orphaned atomic-write temp file(s) under %s",
+            tmps_removed,
+            project_dir,
+        )
     # Stable seal_id used as the AAD's key_id position so that files
     # cannot be swapped between two projects sealed with the same
     # owner master. Persisted in .security/.sealing BEFORE any file is

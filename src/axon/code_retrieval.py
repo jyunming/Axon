@@ -604,12 +604,18 @@ class CodeRetrievalMixin:
         long_tokens = frozenset(t for t in query_tokens if len(t) >= 3)
         if not long_tokens:
             return []
-        # Collect all corpora (handles single and multi-project fan-out)
-        if hasattr(self.bm25, "_retrievers"):
-            corpora = [r.corpus for r in self.bm25._retrievers if hasattr(r, "corpus")]
-        elif hasattr(self.bm25, "corpus"):
-            corpora = [self.bm25.corpus]
-        else:
+        # Collect all corpora (handles single and multi-project fan-out). Each
+        # is loaded first — after a restart it can still be an undecoded
+        # payload with an empty ``.corpus``.
+        retrievers = getattr(self.bm25, "_retrievers", None) or [self.bm25]
+        corpora = []
+        for r in retrievers:
+            if not hasattr(r, "corpus"):
+                continue
+            if callable(getattr(r, "ensure_corpus_loaded", None)):
+                r.ensure_corpus_loaded()
+            corpora.append(r.corpus)
+        if not corpora:
             return []
         if getattr(self.config, "symbol_index_engine", "python") == "rust":
             from axon.rust_bridge import get_rust_bridge

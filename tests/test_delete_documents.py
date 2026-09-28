@@ -147,7 +147,7 @@ class TestDeleteByDocumentId:
         def _materialize():
             bm25.corpus = pending
 
-        bm25._ensure_corpus_materialized = _materialize
+        bm25.ensure_corpus_loaded = _materialize
 
         assert brain.delete_documents(["A"])["doc_ids"] == ["A_chunk_0"]
 

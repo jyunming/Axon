@@ -277,16 +277,23 @@ class RemoteBrain:
     # ------------------------------------------------------------------ #
     # Ingestion
     # ------------------------------------------------------------------ #
-    def ingest(self, documents, progress_callback=None) -> None:
+    def ingest(self, documents, progress_callback=None) -> int:
         """Ingest already-loaded document dicts through the server's /add_texts.
 
         ``AxonBrain.ingest`` receives a list of ``{id, text, metadata}`` dicts
         (the loader has already run), so the path-based ``/ingest`` endpoint does
         not fit; ``/add_texts`` is the batch doc-dict ingest and performs the
         same store mutation through the single server.
+
+        Returns a count like ``AxonBrain.ingest`` does, so callers that treat 0
+        as "everything was already ingested" work against either brain. The
+        server reports per document rather than per stored chunk, so this is
+        the chunk count of the documents it created — exactly 0 when every
+        document was a duplicate, but not always equal to the local brain's
+        post-split chunk count.
         """
         if not documents:
-            return
+            return 0
         if progress_callback is not None:
             try:
                 progress_callback("loading")
@@ -300,12 +307,19 @@ class RemoteBrain:
             }
             for d in documents
         ]
-        self._request("POST", "/add_texts", {"docs": docs, "project": self._active_project})
+        results = self._request(
+            "POST", "/add_texts", {"docs": docs, "project": self._active_project}
+        )
         if progress_callback is not None:
             try:
                 progress_callback("completed")
             except Exception:
                 pass
+        return sum(
+            int(r.get("chunks") or 0)
+            for r in results or []
+            if isinstance(r, dict) and r.get("status") == "created"
+        )
 
     async def load_directory(self, directory: str) -> None:
         """Ingest a directory via the path-based /ingest endpoint (+poll)."""

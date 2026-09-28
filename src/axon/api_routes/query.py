@@ -308,6 +308,7 @@ async def clear_brain():
         _api._source_hashes.pop(project_key, None)
         if project_key == "default":
             _api._source_hashes.pop("_global", None)
+        _api._save_source_hashes()
         return {"status": "success", "message": "Collection cleared"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

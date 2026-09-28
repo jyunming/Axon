@@ -32,19 +32,17 @@ Check both where relevant.
 Not duplication — correctness issues found while cataloging. Flagged here so
 they aren't lost; fixing them is a separate decision from this doc.
 
-- **`RemoteBrain.ingest()` returns `None`; `AxonBrain.ingest()` returns the
-  number of chunks written.** A caller that branches on the count (e.g. "0
-  means everything was a duplicate") silently loses that signal when handed a
-  `RemoteBrain` (`remote_brain.py`). Proxy-parity gap, not duplication.
 - **More config/getattr-fallback drift may be latent in `graph_rag.py`.**
   `graph_defaults.py`'s own docstring records that the audit behind
-  the #160–#164 collapse found further drifts of the kind the #160–#164 collapse fixed
+  the #160–#164 collapse found further drifts of the kind it fixed
   (some inverting a boolean) in the still-uncollapsed `graph_rag_*` surface.
   Source-documented, not independently re-verified here.
 
 *Resolved since the 2026-08-28 audit:* `self.llm.generate()` didn't exist, so
 LLM route classification and contextual retrieval silently did nothing — both
-call sites now use `self.llm.complete()` (#156, `532ab0a`).
+call sites now use `self.llm.complete()` (#156, `532ab0a`). `RemoteBrain.ingest()`
+returned `None` where `AxonBrain.ingest()` returns the chunk count — it now
+returns the count of chunks the server created (0 when all were duplicates).
 
 ---
 
@@ -66,10 +64,8 @@ notes — full detail lives there. This is a scannable index.
     explicitly deferred them).
   - `retrievers.py`'s `BM25Retriever.save()` — the same pattern hand-rolled
     four times inside one method.
-- **Private helpers used as public API.** `seal._should_seal` (imported by
-  `cache.py` and `share.py`) and `BM25Retriever._ensure_corpus_materialized`
-  (called by `AxonBrain.delete_documents` via `getattr`, because
-  `BM25Retriever` has no public accessor for its materialized corpus).
+- **Private helper used as public API.** `seal._should_seal` (imported by
+  `cache.py` and `share.py`).
 
 **Within one subsystem** (see that section for full detail):
 - **Core Engine** — `_switch_to_scope`/`switch_project` duplicate `Multi*`
@@ -137,7 +133,13 @@ caches (`15806a1`); `OpenLLM.ping_local()` vs `doctor.check_local_llm_reachable(
 (`_pid_check.py`); per-surface delete logic (`AxonBrain.delete_documents`, #169);
 bare, non-atomic `write_text()` for `meta.json` / `store_meta.json` / share
 manifests / mount descriptors / session files (now `_atomic_persist`, which
-also gives each writer its own temp file).
+also gives each writer its own temp file); `BM25Retriever._ensure_corpus_materialized`
+reached through `getattr` (now the public `ensure_corpus_loaded()`, also used by
+the code-symbol channel, which had been reading an unloaded corpus); API source
+dedup records (`/collection/stale`) resetting on every server restart (now
+`<projects_root>/.source_hashes.json`). `pack_project`/`unpack_project` missing
+from `agent.py::REPL_TOOLS` is deliberate: admin operations stay off agent
+surfaces (0.5.0 tiering); REPL users have `/project pack`/`unpack`.
 
 ---
 
@@ -498,7 +500,7 @@ Role: One `BaseLoader` subclass per source/file type (24 loaders), all dispatche
 - **Duplicated `transform_documents` boilerplate** — `SemanticTextSplitter`, `RecursiveCharacterTextSplitter`, `MarkdownSplitter`, `CosineSemanticSplitter`, and `CodeAwareSplitter` (`splitters.py:142,244,301,403,855`) each hand-roll nearly identical chunk-metadata assembly (`source_id`, `subdoc_locator`, `chunk_index`, `chunk_kind`, id suffixing). A shared `_build_chunk_metadata()`/mixin would remove ~5x copy-pasted logic. Still present — `splitters.py` had zero commits between 2aa84f6 and current `main`.
 - **Two independent sentence segmenters** — `splitters.py:_split_sentences` (`splitters.py:11`, abbreviation-aware, used by `SemanticTextSplitter`/`CosineSemanticSplitter`) vs. `sentence_window.py:segment_text` (`sentence_window.py:69`, simpler regex + Rust-bridge fast path, short-fragment merging). Both solve "split prose into sentences" but with different rules and no shared implementation. Still present — neither file changed in the audited range.
 - **`BM25Retriever.save()` hand-rolls tempfile+`os.replace` atomic writes independently, 4 separate times in one method** (`retrievers.py:376-379` msgpack.zst, `:397-400` msgpack, `:421-424` json.zst, `:435-453` json-with-shutil-fallback), instead of calling the shared `_atomic_persist.write_bytes_if_changed()` / `write_text_if_changed()` helpers that already exist for exactly this shape of write and are used elsewhere (Graph RAG, Config). This is the same "atomic file writes reimplemented independently" pattern flagged cross-subsystem for the Security module, but `retrievers.py` isn't in that list — it should be added to it.
-- **`BM25Retriever._ensure_corpus_materialized()` is effectively public API reached through `getattr`** — `main.py`'s document-delete path (`main.py:1194-1202`) needs the raw in-memory corpus to expand document ids into chunk ids, and does so by calling the underscore-prefixed `_ensure_corpus_materialized()` via `getattr(bm25, "_ensure_corpus_materialized", None)` + a callable check, then reads `bm25.corpus` directly, rather than `BM25Retriever` exposing a public accessor. Same shape as the `seal._should_seal` leaky-underscore case already flagged in the Security section.
+- `BM25Retriever.ensure_corpus_loaded()` — **public** way to make `.corpus` hold every document before reading it directly (after a restart it can still be an undecoded on-disk payload). Used by `AxonBrain.delete_documents` and `CodeRetrievalMixin._symbol_channel_search` — call it before iterating `.corpus` from outside the class — `retrievers.py`
 
 ---
 
@@ -949,7 +951,7 @@ Role: Governance/audit backend for the Operator Console — a SQLite-first (JSON
 
 - **Project listing walks meta.json twice, in two shapes.** `projects.list_projects()` / `_list_sub_projects()` (`projects.py:556`, `:471`) build a recursive tree of project dicts (name/description/created_at/path/maintenance_state/graph_backend/children) purely by reading `meta.json` files directly. `mounts.list_mount_descriptors()` and `projects.list_share_mounts()` independently do a similar directory-scan-plus-JSON-parse pattern over `mounts/`. There's no shared "scan a directory of dirs, parse each meta/descriptor JSON, skip on parse error" helper — the same defensive try/except JSON-read loop is duplicated four times (`_list_sub_projects`, `list_projects`, `list_mount_descriptors`, `list_share_mounts`). Still present, unchanged since the 2026-08-28 audit. A shared internal iterator could reduce duplication if this file set is ever refactored.
 - **Two independent "is this share still good" checks.** `mounts.validate_mount_descriptor()` (`mounts.py:172`) checks `revoked`/`state`/target-existence on a descriptor, while `shares.validate_received_shares()` (`shares.py:399`) separately re-derives revoked/expired status by re-reading the *owner's* manifest and comparing key_ids. These overlap conceptually (both answer "is this mount still valid?") but check different sources of truth (local descriptor state vs. owner's manifest) — worth documenting clearly so a future caller doesn't assume one implies the other, since a descriptor can look locally "active" while the owner's manifest already shows it revoked (that's exactly the gap `validate_received_shares` exists to close, but it's not obvious from `validate_mount_descriptor` alone). Still present, unchanged.
-- **Metadata writes are atomic (resolved).** `shares._write_json()`, `mounts.create_mount_descriptor()`, `projects.py`'s `meta.json` / `store_meta.json` / active-project writers and `sessions._save_session()` used to write with a bare `write_text()` / `open("w")`, so a crash mid-write could leave a truncated `meta.json` or descriptor. They now all go through `_atomic_persist.write_json_if_changed(..., indent=2)` (`write_text_if_changed` for the active-project file), keeping the files' human-readable format. Remaining gap: a temp file orphaned by a process killed mid-write is skipped by `project_pack` (`is_atomic_tmp`) but not yet by sealing (`security/seal.py`) or the sealed plaintext cache (`security/cache.py`), and nothing sweeps them.
+- **Metadata writes are atomic (resolved).** `shares._write_json()`, `mounts.create_mount_descriptor()`, `projects.py`'s `meta.json` / `store_meta.json` / active-project writers and `sessions._save_session()` used to write with a bare `write_text()` / `open("w")`, so a crash mid-write could leave a truncated `meta.json` or descriptor. They now all go through `_atomic_persist.write_json_if_changed(..., indent=2)` (`write_text_if_changed` for the active-project file), keeping the files' human-readable format. A temp file orphaned by a process killed mid-write is skipped by `project_pack` and the sealed plaintext cache (`is_atomic_tmp`), and removed by `project_seal` (`remove_orphaned_tmps`, which leaves a live writer's temp alone).
 - **`project_pack._resolve_project_dir()` is a third independent copy of the "resolve a project name against an explicit user_dir, honoring `subs/` nesting" pattern**, after `projects.project_dir()` (resolves against the process-global `PROJECTS_ROOT`) and `security.seal._resolve_project_dir()` (`seal.py:256`, resolves against an explicit `user_dir` for the same reason: CLI's early-exit path never calls `set_projects_root()`). `project_pack.py:49`'s docstring explicitly acknowledges duplicating rather than importing `seal`'s version. Not a bug — each copy exists for a documented reason — but a shared `resolve_project_dir_at(name, user_dir)` helper (in `projects.py`, imported by both `seal.py` and `project_pack.py`) would remove the third near-identical implementation.
 
 ---
@@ -1535,6 +1537,7 @@ already does as a strict superset — 57→56), and `pack_project`/`unpack_proje
 - `write_json_if_changed(path, payload, cache, *, sort_keys=False, indent=None, ensure_ascii=True)` — atomically writes JSON to `path` via SHA-1-digest-gated skip-if-unchanged, using `axon.version_marker._atomic_replace` for a crash/OneDrive-safe rename; returns `True` if it wrote, `False` if skipped. Compact by default; with `indent` it serializes exactly like `json.dumps(payload, indent=...)` (the human-readable metadata files use `indent=2`) — `_atomic_persist.py`
 - `_tmp_path(p)` — per-writer temp name (`<name>.<pid>.<random>.tmp`) used by all three writers, so two processes writing the same file (e.g. `axon-api` and a one-off CLI both touching `meta.json`) can't clobber each other's temp file; a failed temp write removes its partial temp instead of orphaning it — `_atomic_persist.py`
 - `is_atomic_tmp(path)` — true for a temp file left by these writers (only a process killed between write and rename can leave one). Anything that copies a whole project directory should skip these; `project_pack.pack_project` does — `_atomic_persist.py`
+- `remove_orphaned_tmps(root)` — delete these temps under *root* that are over an hour old and whose writer pid is not alive here (the age check covers a store on a synced folder, where another machine's in-flight temp carries a pid that means nothing locally); `project_seal` runs it before encrypting, so no plaintext temp survives inside a sealed project — `_atomic_persist.py`
 - `write_bytes_if_changed(path, payload, cache)` — **new** (commit `2427be1`): same digest-cache/skip-if-unchanged/Windows-safe-replace contract as `write_json_if_changed`, for raw `bytes` payloads (msgpack, pre-encoded YAML/text, key material) that aren't JSON. Pass a throwaway `{}` for `cache` on one-shot writers with no cross-call digest reuse need — `_atomic_persist.py:62`
 - `write_text_if_changed(path, text, cache, *, encoding="utf-8")` — **new** (commit `2427be1`): thin wrapper over `write_bytes_if_changed()` for plain-text content (YAML, `.env`-style key=value files, newline-joined lists) — `_atomic_persist.py:96`
 

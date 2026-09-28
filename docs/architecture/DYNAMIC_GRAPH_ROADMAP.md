@@ -4,8 +4,9 @@
 
 ### What this roadmap covers
 
-Axon currently has one graph strategy: `GraphRagMixin`, wired directly into
-`OpenStudioBrain` via inheritance. This roadmap introduces a **stable backend
+When this roadmap was written, Axon had one graph strategy: `GraphRagMixin`,
+wired directly into the brain class (then `OpenStudioBrain`, now `AxonBrain`)
+via inheritance. This roadmap introduces a **stable backend
 interface** that decouples graph strategy from the core brain, and adds a second
 backend — **Dynamic Graph** — for projects with evolving, timestamped knowledge.
 
@@ -383,6 +384,16 @@ Package version bumped to `1.0.0`.
 ## Sprint Timeline
 
 Starting **2026-04-06**.
+
+> **Status (2026-09-28): the schedule below slipped, and v1.0 is deferred past
+> Axon 0.5.0.** M0–M2 and the v0.2–v0.4 milestones shipped (the backend
+> Protocol, SQLite dynamic graph, conflict/supersede, federation). Still open
+> from the v1.0 rows: the eight stress tests and the P95 performance baselines,
+> the dynamic-graph entity timeline view, the per-project relation-registry
+> YAML override (only the built-in `_EXCLUSIVE_RELATIONS` exists),
+> `point_in_time` on `/query` (it is only on `POST /graph/retrieve`), the
+> GLiNER/REBEL parity test, the GraphRAG prompt provenance rewrite, and a
+> dedicated dynamic-graph user guide. The dates are kept as the original plan.
 
 | Sprint | Dates | Milestone | Deliverable |
 |---|---|---|---|

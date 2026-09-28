@@ -46,6 +46,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from axon._atomic_persist import is_atomic_tmp
 from axon._pid_check import pid_alive
 
 try:
@@ -341,6 +342,8 @@ class SealedCache:
                 rel_parts = rel.parts
                 if rel_parts and rel_parts[0] == ".security":
                     continue
+                if is_atomic_tmp(src):
+                    continue  # a crashed metadata write's temp — never read
                 dst = cache_dir / rel
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 if is_sealed_file(src):
