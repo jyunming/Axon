@@ -150,6 +150,7 @@ Supported: `.txt`, `.md`, `.py`, `.json`, `.csv`, `.html`, `.docx`, `.pdf`, imag
 | `/graph finalize` | Trigger explicit community rebuild (reports `not_applicable` on backends without a community step, e.g. `dynamic_graph`) |
 | `/graph conflicts` | List facts with `status='conflicted'` (dynamic_graph or federated backend); `graphrag` reports unsupported |
 | `/graph retrieve <q> [--at TS] [--top-k N]` | Run the active backend's `retrieve()` directly. `--at` passes an ISO-8601 `point_in_time` (only honoured by bi-temporal backends) |
+| `/graph fact <s> \| <REL> \| <o> [\| desc] [--add\|--replace]` | Assert or correct one fact (`dynamic_graph` / `federated` projects); default replaces for exclusive relations only |
 | `/graph viz` | Open the interactive 3D graph — embedded webview in VS Code, default browser elsewhere |
 | `/graph-viz [path]` | Export entity–relation graph as HTML; omit path to open in browser immediately (requires `pip install axon[graphrag]`) |
 | `/retry` | Re-send the last query (useful after switching model or RAG settings) |

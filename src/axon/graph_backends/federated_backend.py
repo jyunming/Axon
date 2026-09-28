@@ -21,6 +21,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from axon.graph_backends.base import (
+    FactUpdateResult,
     FinalizationResult,
     GraphContext,
     GraphDataFilters,
@@ -249,6 +250,56 @@ class FederatedGraphBackend:
                     getattr(b, "BACKEND_ID", type(b).__name__),
                     exc,
                 )
+
+    def upsert_fact(
+        self,
+        subject: str,
+        relation: str,
+        obj: str,
+        *,
+        description: str = "",
+        confidence: float = 1.0,
+        replace: bool | None = None,
+        provenance: str = "agent",
+    ) -> FactUpdateResult:
+        """Delegate an explicit fact write to the dynamic_graph sub-backend.
+
+        Only the dynamic_graph half stores editable, bi-temporal facts; the
+        graphrag half derives its graph from ingested text. Unlike the other
+        fan-out methods here, errors are NOT swallowed: ``PermissionError``
+        (mounted share) and ``ValueError`` (invalid input) must reach the
+        caller so the REST/CLI/REPL surfaces can report them.
+        """
+        sub = self._dynamic_sub_backend()
+        if sub is None:
+            return FactUpdateResult(
+                status="not_applicable",
+                backend_id=BACKEND_ID,
+                detail=(
+                    "the federated project's dynamic_graph sub-backend is unavailable "
+                    "(it failed to initialise), so there is nowhere to record facts."
+                ),
+            )
+        result = sub.upsert_fact(
+            subject,
+            relation,
+            obj,
+            description=description,
+            confidence=confidence,
+            replace=replace,
+            provenance=provenance,
+        )
+        result.backend_id = BACKEND_ID
+        result.detail = (
+            f"{result.detail}; via dynamic_graph" if result.detail else "via dynamic_graph"
+        )
+        return result
+
+    def _dynamic_sub_backend(self):
+        for b in self._backends:
+            if getattr(b, "BACKEND_ID", None) == "dynamic_graph":
+                return b
+        return None
 
     def close(self) -> None:
         """Close every sub-backend that has one (e.g. DynamicGraphBackend's

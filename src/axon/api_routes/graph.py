@@ -10,7 +10,7 @@ from fastapi.responses import HTMLResponse
 
 from axon.api_routes import _enforce_write_access
 from axon.api_routes import enforce_project as _enforce_project
-from axon.api_schemas import QueryVisualizeRequest, SearchVisualizeRequest
+from axon.api_schemas import GraphFactRequest, QueryVisualizeRequest, SearchVisualizeRequest
 
 logger = logging.getLogger("AxonAPI")
 
@@ -170,6 +170,50 @@ async def graph_retrieve(request: Request):
         "backend": getattr(backend, "BACKEND_ID", "unknown"),
         "contexts": [_serialise_context(c) for c in contexts],
     }
+
+
+@router.post("/graph/facts", tags=["graph"])
+async def graph_update_fact(payload: GraphFactRequest, request: Request):
+    """Assert or correct one fact in the active project's graph.
+
+    Backed by ``AxonBrain.update_fact()`` → the graph backend's
+    ``upsert_fact()``. On ``dynamic_graph``/``federated`` projects the fact is
+    stored with bi-temporal supersession (``status`` is ``created``,
+    ``superseded`` or ``unchanged``); on ``graphrag``/``none`` projects the
+    response is HTTP 200 with ``status: "not_applicable"`` and a ``detail``
+    string, like ``/graph/finalize``. The calling surface (``X-Axon-Surface``)
+    is recorded as the fact's provenance.
+
+    Errors: 503 no brain, 409 ``project`` mismatch, 403 read-only project or
+    mounted share, 422 invalid input.
+    """
+    import asyncio
+
+    from axon import api as _api
+
+    brain = _api.brain
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+    _enforce_project(payload.project, brain)
+    _enforce_write_access(brain, "update_fact")
+    try:
+        return await asyncio.to_thread(
+            brain.update_fact,
+            payload.subject,
+            payload.relation,
+            payload.object,
+            description=payload.description,
+            confidence=payload.confidence,
+            replace=payload.replace,
+            provenance=getattr(request.state, "surface", "api"),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error(f"update_fact failed: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 def _resolve_graph_payload(brain) -> dict:

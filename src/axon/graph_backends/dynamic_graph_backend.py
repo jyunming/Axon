@@ -32,6 +32,7 @@ import html
 import json
 import logging
 import os
+import re
 import shutil
 import sqlite3
 import threading
@@ -41,6 +42,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from axon.graph_backends.base import (
+    FactUpdateResult,
     FinalizationResult,
     GraphContext,
     GraphDataFilters,
@@ -122,6 +124,10 @@ _EXCLUSIVE_RELATIONS: frozenset[str] = frozenset(
     }
 )
 
+# Valid relation after normalisation (``.upper()`` + spaces -> underscores, the
+# same normalisation LLM extraction applies): UPPER_SNAKE_CASE, <= 64 chars.
+_RELATION_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
+
 # ---------------------------------------------------------------------------
 # Extraction prompts
 # ---------------------------------------------------------------------------
@@ -158,6 +164,16 @@ def _sha8(text: str) -> str:
 
 def _now_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
+
+
+def _fact_id(subj_norm: str, rel_upper: str, obj_norm: str, now: str) -> str:
+    """Deterministic fact id — shared by extraction and explicit writes."""
+    return _sha8(f"{subj_norm}|{rel_upper}|{obj_norm}|{now}")
+
+
+def _normalize_relation(relation: str) -> str:
+    """Normalise a relation the way LLM extraction does (UPPER_SNAKE_CASE)."""
+    return (relation or "").strip().upper().replace(" ", "_")
 
 
 def _norm(name: str) -> str:
@@ -309,7 +325,10 @@ class DynamicGraphBackend:
         self._brain = brain
         _base = Path(getattr(brain.config, "bm25_path", "."))
         self._snapshot_path = _base / SNAPSHOT_FILENAME
-        self._write_lock = threading.Lock()
+        # Re-entrant: upsert_fact() holds the lock across its whole
+        # check-then-write while calling _upsert_entity()/_upsert_fact(),
+        # which take it themselves.
+        self._write_lock = threading.RLock()
         active_project = getattr(brain, "_active_project", "") or ""
         self._is_mounted: bool = active_project.startswith("mounts/")
         # Owner-side DB lives under bm25_path by default, but is redirected to
@@ -418,7 +437,27 @@ class DynamicGraphBackend:
         conn.execute("PRAGMA foreign_keys=ON")
         conn.executescript(_SCHEMA_SQL)
         conn.commit()
+        self._migrate(conn)
         return conn
+
+    @staticmethod
+    def _migrate(conn: sqlite3.Connection) -> None:
+        """One-shot, idempotent data migrations keyed on ``PRAGMA user_version``.
+
+        v1 — explicit retraction. Before it, ``delete_documents()`` marked a
+        fact that lost all its evidence ``superseded``, indistinguishable from
+        one replaced by a newer assertion. Facts retracted that way are the
+        ``superseded`` facts with no evidence rows left; mark them
+        ``retracted`` so point-in-time queries keep hiding them, as before.
+        """
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if version < 1:
+            conn.execute(
+                "UPDATE facts SET status = 'retracted' WHERE status = 'superseded' "
+                "AND NOT EXISTS (SELECT 1 FROM fact_evidence ev WHERE ev.fact_id = facts.fact_id)"
+            )
+            conn.execute("PRAGMA user_version = 1")
+            conn.commit()
 
     def _init_memory_db(self) -> sqlite3.Connection:
         """Create an in-memory SQLite used by grantees to replay a snapshot."""
@@ -699,8 +738,19 @@ class DynamicGraphBackend:
         chunk_id: str,
         episode_id: str,
         now: str,
+        *,
+        explicit: bool = False,
+        metadata: dict | None = None,
     ) -> str:
-        """Insert a fact; supersede conflicting exclusive facts. Return fact_id."""
+        """Insert a fact; supersede conflicting exclusive facts. Return fact_id.
+
+        ``explicit=True`` is the agent/user write path (:meth:`upsert_fact`):
+        the caller has already decided which facts to supersede, so the
+        scope_key supersede/±1 s conflict rule below is skipped entirely and
+        the fact is inserted as ``active``. Extraction (``explicit=False``)
+        behaves exactly as before. ``metadata`` replaces the default
+        ``{"description": description}`` payload.
+        """
         subj_norm = _norm(subject)
         obj_norm = _norm(obj)
         rel_upper = relation.upper()
@@ -708,12 +758,13 @@ class DynamicGraphBackend:
         scope_key: str | None = None
         if rel_upper in _EXCLUSIVE_RELATIONS:
             scope_key = f"{subj_norm}:{rel_upper}"
-        fact_id = _sha8(f"{subj_norm}|{rel_upper}|{obj_norm}|{now}")
+        fact_id = _fact_id(subj_norm, rel_upper, obj_norm, now)
         with self._write_lock:
+            new_fact_status = "active"
             # Supersede or conflict existing active facts with the same scope_key.
             # If the existing active fact has the same timestamp (±1 s), both are
             # conflicted (same-time contradictory assertions); otherwise supersede.
-            if scope_key is not None:
+            if scope_key is not None and not explicit:
                 # Include both 'active' and prior 'conflicted' facts for the same scope —
                 # a new assertion always supersedes or re-conflicts existing ones.
                 existing_rows = self._conn.execute(
@@ -748,7 +799,7 @@ class DynamicGraphBackend:
                     )
                     else "active"
                 )
-            _insert_status = new_fact_status if scope_key is not None else "active"
+            _insert_status = new_fact_status
             # Conflicted facts get invalid_at=now so temporal queries exclude them
             # (invalid_at IS NULL means "still valid"; conflicted is logically invalid).
             _invalid_at = now if _insert_status == "conflicted" else None
@@ -764,7 +815,7 @@ class DynamicGraphBackend:
                     _insert_status,
                     scope_key,
                     confidence,
-                    json.dumps({"description": description}),
+                    json.dumps(metadata if metadata is not None else {"description": description}),
                 ),
             )
             self._conn.execute(
@@ -843,6 +894,169 @@ class DynamicGraphBackend:
         self._export_snapshot()
         return result
 
+    def _ensure_agent_evidence(self, fact_id: str, content: str, provenance: str, now: str) -> bool:
+        """Attach the ``agent:<fact_id>`` sentinel evidence (+ its episode) to
+        an existing fact unless it already has it. Caller holds the write lock
+        and commits. Returns True when rows were inserted — repeat calls are
+        no-ops, so neither evidence nor episodes are duplicated."""
+        chunk_id = f"agent:{fact_id}"
+        if self._conn.execute(
+            "SELECT 1 FROM fact_evidence WHERE fact_id = ? AND chunk_id = ? LIMIT 1",
+            (fact_id, chunk_id),
+        ).fetchone():
+            return False
+        episode_id = _sha8(f"ep|{chunk_id}|{now}")
+        self._conn.execute(
+            "INSERT OR IGNORE INTO episodes (episode_id, chunk_id, content, "
+            "reference_time, metadata) VALUES (?, ?, ?, ?, ?)",
+            (episode_id, chunk_id, content, now, json.dumps({"provenance": provenance})),
+        )
+        self._conn.execute(
+            "INSERT INTO fact_evidence (fact_id, chunk_id, episode_id) VALUES (?, ?, ?)",
+            (fact_id, chunk_id, episode_id),
+        )
+        return True
+
+    def upsert_fact(
+        self,
+        subject: str,
+        relation: str,
+        obj: str,
+        *,
+        description: str = "",
+        confidence: float = 1.0,
+        replace: bool | None = None,
+        provenance: str = "agent",
+    ) -> FactUpdateResult:
+        """Record an explicit (agent/user-asserted) fact.
+
+        * ``relation`` is normalised like extraction does (upper-case,
+          spaces -> underscores) and must match ``^[A-Z][A-Z0-9_]{0,63}$``;
+          ``subject``/``object`` must be non-empty after stripping, and
+          ``confidence`` must be within 0.0-1.0 — otherwise ``ValueError``.
+        * ``replace=None`` means "replace" for exclusive relations
+          (``_EXCLUSIVE_RELATIONS``, e.g. ``IS_CEO_OF``) and "add" otherwise.
+        * Replace mode: afterwards the asserted fact is the only current fact
+          for (subject, relation). Every other ``active``/``conflicted`` fact
+          with that subject and relation is superseded — matched on
+          (subject, relation), not ``scope_key``, because extracted
+          non-exclusive facts carry ``scope_key = NULL``. If the identical
+          fact is already active it is kept (no new row) and only the others
+          are superseded (status ``"superseded"``); if nothing else needed
+          superseding the result is ``"unchanged"``.
+        * Add mode: the fact is appended; existing facts are untouched. An
+          identical active fact makes this a no-op (``"unchanged"``).
+        * Explicit writes never trip the ±1 s same-timestamp conflict rule
+          that extraction uses, so two quick updates supersede cleanly.
+        * The fact gets a sentinel ``fact_evidence`` row (chunk id
+          ``agent:<fact_id>``) plus an episode row recording the provenance,
+          so ``delete_documents()`` of unrelated chunks — which supersedes
+          evidence-less facts — never wipes it. Deleting that sentinel chunk
+          id retracts the fact.
+        * Raises ``PermissionError`` on a mounted share (grantees read a
+          snapshot; only the owner can write).
+        """
+        if self._is_mounted:
+            raise PermissionError(
+                "This graph belongs to a mounted share and is read-only here; "
+                "only the project owner can update facts."
+            )
+        subj = (subject or "").strip()
+        obj_s = (obj or "").strip()
+        if not subj:
+            raise ValueError("subject must not be empty")
+        if not obj_s:
+            raise ValueError("object must not be empty")
+        rel = _normalize_relation(relation)
+        if not _RELATION_RE.match(rel):
+            raise ValueError(
+                f"relation {relation!r} is invalid: after normalisation it must match "
+                "^[A-Z][A-Z0-9_]{0,63}$ (letters, digits, underscores; starts with a letter)"
+            )
+        try:
+            conf = float(confidence)
+        except (TypeError, ValueError):
+            raise ValueError(f"confidence must be a number, got {confidence!r}") from None
+        if not 0.0 <= conf <= 1.0:
+            raise ValueError(f"confidence must be between 0.0 and 1.0, got {confidence!r}")
+        do_replace = (rel in _EXCLUSIVE_RELATIONS) if replace is None else bool(replace)
+        desc = (description or "").strip()
+        subj_norm = _norm(subj)
+        obj_norm = _norm(obj_s)
+
+        with self._write_lock:
+            rows = self._conn.execute(
+                "SELECT fact_id, object, status FROM facts "
+                "WHERE subject = ? AND relation = ? AND status IN ('active', 'conflicted')",
+                (subj_norm, rel),
+            ).fetchall()
+            keep = next(
+                (r["fact_id"] for r in rows if r["status"] == "active" and r["object"] == obj_norm),
+                None,
+            )
+            stale = [r["fact_id"] for r in rows if r["fact_id"] != keep] if do_replace else []
+            now = _now_iso()
+            content = f"{subj} {rel} {obj_s}" + (f": {desc}" if desc else "")
+            if keep is not None:
+                # An agent confirming an existing (possibly extracted) fact
+                # takes ownership of it: give it the sentinel evidence so
+                # deleting its source document no longer retracts it.
+                added = self._ensure_agent_evidence(keep, content, provenance, now)
+                if not stale:
+                    if added:
+                        self._conn.commit()
+                    return FactUpdateResult(
+                        status="unchanged",
+                        backend_id=BACKEND_ID,
+                        fact_id=keep,
+                        detail="identical fact is already active",
+                    )
+            fact_id = keep or _fact_id(subj_norm, rel, obj_norm, now)
+            chunk_id = f"agent:{fact_id}"
+            episode_id = _sha8(f"ep|{chunk_id}|{now}")
+            if keep is None:
+                self._upsert_entity(subj, "UNKNOWN", "", now)
+                self._upsert_entity(obj_s, "UNKNOWN", "", now)
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO episodes (episode_id, chunk_id, content, "
+                    "reference_time, metadata) VALUES (?, ?, ?, ?, ?)",
+                    (episode_id, chunk_id, content, now, json.dumps({"provenance": provenance})),
+                )
+            # Supersede before inserting so the new row is never touched; the
+            # commit inside _upsert_fact() (or the one below) makes the
+            # supersede + insert land together.
+            for fid in stale:
+                self._conn.execute(
+                    "UPDATE facts SET status = 'superseded', invalid_at = ? WHERE fact_id = ?",
+                    (now, fid),
+                )
+            if keep is None:
+                self._upsert_fact(
+                    subj,
+                    rel,
+                    obj_s,
+                    desc,
+                    conf,
+                    chunk_id,
+                    episode_id,
+                    now,
+                    explicit=True,
+                    metadata={"description": desc, "provenance": provenance},
+                )
+            else:
+                self._conn.commit()
+        self._cached_nx_graph = None
+        self._export_snapshot()
+        return FactUpdateResult(
+            status="superseded" if stale else "created",
+            backend_id=BACKEND_ID,
+            fact_id=fact_id,
+            superseded_ids=stale,
+            detail=(
+                f"replaced {len(stale)} earlier fact(s) for ({subj_norm}, {rel})" if stale else ""
+            ),
+        )
+
     def retrieve(
         self,
         query: str,
@@ -865,29 +1079,38 @@ class DynamicGraphBackend:
         # When point_in_time is set, return facts valid at that instant
         # (valid_at <= pit AND (invalid_at IS NULL OR invalid_at > pit));
         # otherwise return currently active facts only.
+        #
+        # Superseded (and conflicted) facts ARE part of history: they stay
+        # visible inside their [valid_at, invalid_at) window, even after their
+        # source document is deleted. Only facts delete_documents() marked
+        # 'retracted' (a current fact whose every source document was deleted)
+        # are kept out of time-travel queries. The
+        # multi-hop expansion below applies the same predicate so it cannot
+        # leak facts from another point in time.
         placeholders = ",".join("?" for _ in query_terms)
         pit = getattr(cfg, "point_in_time", None) if cfg else None
         if not isinstance(pit, datetime):
             pit = None
+        fact_filter: str
+        filter_params: tuple
         if pit is not None:
             pit_str = pit.isoformat() if hasattr(pit, "isoformat") else str(pit)
-            rows = self._execute(
-                f"SELECT fact_id, subject, relation, object, valid_at, confidence, metadata "
-                f"FROM facts "
-                f"WHERE valid_at <= ? AND (invalid_at IS NULL OR invalid_at > ?) "
-                f"  AND status != 'superseded' "
-                f"  AND (subject IN ({placeholders}) OR object IN ({placeholders})) "
-                f"ORDER BY confidence DESC, valid_at DESC LIMIT ?",
-                (pit_str, pit_str, *query_terms, *query_terms, top_k),
+            fact_filter = (
+                "valid_at <= ? AND (invalid_at IS NULL OR invalid_at > ?) "
+                "AND status != 'retracted'"
             )
+            filter_params = (pit_str, pit_str)
         else:
-            rows = self._execute(
-                f"SELECT fact_id, subject, relation, object, valid_at, confidence, metadata "
-                f"FROM facts "
-                f"WHERE status = 'active' AND (subject IN ({placeholders}) OR object IN ({placeholders})) "
-                f"ORDER BY confidence DESC, valid_at DESC LIMIT ?",
-                (*query_terms, *query_terms, top_k),
-            )
+            fact_filter = "status = 'active'"
+            filter_params = ()
+        rows = self._execute(
+            f"SELECT fact_id, subject, relation, object, valid_at, confidence, metadata "
+            f"FROM facts "
+            f"WHERE {fact_filter} "
+            f"  AND (subject IN ({placeholders}) OR object IN ({placeholders})) "
+            f"ORDER BY confidence DESC, valid_at DESC LIMIT ?",
+            (*filter_params, *query_terms, *query_terms, top_k),
+        )
         # Step 3: Perform multi-hop BFS if requested (Epic 1/4)
         max_hops = 1
         if cfg and hasattr(cfg, "graph_rag_max_hops"):
@@ -938,8 +1161,9 @@ class DynamicGraphBackend:
                         self._execute(
                             f"SELECT fact_id, subject, relation, object, valid_at, confidence, metadata "
                             f"FROM facts "
-                            f"WHERE status = 'active' AND (subject IN ({placeholders}) OR object IN ({placeholders}))",
-                            (*chunk, *chunk),
+                            f"WHERE {fact_filter} "
+                            f"  AND (subject IN ({placeholders}) OR object IN ({placeholders}))",
+                            (*filter_params, *chunk, *chunk),
                         )
                     )
                 next_fringe = set()
@@ -1088,29 +1312,61 @@ class DynamicGraphBackend:
                 "DELETE FROM fact_evidence; DELETE FROM facts; DELETE FROM entities; DELETE FROM episodes;"
             )
             self._conn.commit()
+        self._cached_nx_graph = None
+        self._cached_nx_time = 0.0
 
     def delete_documents(self, chunk_ids: list[str]) -> None:
-        """Remove episodes, evidence rows, and orphaned facts for *chunk_ids*."""
+        """Remove episodes and evidence rows for *chunk_ids*; retract facts
+        left without any evidence.
+
+        A *current* fact (``active`` or ``conflicted``) whose last evidence
+        row is removed here becomes ``retracted``: every source that asserted
+        it is gone, so it is no longer current and is hidden from
+        point-in-time history too. ``invalid_at`` is set to now unless it is
+        already set (a conflicted fact keeps its boundary).
+
+        A ``superseded`` fact is left as it is even when its last source goes:
+        it was already replaced by a newer assertion, and what the graph
+        believed during its validity window is history — deleting a stale
+        source document in ordinary cleanup must not erase it from
+        point-in-time queries. Facts that keep evidence from other chunks (or
+        an agent sentinel ``agent:<fact_id>``) are untouched. Retracted facts
+        are never re-activated; asserting the same triple again creates a new
+        fact.
+        """
         if not chunk_ids:
             return
-        placeholders = ",".join("?" for _ in chunk_ids)
+        ids = tuple(dict.fromkeys(chunk_ids))
+        now = _now_iso()
         with self._write_lock:
-            # Mark covered facts as superseded if all evidence is removed
-            self._conn.execute(
-                f"DELETE FROM fact_evidence WHERE chunk_id IN ({placeholders})",
-                tuple(chunk_ids),
-            )
-            # Orphaned facts (no remaining evidence) → supersede
-            self._conn.execute(
-                "UPDATE facts SET status = 'superseded', invalid_at = ? "
-                "WHERE fact_id NOT IN (SELECT DISTINCT fact_id FROM fact_evidence) AND status = 'active'",
-                (_now_iso(),),
-            )
-            self._conn.execute(
-                f"DELETE FROM episodes WHERE chunk_id IN ({placeholders})",
-                tuple(chunk_ids),
-            )
+            affected: set[str] = set()
+            # Chunked to stay under SQLITE_MAX_VARIABLE_NUMBER.
+            for i in range(0, len(ids), 500):
+                part = ids[i : i + 500]
+                ph = ",".join("?" for _ in part)
+                affected.update(
+                    r["fact_id"]
+                    for r in self._conn.execute(
+                        f"SELECT DISTINCT fact_id FROM fact_evidence WHERE chunk_id IN ({ph})",
+                        part,
+                    )
+                )
+                self._conn.execute(f"DELETE FROM fact_evidence WHERE chunk_id IN ({ph})", part)
+                self._conn.execute(f"DELETE FROM episodes WHERE chunk_id IN ({ph})", part)
+            aff = list(affected)
+            for i in range(0, len(aff), 500):
+                part_f = tuple(aff[i : i + 500])
+                ph = ",".join("?" for _ in part_f)
+                self._conn.execute(
+                    "UPDATE facts SET status = 'retracted', invalid_at = COALESCE(invalid_at, ?) "
+                    f"WHERE fact_id IN ({ph}) AND status IN ('active', 'conflicted') "
+                    "AND NOT EXISTS (SELECT 1 FROM fact_evidence ev WHERE ev.fact_id = facts.fact_id)",
+                    (now, *part_f),
+                )
             self._conn.commit()
+        if affected:
+            self._cached_nx_graph = None
+            self._export_snapshot()
 
     def status(self) -> dict:
         """Return lightweight counts from all tables."""
@@ -1120,7 +1376,8 @@ class DynamicGraphBackend:
             "(SELECT COUNT(*) FROM entities) AS entities, "
             "(SELECT COUNT(*) FROM facts WHERE status = 'active') AS active_facts, "
             "(SELECT COUNT(*) FROM facts WHERE status = 'superseded') AS superseded_facts, "
-            "(SELECT COUNT(*) FROM facts WHERE status = 'conflicted') AS conflicted_facts"
+            "(SELECT COUNT(*) FROM facts WHERE status = 'conflicted') AS conflicted_facts, "
+            "(SELECT COUNT(*) FROM facts WHERE status = 'retracted') AS retracted_facts"
         )
         if not rows:
             return {
@@ -1130,6 +1387,7 @@ class DynamicGraphBackend:
                 "active_facts": 0,
                 "superseded_facts": 0,
                 "conflicted_facts": 0,
+                "retracted_facts": 0,
             }
         row = rows[0]
         return {
@@ -1139,6 +1397,7 @@ class DynamicGraphBackend:
             "active_facts": row["active_facts"],
             "superseded_facts": row["superseded_facts"],
             "conflicted_facts": row["conflicted_facts"],
+            "retracted_facts": row["retracted_facts"],
         }
 
     def has_entities(self) -> bool:

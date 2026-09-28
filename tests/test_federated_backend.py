@@ -461,6 +461,75 @@ class TestClearAndDelete:
 
 
 # ---------------------------------------------------------------------------
+# upsert_fact — delegated to the dynamic_graph half only
+# ---------------------------------------------------------------------------
+
+
+class TestUpsertFact:
+    def test_delegates_to_real_dynamic_sub_backend(self, tmp_path):
+        from axon.graph_backends.dynamic_graph_backend import DynamicGraphBackend
+
+        brain = SimpleNamespace(config=SimpleNamespace(bm25_path=str(tmp_path)), llm=None)
+        dynamic = DynamicGraphBackend(brain)
+        graphrag = _FakeBackend("graphrag")
+        fed = _federated(graphrag, dynamic)
+        res = fed.upsert_fact("Alice", "IS_CEO_OF", "Acme", description="d", provenance="cli")
+        assert res.status == "created"
+        assert res.backend_id == BACKEND_ID
+        assert res.detail == "via dynamic_graph"
+        assert res.fact_id
+        assert dynamic.status()["active_facts"] == 1
+        # Replace-by-default for the exclusive relation flows through too.
+        res2 = fed.upsert_fact("Alice", "IS_CEO_OF", "Globex")
+        assert res2.status == "superseded"
+        assert res2.superseded_ids == [res.fact_id]
+        assert "via dynamic_graph" in res2.detail
+        assert graphrag.calls == []  # graphrag half never touched
+
+    def test_passes_arguments_through(self):
+        from unittest.mock import MagicMock
+
+        from axon.graph_backends.base import FactUpdateResult
+
+        dynamic = MagicMock()
+        dynamic.BACKEND_ID = "dynamic_graph"
+        dynamic.upsert_fact.return_value = FactUpdateResult(
+            status="created", backend_id="dynamic_graph", fact_id="f1"
+        )
+        fed = _federated(_FakeBackend("graphrag"), dynamic)
+        res = fed.upsert_fact(
+            "s", "R", "o", description="x", confidence=0.4, replace=False, provenance="repl"
+        )
+        dynamic.upsert_fact.assert_called_once_with(
+            "s", "R", "o", description="x", confidence=0.4, replace=False, provenance="repl"
+        )
+        assert (res.status, res.fact_id, res.backend_id) == ("created", "f1", BACKEND_ID)
+
+    @pytest.mark.parametrize("exc", [PermissionError("mounted"), ValueError("bad relation")])
+    def test_errors_propagate_instead_of_being_swallowed(self, exc):
+        """Unlike clear()/delete_documents(), write errors must reach the
+        caller so the REST route can map them to 403 / 422."""
+        from unittest.mock import MagicMock
+
+        dynamic = MagicMock()
+        dynamic.BACKEND_ID = "dynamic_graph"
+        dynamic.upsert_fact.side_effect = exc
+        with pytest.raises(type(exc)):
+            _federated(_FakeBackend("graphrag"), dynamic).upsert_fact("s", "R", "o")
+
+    def test_not_applicable_without_dynamic_sub_backend(self):
+        graphrag = _FakeBackend("graphrag")
+        res = _federated(graphrag).upsert_fact("Alice", "KNOWS", "Bob")
+        assert res.status == "not_applicable"
+        assert res.backend_id == BACKEND_ID
+        assert "dynamic_graph" in res.detail
+        assert graphrag.calls == []
+
+    def test_not_applicable_with_no_sub_backends(self):
+        assert _federated().upsert_fact("Alice", "KNOWS", "Bob").status == "not_applicable"
+
+
+# ---------------------------------------------------------------------------
 # construction
 # ---------------------------------------------------------------------------
 

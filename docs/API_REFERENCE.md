@@ -332,6 +332,7 @@ Changes are scoped to the current server session by default (`persist: false`). 
 | `GET` | `/graph/backend/status` | Active graph backend type and health (distinguishes graphrag vs dynamic backend) |
 | `GET` | `/graph/conflicts` | List facts with `status='conflicted'` (incompatible exclusive-relation facts) |
 | `POST` | `/graph/retrieve` | Run the active graph backend's `retrieve()` directly — point-in-time + per-query federation weights |
+| `POST` | `/graph/facts` | Assert or correct one fact (subject, relation, object) with bi-temporal supersession — `dynamic_graph` / `federated` projects |
 
 `/graph/status` response: `{"community_build_in_progress": false, "community_summary_count": 12, "entity_count": 340, "code_node_count": 0, "graph_ready": true}`. `graph_ready` is `true` once the entity graph or code graph has nodes — use this to know whether graph queries will return data before the full ingest job completes.
 
@@ -340,6 +341,19 @@ Changes are scoped to the current server session by default (`persist: false`). 
 `/graph/conflicts` query params: `project` (optional, must match active project), `limit` (1-1000, default 100). Response: `{"backend": "...", "supported": bool, "conflicts": [{"fact_id", "subject", "relation", "object", "valid_at", "invalid_at", "scope_key", ...}, ...]}`. Backends without conflict tracking return `supported: false`.
 
 `/graph/retrieve` request body: `{"query": "...", "top_k"?: int, "point_in_time"?: ISO-8601, "federation_weights"?: {"graphrag": 0.5, "dynamic_graph": 1.5}, "project"?: "..."}`. Returns graph contexts only (no LLM call). Use this to surface historical queries on bi-temporal backends (`dynamic_graph`) and per-question federation weight overrides; the main `/query` endpoint still routes through the legacy GraphRAG mixin and does not yet expose `point_in_time`.
+
+`/graph/facts` request body (unknown keys → 422):
+
+```json
+{"subject": "Alice", "relation": "IS_CEO_OF", "object": "Globex",
+ "description": "promoted in May", "confidence": 1.0, "replace": null, "project": "research"}
+```
+
+`subject` / `object`: 1-200 characters after trimming. `relation`: 1-64 characters of letters, digits, `_` and spaces; it is normalised like extraction does (`"is ceo of"` → `IS_CEO_OF`) and must then start with a letter. `description`: at most 1000 characters. `confidence`: 0.0-1.0 (default 1.0). `replace`: `true` makes this the only current fact for (subject, relation) — every other active or conflicted fact with that subject and relation is superseded (`invalid_at` = now), including facts extracted from ingested text; `false` appends; `null` (default) replaces for exclusive relations (`IS_CEO_OF`, `IS_CTO_OF`, `IS_CFO_OF`, `LEADS`, `HEADQUARTERS_IN`, `CURRENTLY_LIVES_IN`, `MARRIED_TO`, `CURRENT_VERSION`) and appends otherwise. `project`, when given, must match the active project.
+
+Response: `{"status", "backend_id", "fact_id", "superseded_ids", "conflicted_ids", "detail"}`. `status` is `created`, `superseded` (the fact is now current and `superseded_ids` were retired), `unchanged` (the identical fact was already current — nothing written), or `not_applicable` (HTTP 200, like `/graph/finalize`) on `graphrag` and `none` projects, whose graph is derived from ingested text only. The calling surface (`X-Axon-Surface`, default `api`) is stored as the fact's provenance. Superseded facts stay queryable through `/graph/retrieve` with a `point_in_time` inside their validity window, even after their source document is deleted. Explicit writes never trip the ±1 s same-time conflict rule that extraction uses. A fact written or confirmed (`unchanged`) through this endpoint carries its own `agent:<fact_id>` evidence, so deleting the document it was extracted from does not retract it; deleting the chunk id `agent:<fact_id>` does (status `retracted`, hidden from point-in-time queries too). A retracted fact is never re-activated — posting the same fact again creates a new one.
+
+Errors: `503` no brain, `409` project mismatch, `403` read-only project or mounted share (grantees cannot write the owner's graph), `422` invalid input.
 
 `/graph/visualize` returns `text/html` — open in a browser or embed in an iframe.
 `/graph/data` and `/code-graph/data` return `{"nodes": [...], "links": [...]}` JSON payloads

@@ -799,6 +799,112 @@ class TestReplGraph:
         assert isinstance(output, str)
 
 
+class TestReplGraphFact:
+    """/graph fact <subject> | <RELATION> | <object> [| description] [--add|--replace]"""
+
+    @staticmethod
+    def _brain(result=None):
+        brain = _make_mock_brain()
+        brain.update_fact = MagicMock(
+            return_value=result
+            or {
+                "status": "superseded",
+                "backend_id": "dynamic_graph",
+                "fact_id": "f2",
+                "superseded_ids": ["f1"],
+                "conflicted_ids": [],
+                "detail": "replaced 1 earlier fact(s)",
+            }
+        )
+        return brain
+
+    def test_basic_call_uses_update_fact_not_the_backend(self):
+        brain = self._brain()
+        output = _run_repl_with_commands(["/graph fact Alice Smith | works for | Acme Corp"], brain)
+        brain.update_fact.assert_called_once_with(
+            "Alice Smith",
+            "works for",
+            "Acme Corp",
+            description="",
+            replace=None,
+            provenance="repl",
+        )
+        brain._graph_backend.upsert_fact.assert_not_called()
+        assert "superseded" in output
+        assert "fact_id=f2" in output
+        assert "superseded=1" in output
+
+    def test_description_and_replace_flag(self):
+        brain = self._brain()
+        _run_repl_with_commands(
+            ["/graph fact Alice | IS_CEO_OF | Globex | promoted in May --replace"], brain
+        )
+        brain.update_fact.assert_called_once_with(
+            "Alice",
+            "IS_CEO_OF",
+            "Globex",
+            description="promoted in May",
+            replace=True,
+            provenance="repl",
+        )
+
+    def test_add_flag(self):
+        brain = self._brain()
+        _run_repl_with_commands(["/graph fact --add Alice | KNOWS | Bob"], brain)
+        assert brain.update_fact.call_args.kwargs["replace"] is False
+        assert brain.update_fact.call_args.args == ("Alice", "KNOWS", "Bob")
+
+    def test_both_flags_rejected(self):
+        brain = self._brain()
+        output = _run_repl_with_commands(["/graph fact A | KNOWS | B --add --replace"], brain)
+        brain.update_fact.assert_not_called()
+        assert "either --add or --replace" in output
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "/graph fact",
+            "/graph fact Alice | KNOWS",
+            "/graph fact Alice |  | Bob",
+            "/graph fact a|b|c|d|e",
+        ],
+    )
+    def test_usage_on_malformed_input(self, cmd):
+        brain = self._brain()
+        output = _run_repl_with_commands([cmd], brain)
+        brain.update_fact.assert_not_called()
+        assert "Usage: /graph fact" in output
+
+    def test_not_applicable_is_reported(self):
+        brain = self._brain(
+            {
+                "status": "not_applicable",
+                "backend_id": "graphrag",
+                "fact_id": "",
+                "superseded_ids": [],
+                "conflicted_ids": [],
+                "detail": "graphrag derives its graph from ingested text",
+            }
+        )
+        output = _run_repl_with_commands(["/graph fact A | KNOWS | B"], brain)
+        assert "not_applicable" in output
+        assert "graphrag derives" in output
+
+    @pytest.mark.parametrize(
+        "exc", [PermissionError("mounted share"), ValueError("relation invalid")]
+    )
+    def test_errors_are_printed_not_raised(self, exc):
+        brain = self._brain()
+        brain.update_fact.side_effect = exc
+        output = _run_repl_with_commands(["/graph fact A | KNOWS | B"], brain)
+        assert "Fact update failed" in output
+        assert str(exc) in output
+
+    def test_help_mentions_graph_fact(self):
+        output = _run_repl_with_commands(["/help graph"], self._brain())
+        assert "/graph fact" in output
+
+
 class TestReplShellPassthrough:
     def test_shell_command_exclamation(self):
         brain = _make_mock_brain()

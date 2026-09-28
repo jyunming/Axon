@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from axon.graph_backends.base import (
+    FactUpdateResult,
     FinalizationResult,
     GraphContext,
     GraphDataFilters,
@@ -64,3 +65,21 @@ class NoneGraphBackend:
 
     def has_community_summaries(self) -> bool:
         return False
+
+    def upsert_fact(
+        self,
+        subject: str,
+        relation: str,
+        obj: str,
+        *,
+        description: str = "",
+        confidence: float = 1.0,
+        replace: bool | None = None,
+        provenance: str = "agent",
+    ) -> FactUpdateResult:
+        """Explicit fact writes are not supported on this backend."""
+        return FactUpdateResult(
+            status="not_applicable",
+            backend_id=BACKEND_ID,
+            detail="graph_backend is 'none' — no graph state is tracked for this project; use a dynamic_graph or federated project to record facts.",
+        )

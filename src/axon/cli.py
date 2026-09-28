@@ -767,6 +767,24 @@ def main():
         help="ISO-8601 timestamp passed as point_in_time to --graph-retrieve (only honoured by bi-temporal backends)",
     )
     parser.add_argument(
+        "--graph-fact",
+        nargs=3,
+        metavar=("SUBJECT", "RELATION", "OBJECT"),
+        help="Assert or correct a fact in the active project's graph (dynamic_graph or federated backend), print the result, then exit",
+    )
+    parser.add_argument(
+        "--graph-fact-mode",
+        choices=["replace", "add"],
+        default=None,
+        help="With --graph-fact: 'replace' supersedes the other current facts for (subject, relation); 'add' appends. Default: replace for exclusive relations (e.g. IS_CEO_OF), add otherwise",
+    )
+    parser.add_argument(
+        "--graph-fact-desc",
+        metavar="TEXT",
+        default="",
+        help="Optional description stored with --graph-fact",
+    )
+    parser.add_argument(
         "--no-dedup",
         action="store_true",
         help="Disable ingest deduplication (allow re-ingesting identical content)",
@@ -1470,6 +1488,7 @@ def main():
         and not getattr(args, "graph_export", False)
         and not getattr(args, "graph_conflicts", False)
         and not getattr(args, "graph_retrieve", None)
+        and not getattr(args, "graph_fact", None)
         and not getattr(args, "delete_doc", None)
         and not getattr(args, "delete_doc_id", None)
         and not getattr(args, "store_init", None)
@@ -1620,7 +1639,11 @@ def main():
         or getattr(args, "refresh", False)
         or getattr(args, "list_stale", False)
         or getattr(args, "graph_finalize", False)
+        or getattr(args, "graph_status", False)
+        or getattr(args, "graph_conflicts", False)
+        or getattr(args, "graph_retrieve", None)
         or getattr(args, "graph_export", None) is not None
+        or getattr(args, "graph_fact", None)
         or getattr(args, "delete_doc", None)
         or getattr(args, "delete_doc_id", None)
         or getattr(args, "optimize_index", False)
@@ -2337,6 +2360,34 @@ def main():
         for ctx in ctxs:
             text = (ctx.text or "")[:120].replace("\n", " ")
             print(f"    [{ctx.score:.3f} {ctx.context_type}] {text}")
+        return
+    if getattr(args, "graph_fact", None):
+        _subj, _rel, _obj = args.graph_fact
+        _mode = getattr(args, "graph_fact_mode", None)
+        _replace = None if _mode is None else _mode == "replace"
+        try:
+            _res = brain.update_fact(
+                _subj,
+                _rel,
+                _obj,
+                description=getattr(args, "graph_fact_desc", "") or "",
+                replace=_replace,
+                provenance="cli",
+            )
+        except (PermissionError, ValueError) as exc:
+            print(f"  Error: {exc}")
+            sys.exit(1)
+        _status = _res.get("status", "?")
+        _line = f"  {_status}"
+        if _res.get("fact_id"):
+            _line += f" fact_id={_res['fact_id']}"
+        if _res.get("superseded_ids"):
+            _line += f" superseded={len(_res['superseded_ids'])}"
+        if _res.get("detail"):
+            _line += f" — {_res['detail']}"
+        print(_line)
+        if _status == "not_applicable":
+            sys.exit(1)
         return
     if getattr(args, "graph_export", None) is not None:
         import tempfile
