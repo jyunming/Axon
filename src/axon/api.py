@@ -565,7 +565,6 @@ async def _branded_redoc() -> HTMLResponse:
 # ---------------------------------------------------------------------------
 
 from axon.api_routes.config_routes import router as _config_router  # noqa: E402
-from axon.api_routes.governance import router as _governance_router  # noqa: E402
 from axon.api_routes.graph import router as _graph_router  # noqa: E402
 from axon.api_routes.health import router as _health_router  # noqa: E402
 from axon.api_routes.ingest import router as _ingest_router  # noqa: E402
@@ -588,7 +587,6 @@ _ROUTERS = (
     _shares_router,
     _maintenance_router,
     _registry_router,
-    _governance_router,
     _security_router,
 )
 

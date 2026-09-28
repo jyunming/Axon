@@ -4677,17 +4677,17 @@ class TestShareRedeem:
                     "project": "sharedproj",
                     "descriptor": {"mount_name": "alice_sharedproj"},
                 },
-            ), patch("axon.governance.emit") as mock_emit:
+            ):
                 resp = client.post(
                     "/share/redeem",
                     json={"share_string": "axon://valid"},
                 )
         assert resp.status_code == 200
-        assert resp.json()["key_id"] == "sk_abc123"
-        args, kwargs = mock_emit.call_args
-        assert args == ("share_redeemed", "share", "sk_abc123")
-        assert kwargs["project"] == "sharedproj"
-        assert kwargs["details"] == {"owner": "alice"}
+        body = resp.json()
+        assert body["key_id"] == "sk_abc123"
+        assert body["mount_name"] == "alice_sharedproj"
+        assert body["owner"] == "alice"
+        assert body["project"] == "sharedproj"
 
 
 class TestShareList:

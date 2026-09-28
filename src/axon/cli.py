@@ -1030,15 +1030,6 @@ def main():
         help="Refresh a sealed-mount from the owner's latest version, then exit. "
         "Optionally supply MOUNT name (e.g. mounts/alice_docs); defaults to active project.",
     )
-    # ── Governance ───────────────────────────────────────────────────────────
-    parser.add_argument(
-        "--governance",
-        metavar="SUBCOMMAND",
-        nargs="?",
-        const="overview",
-        help="Governance operator commands: overview | audit | sessions | projects | "
-        "graph-rebuild. Defaults to 'overview' when no subcommand is given.",
-    )
     # ── Sessions ────────────────────────────────────────────────────────────
     parser.add_argument(
         "--session-list",
@@ -1497,7 +1488,6 @@ def main():
         and not getattr(args, "share_extend", None)
         and not getattr(args, "store_whoami", False)
         and getattr(args, "mount_refresh", None) is None
-        and not getattr(args, "governance", None)
         and not getattr(args, "session_list", False)
         and not getattr(args, "optimize_index", False)
         and not getattr(args, "migrate_vectors", None)
@@ -2065,45 +2055,6 @@ def main():
                 print(f"  Mount refreshed: {refreshed}")
             except Exception as exc:
                 print(f"  Mount refresh failed: {exc}")
-                sys.exit(1)
-            return
-        if getattr(args, "governance", None) is not None:
-            import json as _json_gov
-
-            from axon import server_client as _sc
-
-            sub = (args.governance or "overview").lower().strip()
-            _GOV_ROUTES = {
-                "overview": ("GET", "/governance/overview"),
-                "audit": ("GET", "/governance/audit"),
-                "sessions": ("GET", "/governance/copilot/sessions"),
-                "projects": ("GET", "/governance/projects"),
-                "graph-rebuild": ("POST", "/governance/graph/rebuild"),
-            }
-            if sub not in _GOV_ROUTES:
-                print(
-                    f"  Unknown governance subcommand '{sub}'. "
-                    "Choose: overview | audit | sessions | projects | graph-rebuild"
-                )
-                sys.exit(1)
-            _method, _path = _GOV_ROUTES[sub]
-            try:
-                # Route through server_client's shared helpers (not a raw
-                # urllib.request.urlopen call) so this sends X-API-Key like
-                # every other routed CLI operation — the hand-rolled version
-                # silently 401'd on any RAG_API_KEY-secured deployment.
-                _data = _sc._request(
-                    _method,
-                    f"{_sc.resolve_api_base(config)}{_path}",
-                    _sc._headers(config),
-                    body={} if _method == "POST" else None,
-                )
-                print(_json_gov.dumps(_data, indent=2))
-            except Exception as exc:
-                print(
-                    f"  Governance command failed: {exc}\n"
-                    "  Make sure the Axon API server is running (axon-api)."
-                )
                 sys.exit(1)
             return
         if args.session_list:

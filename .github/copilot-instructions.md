@@ -255,7 +255,7 @@ When using the Axon VS Code extension in Copilot Chat (`@workspace` or inline), 
 | `revoke_share` | Revoke a previously issued share key by `key_id` |
 | `list_shares` | List outgoing shares and incoming mounts with revocation status |
 
-### Sessions & Governance
+### Sessions & Maintenance
 
 | Tool | Does |
 |---|---|

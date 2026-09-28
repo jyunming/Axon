@@ -92,7 +92,6 @@ class TestPhase1FilesHaveNoDirectAccess:
 _KNOWN_FALLBACK_FILES = {
     "repl.py": 3,  # /graph status except-fallback
     str(Path("api_routes") / "graph.py"): 0,  # legacy no-backend branch removed in Phase 4
-    str(Path("api_routes") / "governance.py"): 0,  # legacy no-backend branch removed in Phase 4
 }
 
 

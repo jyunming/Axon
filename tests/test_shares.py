@@ -1011,34 +1011,6 @@ class TestCheckMountRevocationExpiryBranch:
         stub._check_mount_revocation()
 
 
-class TestGovernanceShareExtendedAction:
-    """share_extended joined VALID_ACTIONS in #54 — verify it round-trips
-    through emit() / query() without being silently dropped."""
-
-    def test_share_extended_in_valid_actions(self):
-        from axon.governance import VALID_ACTIONS
-
-        assert "share_extended" in VALID_ACTIONS
-
-    def test_share_extended_event_round_trips_through_store(self, tmp_path):
-        from axon.governance import AuditEvent, AuditStore
-
-        store = AuditStore(tmp_path / "gov.db")
-        store.append(
-            AuditEvent(
-                action="share_extended",
-                target_type="share",
-                target_id="sk_a",
-                project="myproject",
-                details={"new_expires_at": "2099-01-01T00:00:00+00:00"},
-            )
-        )
-        results = store.query(action="share_extended")
-        assert len(results) == 1
-        assert results[0].target_id == "sk_a"
-        assert results[0].details["new_expires_at"] == "2099-01-01T00:00:00+00:00"
-
-
 # ===========================================================================
 # Audit-found regressions
 # ===========================================================================

@@ -721,8 +721,8 @@ Expected response includes the answer "Paris" synthesized from the ingested docu
 
 Open [http://localhost:8420/gui/](http://localhost:8420/gui/) in your browser. No extra command needed.
 
-This is the maintained browser surface: chat, Graph Explorer, Knowledge Base,
-Governance console and Settings.
+This is the maintained browser surface: chat, Graph Explorer, Knowledge Base
+and Settings.
 
 ---
 

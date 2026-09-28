@@ -45,7 +45,6 @@ _SLASH_COMMANDS = [
     "/discuss",
     "/embed ",
     "/exit",
-    "/governance ",
     "/graph ",
     "/graph-viz",
     "/help",
@@ -83,7 +82,6 @@ _SLASH_CMD_DESC: dict[str, str] = {
     "/discuss": "Toggle discussion fallback mode",
     "/embed": "Switch embedding model",
     "/exit": "Exit Axon",
-    "/governance": "Operator console (overview / audit / sessions / projects / graph-rebuild)",
     "/graph": "GraphRAG operations (build / query / export)",
     "/graph-viz": "Open graph visualisation in browser",
     "/help": "Show all commands",
@@ -4580,82 +4578,6 @@ def _interactive_repl(
                     print("    Debug logging ON — verbose library logs enabled.")
                 else:
                     print("    Debug logging OFF.")
-            elif cmd == "/governance":
-                # ── /governance — operator status and audit log ──────────────────
-                # Routed through server_client's shared helpers (not raw
-                # urllib.request.urlopen) so this sends X-API-Key like every
-                # other routed operation — the hand-rolled version silently
-                # 401'd on any RAG_API_KEY-secured deployment, and built its
-                # base URL from config only, ignoring AXON_API_BASE/RAG_API_BASE.
-                import json as _json_gov
-
-                from axon import server_client as _sc_gov
-
-                sub_parts = arg.split(maxsplit=1) if arg else []
-                sub = sub_parts[0].lower() if sub_parts else "overview"
-                sub_arg = sub_parts[1] if len(sub_parts) > 1 else ""
-                _gov_base = _sc_gov.resolve_api_base(brain.config)
-                _gov_headers = _sc_gov._headers(brain.config)
-                try:
-                    if sub in ("", "overview"):
-                        _gd = _sc_gov._request(
-                            "GET", f"{_gov_base}/governance/overview", _gov_headers
-                        )
-                        print("\n    === Governance Overview ===")
-                        print(_json_gov.dumps(_gd, indent=4))
-                    elif sub == "audit":
-                        import urllib.parse as _up_gov
-
-                        _qs = _up_gov.urlencode(
-                            {"limit": 20, "action": sub_arg} if sub_arg else {"limit": 20}
-                        )
-                        _gd = _sc_gov._request(
-                            "GET", f"{_gov_base}/governance/audit?{_qs}", _gov_headers
-                        )
-                        events = _gd.get("events", [])
-                        print(f"\n    === Audit Log ({len(events)} entries) ===")
-                        for _ev in events:
-                            _ts = _ev.get("timestamp", "")[:19]
-                            _act = _ev.get("action", "")
-                            _proj = _ev.get("project", "")
-                            _stat = _ev.get("status", "")
-                            print(f"    {_ts}  [{_stat:>7}]  {_act:<30}  {_proj}")
-                    elif sub == "sessions":
-                        _gd = _sc_gov._request(
-                            "GET", f"{_gov_base}/governance/copilot/sessions", _gov_headers
-                        )
-                        print(_json_gov.dumps(_gd, indent=4))
-                    elif sub == "projects":
-                        _gd = _sc_gov._request(
-                            "GET", f"{_gov_base}/governance/projects", _gov_headers
-                        )
-                        projects_data = _gd.get("projects", [])
-                        print(f"\n    === Governance Projects ({len(projects_data)}) ===")
-                        for _p in projects_data:
-                            _mn = _p.get("maintenance", {}).get("maintenance_state", "normal")
-                            _lc = _p.get("maintenance", {}).get("active_leases", 0)
-                            print(
-                                f"    {_p.get('name', ''):<30}  " f"state={_mn:<12}  leases={_lc}"
-                            )
-                    elif sub == "graph-rebuild":
-                        _gd = _sc_gov._request(
-                            "POST",
-                            f"{_gov_base}/governance/graph/rebuild",
-                            _gov_headers,
-                            body={},
-                        )
-                        print(f"    Graph rebuild triggered: {_gd}")
-                    else:
-                        print(
-                            f"    Unknown sub-command '{sub}'.\n"
-                            "    Usage: /governance [overview | audit [action] | "
-                            "sessions | projects | graph-rebuild]"
-                        )
-                except Exception as _ge:
-                    print(
-                        f"    Governance command failed: {_ge}\n"
-                        "    Make sure the Axon API server is running (axon-api)."
-                    )
             elif cmd == "/mount-refresh":
                 # ── /mount-refresh — pull owner's latest for an active mount ────
                 try:

@@ -102,10 +102,7 @@ notes — full detail lives there. This is a scannable index.
   docstrings).
 - **Security** — the "keyring write + AES-KW-wrapped file fallback" pattern
   is duplicated independently between `master.py` and `share.py`.
-- **REST API** — `POST /graph/finalize` vs `POST /governance/graph/rebuild`
-  are near-duplicate handlers with drifted response shapes; `POST
-  /project/maintenance` vs `POST /governance/project/maintenance` likewise;
-  `/config` endpoints are split across `projects.py` and `config_routes.py`
+- **REST API** — `/config` endpoints are split across `projects.py` and `config_routes.py`
   with no naming cue, and `_reinitialize_runtime_components` duplicates
   (rather than shares) `projects.py`'s inline reinit-on-change logic.
 - **User Surfaces** — two independent OpenAI-format tool-schema sets
@@ -114,8 +111,8 @@ notes — full detail lives there. This is a scannable index.
   `clear_knowledge`), have drifted parameters for the same tool
   (`update_settings`), and now differ in coverage (`pack_project`/
   `unpack_project` are MCP-only); `cli.py`/`repl.py` still reimplement project
-  CRUD, share generate/redeem/revoke/extend, store lifecycle, refresh and the
-  governance proxy end-to-end (only share *listing* is shared now); one
+  CRUD, share generate/redeem/revoke/extend, store lifecycle and refresh
+  end-to-end (only share *listing* is shared now); one
   confirmation prompt (`cli.py`'s `axon update`) still bypasses
   `repl.py::_confirm()`.
 - **Infra** — the LangChain and LlamaIndex adapters duplicate the same
@@ -150,7 +147,7 @@ surfaces (0.5.0 tiering); REPL users have `/project pack`/`unpack`.
 3. [Retrieval & Vector Pipeline](#3-retrieval--vector-pipeline)
 4. [Graph RAG & Code Graph](#4-graph-rag--code-graph)
 5. [Query Routing & LLM Providers](#5-query-routing--llm-providers)
-6. [Projects, Sessions, Sharing & Governance](#6-projects-sessions-sharing--governance)
+6. [Projects, Sessions & Sharing](#6-projects-sessions--sharing)
 7. [Security (Sealed Store)](#7-security-sealed-store)
 8. [REST API Layer](#8-rest-api-layer)
 9. [User-facing Surfaces](#9-user-facing-surfaces)
@@ -212,7 +209,7 @@ Role: Process-local, in-memory per-project write-lease registry. Backs "drain mo
 - `LeaseRegistry.bump_epoch(project)` — increments the epoch counter on project switch, fencing writes started under the previous activation — `runtime.py:197`
 - `LeaseRegistry.wait_for_drain(project, timeout=30.0)` — blocks until active leases hit zero or timeout — `runtime.py:214`
 - `LeaseRegistry.active_lease_count(project)` — current in-flight write count — `runtime.py:227`
-- `LeaseRegistry.snapshot(project)` / `snapshot_all()` — serialisable status dicts (`project`, `epoch`, `active_leases`, `draining`) for governance/ops endpoints — `runtime.py:235` / `250`
+- `LeaseRegistry.snapshot(project)` / `snapshot_all()` — serialisable status dicts (`project`, `epoch`, `active_leases`, `draining`) for maintenance/ops endpoints — `runtime.py:235` / `250`
 - `LeaseRegistry.reset(project)` — drops tracking state for a project (tests/teardown) — `runtime.py:261`
 - `_WriteLease` — lease token returned by `acquire()`; `.close()` (idempotent, also via `__del__`/context-manager), `.is_stale()` (True if epoch advanced since acquisition) — `runtime.py:60`
 
@@ -249,7 +246,7 @@ Role: Single-instance detection and thin `urllib`-based HTTP client helpers so t
 - `ServerRequestError(status, detail)` — exception carrying HTTP status for a failed routed operation — `server_client.py:82`
 
 ### src/axon/paths.py
-Role: Pure, filesystem-I/O-free path-classification predicates identifying storage locations unsafe for SQLite WAL / atomic rename (consumer cloud-sync folders, Windows UNC shares, WSL Windows-drive mounts). Used by SQLite-backed components (governance audit, dynamic graph) to gate WAL usage and redirect hot state to a safe local path.
+Role: Pure, filesystem-I/O-free path-classification predicates identifying storage locations unsafe for SQLite WAL / atomic rename (consumer cloud-sync folders, Windows UNC shares, WSL Windows-drive mounts). Used by SQLite-backed components (e.g. the dynamic graph) to gate WAL usage and redirect hot state to a safe local path.
 
 - `is_cloud_sync_path(p)` — True under OneDrive (Personal/Business)/Dropbox/Google Drive/iCloud Drive folder segments (case-insensitive) — `paths.py:52`
 - `is_unc_path(p)` — True for `\\server\share\...` / `//server/share/...` — `paths.py:69`
@@ -844,7 +841,7 @@ Module-level:
 
 ---
 
-## 6. Projects, Sessions, Sharing & Governance
+## 6. Projects, Sessions & Sharing
 
 ### src/axon/projects.py
 Role: Module-level (no class) functions implementing the "AxonStore" on-disk layout — project directory naming/nesting (up to 5 levels via `subs/`), project CRUD, project/store identity IDs, maintenance state, active-project tracking, and listing of received share mounts. This is the ground-truth storage model every other file in this set (sessions, shares, mounts, access, project_pack) builds on.
@@ -926,26 +923,6 @@ Role: `axon --project-pack` / `axon --project-unpack` — zip a project's entire
 - `MANIFEST_NAME` (`"_axon_pack_manifest.json"`), `PACK_FORMAT_VERSION` — the pack's self-describing manifest entry name/schema version, written by `pack_project` and read by `_read_manifest` — `project_pack.py:38-39`
 
 Internal helpers worth knowing about: `_resolve_project_dir(name, user_dir)` mirrors `projects.project_dir()`'s `subs/` nesting anchored at an explicit `user_dir` — deliberately duplicated rather than imported, for the same reason `security.seal._resolve_project_dir` is (see "Possible internal overlap" below) — `project_pack.py:49`; `_validate_member_path(name, staging)` is the zip-slip guard used by the two-pass `unpack_project` — `project_pack.py:188`; `_external_dynamic_graph_db(project_dir)` mirrors `DynamicGraphBackend._resolve_db_path`'s two-tier `project_id` resolution so a relocated live graph DB is found even for a sealed project — `project_pack.py:76`.
-
-### src/axon/governance.py
-Role: Governance/audit backend for the Operator Console — a SQLite-first (JSONL-fallback) append-only audit log plus an in-memory tracker for active/recent "Copilot bridge" sessions. Fire-and-forget writes via a small process-wide thread pool so callers never block.
-
-- `AuditEvent` (dataclass) — one audit record: `event_id`, `timestamp`, `actor`, `surface`, `project`, `action`, `target_type`, `target_id`, `status`, `details`, `request_id` — `governance.py:90`
-- `VALID_ACTIONS` — frozenset of the allowed `action` vocabulary (`ingest_started/completed/failed`, `delete`, `graph_finalize`, `maintenance_changed`, `share_generated/redeemed/revoked/extended`, `copilot_session_opened/closed/failed`) — `governance.py:62`
-- `AuditStore(db_path, retention_days=90)` — thread-safe SQLite (DELETE journal mode, share-mount safe) audit store with automatic JSONL fallback — `governance.py:112`
-  - `.append(event)` — persist one event, thread-safe, swallows errors silently — `governance.py:189`
-  - `.query(project=None, action=None, surface=None, status=None, since=None, limit=100)` — filtered, newest-first event query (works against SQLite or JSONL fallback) — `governance.py:223`
-  - `.prune(days=90)` — delete events older than N days, returns count deleted (no-op under JSONL fallback) — `governance.py:332`
-- `CopilotSession` (dataclass) — one Copilot bridge session record with `.is_active` property — `governance.py:354`
-- `CopilotSessionStore(max_recent=50)` — in-memory active/recent session tracker with capacity-based eviction (closed sessions evicted before active ones) — `governance.py:370`
-  - `.open(session_id, request_id, project)` — register a new session — `governance.py:402`
-  - `.close(session_id, *, error=None)` — mark a session closed (normal or errored) — `governance.py:413`
-  - `.expire(session_id)` — force-close a stuck session (operator action); returns whether it was found/active — `governance.py:422`
-  - `.list_active()` — sessions not yet closed — `governance.py:432`
-  - `.list_recent(limit=20)` — most-recently-opened sessions (active + closed) — `governance.py:437`
-- `get_store()` — return the process-wide `AuditStore` singleton, lazily created under `PROJECTS_ROOT` — `governance.py:453`
-- `get_session_store()` — return the process-wide `CopilotSessionStore` singleton — `governance.py:472`
-- `emit(action, target_type, target_id, *, project, actor="api", surface="api", status="completed", details=None, request_id="")` — the fire-and-forget audit-write entry point everything else should call instead of touching `AuditStore` directly — `governance.py:477`
 
 **Possible internal overlap**
 
@@ -1119,7 +1096,7 @@ Role: Bundled EFF large Diceware wordlist (7,776 words) for generating human-typ
 
 ## 8. REST API Layer
 
-Covers `src/axon/api.py`, `api_schemas.py`, `surface_contract.py`, and all modules under `src/axon/api_routes/`. Verified endpoint count for this file set: **75** distinct routes across 12 routers, each mounted twice (bare + `/v1` prefix) in `api.py` — `grep -rE '@router\.(get|post|put|delete|patch)\(' src/axon/api_routes/*.py` returns 76 hits, but one (`_rate_limit.py:12`) is inside that module's own usage-example docstring, not a live route. CLAUDE.md's currently-stated "76 REST endpoints" appears to be this same raw grep count including that docstring line; worth a follow-up fix to CLAUDE.md's recount, out of scope for this doc.
+Covers `src/axon/api.py`, `api_schemas.py`, `surface_contract.py`, and all modules under `src/axon/api_routes/`. Verified endpoint count for this file set: **68** distinct routes across 11 routers (75 across 12 before the governance console's seven `/governance/*` routes were removed), each mounted twice (bare + `/v1` prefix) in `api.py` — `grep -rE '@router\.(get|post|put|delete|patch)\(' src/axon/api_routes/*.py` returns 69 hits, but one (`_rate_limit.py:12`) is inside that module's own usage-example docstring, not a live route. CLAUDE.md's stated "76 REST endpoints" was that same raw grep count (docstring line included) from before the governance removal; worth a follow-up fix to CLAUDE.md's recount, out of scope for this doc.
 
 ### src/axon/api.py
 
@@ -1148,7 +1125,7 @@ Covers `src/axon/api.py`, `api_schemas.py`, `surface_contract.py`, and all modul
 - `_validate_ingest_path(path)` — resolves and validates a filesystem path against `RAG_INGEST_BASE` and a blocked-system-path list (`C:/Windows`, `/etc`, `/proc`, etc.); raises 403 — `api_schemas.py:71`
 - `_compute_content_hash(text)` — SHA-256 of normalized text, via the Rust bridge when available, else `hashlib` fallback — `api_schemas.py:97`
 - `_BLOCKED_PATH_PREFIXES` — tuple of resolved system-root paths blocked from ingest — `api_schemas.py:45`
-- `_VALID_PROJECT_NAME_RE` — regex enforcing 1-5 slash-separated segments, `[a-z0-9_-]{1,50}` each — the canonical project-name validator, reused across `projects.py`, `shares.py`, `maintenance.py`, `governance.py` — `api_schemas.py:68`
+- `_VALID_PROJECT_NAME_RE` — regex enforcing 1-5 slash-separated segments, `[a-z0-9_-]{1,50}` each — the canonical project-name validator, reused across `projects.py`, `shares.py`, `maintenance.py` — `api_schemas.py:68`
 - `QueryRequest` / `SearchRequest` / `QueryVisualizeRequest` / `SearchVisualizeRequest` — query/search bodies with RAG-toggle overrides (hyde, multi_query, step_back, rerank, hybrid, top_k, threshold, dry_run, include_diagnostics/citations) — `api_schemas.py:118,173,191,199`
 - `GraphRetrieveRequest` — body for `/graph/retrieve`; validates `federation_weights` keys against `_VALID_FEDERATION_KEYS = {graphrag, dynamic_graph}` and rejects negative weights in `__init__` — `api_schemas.py:212`
 - `IngestRequest` / `TextIngestRequest` / `BatchDocItem` / `BatchTextIngestRequest` / `URLIngestRequest` / `DeleteRequest` — ingest/delete payloads — `api_schemas.py:262-328`
@@ -1169,7 +1146,7 @@ Covers `src/axon/api.py`, `api_schemas.py`, `surface_contract.py`, and all modul
 - `Tier` enum (`ONE`/`TWO`/`API_ONLY`) and `Surface` enum (`API`/`REPL`/`CLI`/`VSCODE`) — classification vocabulary — `surface_contract.py:29,35`
 - `Capability` dataclass — `{id, name, category, tier, description, supported_surfaces, intentional_exceptions, api_route, docs_targets, test_targets}` — `surface_contract.py:52`
 - `ALL_SURFACES` / `NO_VSCODE` (API+REPL+CLI, no VSCODE) / `PRIMARY_SURFACES` (API+REPL+CLI+VSCODE) — reusable `frozenset[Surface]` shorthands for `supported_surfaces` — `surface_contract.py:42,45,48`
-- `REGISTRY: list[Capability]` — **42** registered capabilities (up from ~35 at the last audit) spanning query/ingest/collection/project/config/share/store/graph/session/governance/maintenance/security categories, each cross-referencing its `api_route` — `surface_contract.py:74-538`
+- `REGISTRY: list[Capability]` — **39** registered capabilities (42 before the three `governance_*` entries were dropped with the governance console; `active_leases` moved to the `maintenance` category) spanning query/ingest/collection/project/config/share/store/graph/session/maintenance/security categories, each cross-referencing its `api_route` — `surface_contract.py`
 - `capabilities_by_category()` — groups registry entries by `category` — `surface_contract.py:540`
 - `tier1_capabilities()` — filters `Tier.ONE` entries (required on every surface) — `surface_contract.py:548`
 - `surface_capabilities(surface)` — capabilities supported on a given surface — `surface_contract.py:553`
@@ -1179,7 +1156,7 @@ Covers `src/axon/api.py`, `api_schemas.py`, `surface_contract.py`, and all modul
 
 **Role**: Tiny shared-helper module for the route package — two cross-cutting guards every write/query route composes with.
 
-- `_enforce_write_access(brain, operation)` — calls `brain._assert_write_allowed(operation)`, translating `PermissionError` (e.g. maintenance-mode readonly/draining) into HTTP 403 — used by `query.py`, `ingest.py`, `graph.py`, `governance.py` — `__init__.py:5`
+- `_enforce_write_access(brain, operation)` — calls `brain._assert_write_allowed(operation)`, translating `PermissionError` (e.g. maintenance-mode readonly/draining) into HTTP 403 — used by `query.py`, `ingest.py`, `graph.py` — `__init__.py:5`
 - `enforce_project(requested, brain)` — raises 409 if the caller's `project` field doesn't match the brain's single active project (the brain is a singleton serving one project at a time); points callers at `POST /project/switch` — used by `query.py`, `ingest.py`, `graph.py` — `__init__.py:13`
 
 ### src/axon/api_routes/_rate_limit.py
@@ -1226,7 +1203,7 @@ Covers `src/axon/api.py`, `api_schemas.py`, `surface_contract.py`, and all modul
 **Role**: All document-ingestion surfaces (path, text, batch text, URL, multipart upload) plus the async-job status poller, collection listing, staleness check, and chunk deletion. The largest route file; establishes the async-job pattern (`job_id` + `GET /ingest/status/{job_id}`) reused only here today but is the template for any future long-running operation.
 
 - `POST /ingest/refresh` — `refresh_docs(background_tasks)` — background job that re-ingests any tracked file whose MD5 content hash has drifted from `brain.get_doc_versions()`'s recorded hash; returns `job_id` immediately — `ingest.py:64`
-- `POST /ingest` — `ingest_data(request, background_tasks, req)` — path-based ingest (file or directory) as a background job with progress callback (`phase`, `files_total`, `chunks_total`, `chunks_embedded`); emits `governance.emit()` events (`ingest_started`/`completed`/`failed`) — `ingest.py:163`
+- `POST /ingest` — `ingest_data(request, background_tasks, req)` — path-based ingest (file or directory) as a background job with progress callback (`phase`, `files_total`, `chunks_total`, `chunks_embedded`) — `ingest.py:163`
 - `GET /ingest/status/{job_id}` — `get_ingest_status(job_id)` — polls `_api._jobs`; also merges in `community_build_in_progress` from the graph backend — `ingest.py:292`
 - `GET /tracked-docs` — `list_tracked_docs()` — lists `brain.get_doc_versions()` — `ingest.py:312`
 - `GET /collection` — `get_collection()` — lists ingested files + chunk counts via `brain.list_documents()` — `ingest.py:323`
@@ -1235,7 +1212,7 @@ Covers `src/axon/api.py`, `api_schemas.py`, `surface_contract.py`, and all modul
 - `POST /add_texts` — `add_texts(request)` — batch text ingest in one embedding call; dedups both against the persisted store and within the same batch — `ingest.py:418`
 - `POST /ingest_url` — `ingest_url(request, req)` — fetches + ingests a URL via `URLLoader`; rate-limited (`ingest_url` bucket, 20/60s) — `ingest.py:481`
 - `POST /ingest/upload` — `ingest_upload(req, files, project)` — multipart upload; streams each file to a temp dir in 1MB chunks enforcing `AxonConfig.max_upload_bytes`/`max_files_per_request` caps, sanitizes filenames via `_normalise_uploaded_filename`, dedupes collisions, then batch-ingests; rate-limited (`ingest_upload`, 30/60s) — `ingest.py:532`
-- `POST /delete` — `delete_documents(request, req)` — **as of `#169`, a thin wrapper**: calls `brain.delete_documents(request.doc_ids)` (`main.py:1143`) and emits the `delete` governance audit event; no longer contains its own chunk-ID-expansion/dedup-purge logic inline — that moved into `AxonBrain.delete_documents()` itself so the CLI (`--delete-doc`/`--delete-doc-id`) and `agent.py::_tool_delete_documents` share the exact same behavior instead of three drifting copies — `ingest.py:684`
+- `POST /delete` — `delete_documents(request)` — **as of `#169`, a thin wrapper**: calls `brain.delete_documents(request.doc_ids)` (`main.py:1143`) and returns its result; no longer contains its own chunk-ID-expansion/dedup-purge logic inline — that moved into `AxonBrain.delete_documents()` itself so the CLI (`--delete-doc`/`--delete-doc-id`) and `agent.py::_tool_delete_documents` share the exact same behavior instead of three drifting copies — `ingest.py:684`
 - `_normalise_uploaded_filename(filename, index)` — safe-basename sanitizer for uploads (alnum + `-_.` only) — `ingest.py:54`
 - `_project_label(brain, request_project)` — stable project label for Prometheus counters — `ingest.py:37`
 - `MAX_UPLOAD_BYTES` / `MAX_FILES_PER_REQUEST` — module-level fallback caps used before brain config is available — `ingest.py:33,34`
@@ -1278,7 +1255,7 @@ Covers `src/axon/api.py`, `api_schemas.py`, `surface_contract.py`, and all modul
 **Role**: GraphRAG/knowledge-graph status, finalize (community rebuild), conflict inspection, direct backend retrieval, and HTML/JSON graph export/visualization — including combined query+graph visualization pages.
 
 - `GET /graph/status` — `get_graph_status()` — community build progress, summary count, entity count, code-node count, `graph_ready` flag — `graph.py:21`
-- `POST /graph/finalize` — `finalize_graph(request)` — triggers `backend.finalize(True)` off-thread; emits `graph_finalize` governance event; returns `not_applicable` status for backends without a community step — `graph.py:45`
+- `POST /graph/finalize` — `finalize_graph()` — triggers `backend.finalize(True)` off-thread; returns `not_applicable` status for backends without a community step — `graph.py:45`
 - `GET /graph/conflicts` — `graph_conflicts(project, limit)` — lists facts with `status="conflicted"` via `backend.list_conflicts()`; returns `supported: false` for backends lacking the method (e.g. graphrag) — `graph.py:99`
 - `POST /graph/retrieve` — `graph_retrieve(request)` — runs the active backend's `retrieve()` directly with a `RetrievalConfig` (supports `point_in_time` + per-query `federation_weights`), bypassing the full `/query` pipeline/LLM — `graph.py:138`
 - `POST /query/visualize` — `query_visualize(request)` — runs a query (RAPTOR/GraphRAG off by default) and returns a self-contained HTML page combining the answer, sources, and highlighted entity+code graph via `brain.render_query_graph_html()` — `graph.py:234`
@@ -1290,19 +1267,6 @@ Covers `src/axon/api.py`, `api_schemas.py`, `surface_contract.py`, and all modul
 - `_resolve_graph_payload(brain)` — normalizes `backend.graph_data()` output (handles `.to_dict()`, dict, or missing) to `{nodes, links}` — shared by `/graph/data` and both `/*/visualize` HTML routes — `graph.py:191`
 - `_serialise_context(ctx)` — converts a `GraphContext` dataclass to a JSON-friendly dict (ISO timestamps, etc.) for `/graph/retrieve` — `graph.py:213`
 
-### src/axon/api_routes/governance.py
-
-**Role**: Operator-console read APIs (aggregated overview, audit log, Copilot session list, per-project state) plus a small set of "audited operator wrapper" control endpoints that re-invoke logic also reachable via plainer routes elsewhere (see overlap note).
-
-- `GET /governance/overview` — `governance_overview()` — aggregates project/maintenance/graph/stale-doc/active-job/lease/Copilot-session counts via `_build_overview` — `governance.py:89`
-- `GET /governance/audit` — `governance_audit(project, action, surface, status, since, limit)` — filtered audit-log query via `governance.get_store().query()` — `governance.py:98`
-- `GET /governance/copilot/sessions` — `governance_copilot_sessions(limit)` — active + recent Copilot bridge sessions — `governance.py:139`
-- `GET /governance/projects` — `governance_projects()` — all projects with maintenance state + graph stats — `governance.py:168`
-- `POST /governance/graph/rebuild` — `governance_graph_rebuild(req)` — audited wrapper around `backend.finalize(True)`; **near-duplicate of `POST /graph/finalize`** in `graph.py` (see overlap note, still present) — `governance.py:204`
-- `POST /governance/project/maintenance` — `governance_set_maintenance(name, state, req)` — audited wrapper around `apply_maintenance_state`; **near-duplicate of `POST /project/maintenance`** in `maintenance.py` (see overlap note, still present) — `governance.py:260`
-- `POST /governance/copilot/session/{session_id}/expire` — `governance_expire_session(session_id, req)` — force-closes a stuck Copilot bridge session — `governance.py:310`
-- `_build_overview(brain, jobs)` — the aggregation helper backing `/governance/overview`; pulls from `runtime.get_registry()`, `maintenance.get_maintenance_status()`, `projects.list_projects()`, the graph backend, `brain.get_stale_docs()`, and `governance.get_session_store()` — reusable pattern for any future "operator dashboard" aggregation — `governance.py:18`
-
 ### src/axon/api_routes/maintenance.py
 
 **Role**: Project maintenance-state get/set, the GitHub Copilot chat-agent bridge (SSE streaming with slash-command dispatch), and the Copilot LLM task queue/result submission endpoints.
@@ -1310,12 +1274,12 @@ Covers `src/axon/api.py`, `api_schemas.py`, `surface_contract.py`, and all modul
 - `POST /copilot/agent` — `copilot_agent_handler(request, body)` — SSE handler for GitHub Copilot chat; dispatches `/search`, `/ingest`, `/projects` slash-commands or falls through to `brain.query()` with chat history — `maintenance.py:23`
 - `GET /llm/copilot/tasks` — `get_copilot_tasks()` — drains the module-level `_copilot_task_queue` (from `axon.main`) for the VS Code Copilot bridge to poll — `maintenance.py:98`
 - `POST /llm/copilot/result/{task_id}` — `submit_copilot_result(task_id, body)` — resolves a pending Copilot task's `asyncio.Event` with the result/error — `maintenance.py:109`
-- `POST /project/maintenance` — `set_project_maintenance(request, req)` — sets maintenance state via `apply_maintenance_state`; emits governance event; **near-duplicate of `POST /governance/project/maintenance`** — `maintenance.py:123`
+- `POST /project/maintenance` — `set_project_maintenance(request)` — sets maintenance state via `apply_maintenance_state` from a JSON body `{name, state}` — `maintenance.py:123`
 - `GET /project/maintenance` — `get_project_maintenance(name)` — reads current maintenance state via `get_maintenance_status`; 404s if `meta.json` missing — `maintenance.py:152`
 
 ### src/axon/api_routes/registry.py
 
-**Role**: Single-purpose write-lease inspection endpoint for the governance/maintenance system.
+**Role**: Single-purpose write-lease inspection endpoint for the maintenance system.
 
 - `GET /registry/leases` — `get_registry_leases()` — returns active write-lease counts per tracked project via `runtime.get_registry().snapshot_all()` — used to confirm it's safe to enter maintenance state — `registry.py:9`
 
@@ -1343,17 +1307,15 @@ Covers `src/axon/api.py`, `api_schemas.py`, `surface_contract.py`, and all modul
 - `GET /store/whoami` — `store_whoami()` — current OS username, store path, user dir, active project — `shares.py:146`
 - `POST /share/generate` — `share_generate(request, req)` — branches on whether the project is sealed (`ssk_` key_id via `security.generate_sealed_share`) or open (`shares.generate_share_key`); validates `ttl_days > 0`; rate-limited (10/60s) — `shares.py:165`
 - `POST /share/redeem` — `share_redeem(request, req)` — detects `SEALED1:`/`SEALED2:` envelope (with legacy JSON-shape fallback) and routes to `security.redeem_sealed_share` or `shares.redeem_share_key` — `shares.py:263`
-- `POST /share/revoke` — `share_revoke(request, req)` — routes on `ssk_` key_id prefix to sealed revoke (`security.revoke_sealed_share`, with soft vs. `rotate=true` hard revoke) or legacy `shares.revoke_share_key` — `shares.py:333`
-- `POST /share/extend` — `share_extend(request, req)` — renews or clears a share key's `ttl_days` via `shares.extend_share_key` — `shares.py:429`
+- `POST /share/revoke` — `share_revoke(request)` — routes on `ssk_` key_id prefix to sealed revoke (`security.revoke_sealed_share`, with soft vs. `rotate=true` hard revoke) or legacy `shares.revoke_share_key` — `shares.py:333`
+- `POST /share/extend` — `share_extend(request)` — renews or clears a share key's `ttl_days` via `shares.extend_share_key` — `shares.py:429`
 - `GET /share/list` — `share_list()` — merges open + sealed shares (`sharing` and `shared` lists), tagging each with `security_mode`; also runs revocation validation and reports `removed_stale` — `shares.py:472`
 
 **Possible internal overlap**
 
-1. **Graph community rebuild duplicated across two endpoints — still present.** `POST /graph/finalize` (`graph.py:45`, `finalize_graph`) and `POST /governance/graph/rebuild` (`governance.py:204`, `governance_graph_rebuild`) both call `_enforce_write_access(brain, "finalize_graph")`, fetch `brain._graph_backend`, invoke `backend.finalize(True)` via `asyncio.to_thread`, and emit a `graph_finalize` governance event — with slightly different response shapes (`graph.py` includes `status`/`backend_id`/`detail`; `governance.py` includes only `status`/`community_summary_count`, and additionally emits a `status="started"` event first). No consolidation commit touched this between `2aa84f6` and `main`. Still worth consolidating into one shared helper both routes call.
+1. **Graph community rebuild / maintenance-state set duplicated across two endpoints — resolved.** The `POST /governance/graph/rebuild` and `POST /governance/project/maintenance` near-duplicates of `POST /graph/finalize` and `POST /project/maintenance` were deleted along with the rest of the governance console; one route each remains.
 
-2. **Maintenance-state set duplicated across two endpoints — still present.** `POST /project/maintenance` (`maintenance.py:123`, `set_project_maintenance`) and `POST /governance/project/maintenance` (`governance.py:260`, `governance_set_maintenance`) both validate the project name against `_VALID_PROJECT_NAME_RE`, call `apply_maintenance_state(name, state)`, and emit a `maintenance_changed` governance event — differing only in that the governance variant takes query params instead of a JSON body and additionally emits a `status="started"` event before the outcome. Same consolidation opportunity as #1; unchanged since the last audit.
-
-3. **`/config` endpoints split across two files with no obvious naming cue — still present.** `GET /config` and `POST /config/update` live in `projects.py` (not `config_routes.py`, despite that file's name), while `GET /config/validate`, `POST /config/reset`, and `POST /config/set` live in `config_routes.py`. `config_routes.py`'s `set_config_field` already imports `_mask_if_sensitive` from `projects.py` to bridge the split, which is a sign the two modules are really one logical "config routes" surface. Not a functional bug (both are correctly registered in `api.py`), but a future engineer searching `config_routes.py` for "where do I add a config endpoint" would miss half of them, and `_reinitialize_runtime_components` (`config_routes.py:189`) still duplicates (rather than shares) the inline reinit-on-change logic in `projects.py::update_config` (`projects.py:101-ish`) — both independently reconstruct `brain.llm`/`brain.embedding`/`brain.reranker` on the same trigger conditions. `POST /config/reset` did get one real fix in this window (see its entry above — now atomic via `write_text_if_changed`), but that's orthogonal to the split itself.
+2. **`/config` endpoints split across two files with no obvious naming cue — still present.** `GET /config` and `POST /config/update` live in `projects.py` (not `config_routes.py`, despite that file's name), while `GET /config/validate`, `POST /config/reset`, and `POST /config/set` live in `config_routes.py`. `config_routes.py`'s `set_config_field` already imports `_mask_if_sensitive` from `projects.py` to bridge the split, which is a sign the two modules are really one logical "config routes" surface. Not a functional bug (both are correctly registered in `api.py`), but a future engineer searching `config_routes.py` for "where do I add a config endpoint" would miss half of them, and `_reinitialize_runtime_components` (`config_routes.py:189`) still duplicates (rather than shares) the inline reinit-on-change logic in `projects.py::update_config` (`projects.py:101-ish`) — both independently reconstruct `brain.llm`/`brain.embedding`/`brain.reranker` on the same trigger conditions. `POST /config/reset` did get one real fix in this window (see its entry above — now atomic via `write_text_if_changed`), but that's orthogonal to the split itself.
 
 ---
 
@@ -1380,12 +1342,11 @@ commands either to a local brain or to a detected running `axon-api` server, and
 - `_cli_migrate_vectors_to_tqdb(brain, source_path_arg)` / `_cli_migrate_vectors(brain, chroma_path_arg)` — ChromaDB/LanceDB → TurboQuantDB or LanceDB migration, auto-detecting source backend by directory contents — `cli.py:195`, `cli.py:239`
 - `_is_first_run(args)` / `_snapshot_first_run_state(args)` — detects a fresh checkout (no config file, empty `AxonStore/`) to trigger the setup wizard; snapshot must be taken **before** `AxonConfig.load()` auto-creates the config file — `cli.py:321`, `cli.py:373`
 - `_run_axon_update(argv)` — handles the bare `axon update [-y]` subcommand (intercepted before argparse); confirmation gate lives here as a plain inline `input(...).strip().lower()` (not routed through `repl.py`'s new `_confirm` helper — see overlap note), `axon.update_check.run_update()` assumes permission already granted — `cli.py:381`
-- `main()` — the `axon` entry point; builds the full argparse surface (RAG toggles, graph/sealed-store/share/governance/session/index-management flags), resolves `AxonConfig`, sets up per-PID rotating file logging, decides `need_brain`, and dispatches to REPL or one-shot handlers — `cli.py:441`
+- `main()` — the `axon` entry point; builds the full argparse surface (RAG toggles, graph/sealed-store/share/session/index-management flags), resolves `AxonConfig`, sets up per-PID rotating file logging, decides `need_brain`, and dispatches to REPL or one-shot handlers — `cli.py:441`
 
 Notable one-shot flag groups implemented inline in `main()` (each pairs with an equivalent REPL slash-command and/or MCP tool — see "Possible internal overlap"):
 - Store lifecycle: pre-brain fast path (`--wipe-sealed-cache`, `--passphrase-generate`) at `cli.py:1166-1210`; post-brain block (`--store-bootstrap/-unlock/-lock/-change-passphrase`, `--project-seal`) at `cli.py:1710-1800`; **`--store-init` is handled twice** — once pre-brain at `cli.py:1710` and again in a post-brain-init duplicate path at `cli.py:2442-2467` (mirrors the sharing duplication below).
 - Sharing: `--share-list/-generate/-redeem/-revoke/-extend`, `--share-ttl-days`, `--share-rotate` — pre-brain block `cli.py:1856-2070`, post-brain-init duplicate path `cli.py:2469-2650`. The **listing** render (`--share-list`) is no longer duplicated (both call `_print_shares_listing`); generate/redeem/revoke/extend logic is still two independent copies within this file, plus a third in `repl.py`.
-- Governance proxy: `--governance [overview|audit|sessions|projects|graph-rebuild]` — `cli.py:2075-2105`; **as of commit `3b1b7ef`, no longer raw `urllib.request`** — now routes through `server_client._request()`/`_headers()`/`resolve_api_base()` so it sends `X-API-Key` like every other server_client-backed command (the old hand-rolled version silently 401'd against a key-protected `axon-api`).
 - Graph ops: `--graph-status/-finalize/-conflicts/-retrieve/-export`, `--graph-at` — `cli.py:2311-2415`.
 - Doc lifecycle: `--refresh`, `--list-stale`, `--delete-doc`, `--delete-doc-id`, `--optimize-index`, `--migrate-vectors` — `cli.py:2240-2300`, `:2456-2472`, `:2667`. **`--delete-doc`/`--delete-doc-id` now both call `brain.delete_documents(...)` (`main.py:1143`)**, the same single implementation the REST `POST /delete` route and `agent.py::_tool_delete_documents` call (fixed in `#169`) — no more separate chunk-ID-expansion logic in the CLI. `--refresh` still hand-rolls its own `hashlib.md5` comparison inline (see overlap note; the hash *algorithm* itself was fixed in `3b1b7ef` to actually match `AxonBrain.ingest()`'s MD5 — previously it used `api_schemas._compute_content_hash()`'s SHA-256, which never matched, so "skip unchanged" silently never fired).
 
@@ -1442,7 +1403,6 @@ This catalog lists the **underlying reusable machinery**, not each of the ~35 to
   - `_agent_step_cb(tool_name, result)` — collects per-tool-call output for display after an agent-mode turn completes — `repl.py:4812`.
   - `/share` slash-command block — `repl.py:3747-4027` (now imports and calls `_print_shares_listing` from `cli.py` for `/share list`; generate/redeem/revoke/extend remain independently implemented here).
   - `/store` slash-command block — `repl.py:4028-4197`.
-  - `/governance` slash-command block — `repl.py:4583-4658`; **as of `3b1b7ef`, routes through `server_client._request()`/`_headers()`** (was raw `urllib.request`) — same X-API-Key fix as `cli.py --governance`, but each surface still independently maintains its own subcommand-to-route table and output formatting (REPL renders per-subcommand tables for `audit`/`projects`; `cli.py` just JSON-dumps everything).
   - `/refresh` slash-command — `repl.py:4227` — still an independent third MD5-hash-comparison implementation (see overlap note).
 
 ### src/axon/agent.py
@@ -1470,8 +1430,8 @@ claim that the Streamlit web GUI also used this module is now moot — that GUI 
 
 **Role**: `FastMCP`-based stdio MCP server (`axon-mcp` console script). Every tool is a **thin async
 HTTP proxy** (`_get`/`_post`) onto a running `axon-api` REST server — no direct `AxonBrain` access,
-unlike `agent.py`'s in-process dispatch. **56 tools total** (verified: `grep -c "@mcp.tool()"
-mcp_server.py`, matches CLAUDE.md); grouped below by concern rather than listed individually since
+unlike `agent.py`'s in-process dispatch. **51 tools total** (verified: `grep -c "@mcp.tool()"
+mcp_server.py`; 56 before the five `governance_*` tools were removed with the governance console); grouped below by concern rather than listed individually since
 the full reference lives in `docs/`. Two changes since the last audit: the `refresh_mount` tool was
 **removed** in `#157` (it posted to `/mount/refresh` with no arguments, which `mount_refresh(project=None)`
 already does as a strict superset — 57→56), and `pack_project`/`unpack_project` were **added** in commit `f2e81f9`.
@@ -1487,7 +1447,7 @@ already does as a strict superset — 57→56), and `pack_project`/`unpack_proje
   - Sharing: `share_project`, `redeem_share`, `list_shares`, `revoke_share`, `extend_share` — `mcp_server.py:415-501`.
   - Sealed-store security: `get_store_status`, `init_store`, `security_status`, `wipe_sealed_cache`, `set_keyring_mode`, `suggest_passphrase`, `security_bootstrap`, `security_unlock`, `security_lock`, `security_change_passphrase`, `seal_project` — `mcp_server.py:515-672`.
   - Graph: `graph_status`, `graph_finalize`, `graph_data`, `graph_backend_status`, `graph_conflicts`, `graph_retrieve` — `mcp_server.py:724-785`.
-  - Governance/ops: `get_active_leases`, `governance_overview`, `governance_audit`, `governance_sessions`, `governance_projects`, `governance_graph_rebuild`, `mount_refresh` — `mcp_server.py:814-958`. (`refresh_mount` removed — see above.)
+  - Ops: `get_active_leases`, `mount_refresh` — `mcp_server.py`. (`refresh_mount` removed — see above.)
 - `main()` — `axon-mcp` console-script entry point (`configure_logging()` + `mcp.run()`) — `mcp_server.py:1046`.
 
 ### src/axon/ext_install.py
@@ -1522,8 +1482,7 @@ already does as a strict superset — 57→56), and `pack_project`/`unpack_proje
    - Share lifecycle: generate/redeem/revoke/extend (including sealed-share auto-detection via base64-decode + `SEALED1:`/`SEALED2:` prefix sniffing) is still duplicated **three times** — `cli.py`'s pre-brain block (`:1873-2070`), `cli.py`'s post-brain block (`:2505-2650`), and `repl.py`'s `/share` (`:3747-4027`). The **listing** sub-feature (`--share-list` / `/share list`) is no longer duplicated — both now call the shared `_print_shares_listing()` (`cli.py:62`, commit `8dca2c3`), which also fixed a real parity bug (REPL's listing was silently missing sealed shares).
    - `/store` (init/status/bootstrap/unlock/lock/change-passphrase): `cli.py:1166-1210` + `:1710-1800` + `:2442-2467` (duplicate `store_init`) vs. `repl.py:4028-4197`. Unchanged, still duplicated.
    - `/refresh` (re-ingest changed docs by content-hash comparison): all **three** surfaces still hand-roll their own `hashlib.md5` comparison independently — `cli.py:2240-2283`, `repl.py:4227`, `agent.py::_tool_refresh_ingest` (`agent.py:1280`) — but as of commit `3b1b7ef`, all three now correctly compute the same digest `AxonBrain.ingest()` actually writes to `_doc_versions` (raw MD5, no stripping). Previously `cli.py`'s copy used `api_schemas._compute_content_hash()` (SHA-256 of stripped text), which never matched, so "skip unchanged" silently never fired there — a real bug, now fixed, though the duplication itself (three independent implementations) persists.
-   - `/governance` proxy: no longer raw `urllib.request` (fixed in `3b1b7ef` — both now route through `server_client._request()`/`_headers()`, fixing a real `X-API-Key` auth bug), but `cli.py:2075-2105` and `repl.py:4583-4658` still independently maintain their own subcommand-to-route table and output formatting (REPL pretty-prints `audit`/`projects` as tables; `cli.py` just JSON-dumps every subcommand's response).
-   These remain strong candidates for a shared `axon/cli_shared.py`-style module of pure functions (`do_project_new`, `do_share_generate`, `do_refresh`, `do_governance(sub, base)`, etc.) that both `cli.py` flag handlers and `repl.py` slash-command handlers call. The listing-render extractions (`_print_project_tree`, `_print_knowledge_base_listing`, `_print_shares_listing`, all living in `cli.py` and imported by `repl.py`) show the pattern already works for the read-only half of each feature; the mutating half (generate/redeem/revoke/delete/etc.) hasn't had the same treatment yet.
+   These remain strong candidates for a shared `axon/cli_shared.py`-style module of pure functions (`do_project_new`, `do_share_generate`, `do_refresh`, etc.) that both `cli.py` flag handlers and `repl.py` slash-command handlers call. The listing-render extractions (`_print_project_tree`, `_print_knowledge_base_listing`, `_print_shares_listing`, all living in `cli.py` and imported by `repl.py`) show the pattern already works for the read-only half of each feature; the mutating half (generate/redeem/revoke/delete/etc.) hasn't had the same treatment yet.
 
 5. **`webapp.py`'s separate session-persistence mechanism — fixed (file deleted).** No longer applicable; `axon.sessions` (`~/.axon/sessions/`) is now the only session store, used consistently by `cli.py`, `repl.py`, and MCP.
 

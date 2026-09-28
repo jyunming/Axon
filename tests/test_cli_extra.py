@@ -18,7 +18,6 @@ All imports inside main() are lazy, so we patch at the source module level:
 from __future__ import annotations
 
 import io
-import os
 import sys
 from contextlib import redirect_stdout
 from unittest.mock import MagicMock, call, patch
@@ -1567,55 +1566,6 @@ class TestAxonUpdateSubcommand:
                     code = run_cli("update", "-y")
         assert code == 1
         assert "axon-api server is live" in capsys.readouterr().out
-
-
-class TestCliGovernance:
-    """--governance must route through server_client's shared helpers (not a
-    hand-rolled urllib call) so it sends X-API-Key like every other routed
-    CLI operation — the old hand-rolled version silently 401'd on any
-    RAG_API_KEY-secured deployment."""
-
-    def test_overview_default_is_a_get_with_api_key_header(self, capsys):
-        with patch.dict(os.environ, {"RAG_API_KEY": "secret123"}, clear=False):
-            with patch("axon.server_client._request", return_value={"ok": True}) as mock_req:
-                run_cli("--governance")
-        mock_req.assert_called_once()
-        method, url, headers = mock_req.call_args[0][:3]
-        assert method == "GET"
-        assert url.endswith("/governance/overview")
-        assert headers["X-API-Key"] == "secret123"
-        assert '"ok": true' in capsys.readouterr().out
-
-    def test_named_subcommand_maps_to_correct_route(self):
-        with patch("axon.server_client._request", return_value={}) as mock_req:
-            run_cli("--governance", "audit")
-        method, url = mock_req.call_args[0][:2]
-        assert method == "GET"
-        assert url.endswith("/governance/audit")
-
-    def test_graph_rebuild_is_a_post_with_empty_body(self):
-        with patch("axon.server_client._request", return_value={}) as mock_req:
-            run_cli("--governance", "graph-rebuild")
-        method, url = mock_req.call_args[0][:2]
-        body = mock_req.call_args.kwargs.get("body", mock_req.call_args[0][3:4])
-        assert method == "POST"
-        assert url.endswith("/governance/graph/rebuild")
-        assert body == {} or body == ({},)
-
-    def test_unknown_subcommand_does_not_call_request(self, capsys):
-        with patch("axon.server_client._request") as mock_req:
-            code = run_cli("--governance", "bogus")
-        mock_req.assert_not_called()
-        assert code == 1
-        assert "Unknown governance subcommand" in capsys.readouterr().out
-
-    def test_server_failure_reports_friendly_message(self, capsys):
-        with patch("axon.server_client._request", side_effect=ConnectionRefusedError("refused")):
-            code = run_cli("--governance")
-        assert code == 1
-        out = capsys.readouterr().out
-        assert "Governance command failed" in out
-        assert "axon-api" in out
 
 
 class TestCliConfigReset:

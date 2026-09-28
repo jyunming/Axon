@@ -26,6 +26,23 @@ never reaches. Nothing a default install can do was removed.
 - **The `refresh_mount` MCP tool is removed.** It posted to `/mount/refresh`
   with no arguments, which `mount_refresh(project=None)` already does as a
   strict superset. MCP tool count: 57 → 56.
+- **The governance console is removed** — the audit log, the Copilot-session
+  tracker, and every surface that read them: the seven `/governance/*` REST
+  routes (`overview`, `audit`, `copilot/sessions`, `projects`, `graph/rebuild`,
+  `project/maintenance`, `copilot/session/{id}/expire`), the five
+  `governance_*` MCP tools, `axon --governance`, the REPL's `/governance`, and
+  the web GUI's Governance view. It recorded who ingested, deleted, shared or
+  rebuilt what, but nothing ever read that trail back except the console
+  itself, and every write route paid for an audit call on the side. Two of its
+  routes were near-duplicates of plainer ones that stay: use
+  `POST /project/maintenance` with a JSON body `{"name": ..., "state": ...}`
+  (instead of `POST /governance/project/maintenance?name=&state=`) and
+  `POST /graph/finalize` (instead of `POST /governance/graph/rebuild`).
+  Maintenance states, `GET /project/maintenance`, `GET /registry/leases`, the
+  `get_active_leases` MCP tool, and the `X-Request-ID` / `X-Axon-Surface`
+  request headers are unchanged. The leftover `.governance.db` (or
+  `.governance.jsonl`) in your projects root — `~/.axon/projects/` by default —
+  is no longer read or written and can be deleted. MCP tool count: 56 → 51.
 - **`sentence-transformers`, `tf-keras` and `lancedb` are no longer base
   dependencies.** They are reachable only through non-default configuration
   (`embedding.provider: sentence_transformers`, `rerank.provider: cross-encoder`,

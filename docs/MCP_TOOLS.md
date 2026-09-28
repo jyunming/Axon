@@ -1,6 +1,6 @@
 # Axon MCP Tools Reference
 
-Axon exposes a Model Context Protocol (MCP) server (`axon-mcp`) with **56 tools**.
+Axon exposes a Model Context Protocol (MCP) server (`axon-mcp`) with **51 tools**.
 
 > **Which integration should I use?**
 > - **`@axon` chat participant** — install the VS Code extension (VSIX). Gives you a conversational `@axon` inside Copilot Chat. No `.vscode/mcp.json` needed.
@@ -442,53 +442,6 @@ Run the active graph backend's `retrieve()` directly with a `RetrievalConfig` an
 
 ---
 
-## Governance (5)
-
-### `governance_overview`
-
-Return aggregated operator status: projects, graph, write-leases, shares, and Copilot. Use as a single-call health snapshot before performing administrative operations such as maintenance-state changes, graph rebuilds, or share revocations. No parameters.
-
-**Returns:** `{"projects": [...], "graph": {...}, "leases": {...}, "shares": {...}}`
-
-### `governance_audit`
-
-Return audit log entries matching the given filters, newest first.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `project` | string | `null` | Filter by project name (exact match) |
-| `action` | string | `null` | Filter by action string, e.g. `"ingest"` or `"share_generate"` |
-| `surface` | string | `null` | Filter by surface, e.g. `"api"`, `"mcp"`, `"repl"` |
-| `status` | string | `null` | Filter by status, e.g. `"success"` or `"error"` |
-| `since` | string | `null` | ISO-8601 lower bound for event timestamp, e.g. `"2026-01-01T00:00:00"` |
-| `limit` | int | `50` | Maximum events to return (1–1000) |
-
-**Returns:** `[{"id": "...", "timestamp": "...", "action": "...", "project": "...", "surface": "...", "status": "..."}]`
-
-### `governance_sessions`
-
-Return active and recent Copilot bridge sessions. Useful for diagnosing stuck or orphaned Copilot agent sessions.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `limit` | int | `20` | Maximum number of recent sessions to return (max 100) |
-
-**Returns:** `[{"session_id": "...", "started_at": "...", "status": "..."}]`
-
-### `governance_projects`
-
-Return all projects with their maintenance state and graph statistics. Includes `active_leases`, `maintenance_state`, `entity_count`, and `community_count` for each project. No parameters.
-
-**Returns:** `[{"name": "...", "maintenance_state": "normal", "active_leases": 0, "entity_count": N}]`
-
-### `governance_graph_rebuild`
-
-Trigger an audited graph community rebuild via the governance operator endpoint. Equivalent to `graph_finalize` but writes an audit-log entry and enforces write-lease checks. Prefer this over `graph_finalize` in automated operator pipelines. No parameters.
-
-**Returns:** `{"communities_built": N, "audit_id": "..."}`
-
----
-
 ## Sealed-Store Security (8)
 
 ### `security_status`
@@ -616,7 +569,7 @@ Check the on-disk config for errors, unknown keys, and risky combinations.
 
 ## Usage Notes
 
-- Most ingest, search, and query tools operate on the **active project** and accept an optional `project` parameter validated against it (returns 409 on mismatch). Tools that do **not** accept `project`: `ingest_path`, `list_sessions`, `get_session`, `list_shares`, `graph_backend_status`, `graph_status`, `graph_finalize`, `graph_data`, `graph_conflicts`, `graph_retrieve`. `revoke_share` conditionally accepts `project` and **requires** it for sealed shares (`ssk_` prefix). Global tools (`governance_*`, `security_*`, `init_store`, `share_project`, `redeem_share`, `list_shares`) are not scoped to the active project. Use `switch_project` to change the active project.
+- Most ingest, search, and query tools operate on the **active project** and accept an optional `project` parameter validated against it (returns 409 on mismatch). Tools that do **not** accept `project`: `ingest_path`, `list_sessions`, `get_session`, `list_shares`, `graph_backend_status`, `graph_status`, `graph_finalize`, `graph_data`, `graph_conflicts`, `graph_retrieve`. `revoke_share` conditionally accepts `project` and **requires** it for sealed shares (`ssk_` prefix). Global tools (`security_*`, `init_store`, `share_project`, `redeem_share`, `list_shares`) are not scoped to the active project. Use `switch_project` to change the active project.
 
 - `ingest_path` is async — it returns a `job_id`. Poll `get_job_status` until `status == "completed"` or `"failed"`. `ingest_url` is synchronous and returns `{"status": "ingested"|"skipped", "doc_id": "..."}` immediately — no polling required.
 

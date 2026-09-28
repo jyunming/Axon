@@ -166,7 +166,6 @@ async def store_whoami():
 async def share_generate(request: ShareGenerateRequest, req: Request):
     """Generate a share key allowing another user to access one of your projects."""
     from axon import api as _api
-    from axon import governance as gov
     from axon import security as _security
     from axon import shares as _shares
 
@@ -214,21 +213,6 @@ async def share_generate(request: ShareGenerateRequest, req: Request):
             "key_id": key_id,
             "security_mode": "sealed_v1",
         }
-        rid = getattr(req.state, "request_id", "")
-        surface = getattr(req.state, "surface", "api")
-        gov.emit(
-            "share_generated",
-            "share",
-            key_id,
-            project=request.project,
-            details={
-                "grantee": request.grantee,
-                "security_mode": "sealed_v1",
-                "expires_at": result.get("expires_at"),
-            },
-            surface=surface,
-            request_id=rid,
-        )
         return result
     # Resolve nested projects via subs/ layout (e.g. research/papers → research/subs/papers)
     _segments = request.project.split("/")
@@ -246,17 +230,6 @@ async def share_generate(request: ShareGenerateRequest, req: Request):
         )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
-    rid = getattr(req.state, "request_id", "")
-    surface = getattr(req.state, "surface", "api")
-    gov.emit(
-        "share_generated",
-        "share",
-        result.get("key_id", ""),
-        project=request.project,
-        details={"grantee": request.grantee, "expires_at": result.get("expires_at")},
-        surface=surface,
-        request_id=rid,
-    )
     return result
 
 
@@ -264,14 +237,11 @@ async def share_generate(request: ShareGenerateRequest, req: Request):
 async def share_redeem(request: ShareRedeemRequest, req: Request):
     """Redeem a share string, creating a mount descriptor in your mounts/ directory."""
     from axon import api as _api
-    from axon import governance as gov
     from axon import security as _security
     from axon import shares as _shares
 
     enforce_rate_limit(req, bucket="share_redeem", max_hits=10, window_seconds=60.0)
     user_dir = _api._get_user_dir()
-    rid = getattr(req.state, "request_id", "")
-    surface = getattr(req.state, "surface", "api")
     # Detect sealed share by the ``SEALED1:`` or ``SEALED2:`` prefix in
     # the decoded envelope (v0.4.0 added SEALED2 with embedded signing
     # pubkey; SEALED1 is still accepted for backward compat). The legacy
@@ -301,15 +271,6 @@ async def share_redeem(request: ShareRedeemRequest, req: Request):
             result = _security.redeem_sealed_share(user_dir, request.share_string)
         except _security.SecurityError as e:
             raise HTTPException(status_code=400, detail=str(e))
-        gov.emit(
-            "share_redeemed",
-            "share",
-            result.get("key_id", ""),
-            project=result.get("project", ""),
-            details={"owner": result.get("owner", ""), "security_mode": "sealed_v1"},
-            surface=surface,
-            request_id=rid,
-        )
         return result
     try:
         result = _shares.redeem_share_key(
@@ -318,20 +279,11 @@ async def share_redeem(request: ShareRedeemRequest, req: Request):
         )
     except (ValueError, NotImplementedError) as e:
         raise HTTPException(status_code=400, detail=str(e))
-    gov.emit(
-        "share_redeemed",
-        "share",
-        result.get("key_id", ""),
-        project=result.get("project", ""),
-        details={"owner": result.get("owner", "")},
-        surface=surface,
-        request_id=rid,
-    )
     return result
 
 
 @router.post("/share/revoke")
-async def share_revoke(request: ShareRevokeRequest, req: Request):
+async def share_revoke(request: ShareRevokeRequest):
     """Revoke a share key.
     Routing:
     - ``key_id`` starting with ``ssk_`` → sealed-share revoke (Phase 4).
@@ -341,13 +293,10 @@ async def share_revoke(request: ShareRevokeRequest, req: Request):
     - Any other ``key_id`` → legacy plaintext-mount share revoke.
     """
     from axon import api as _api
-    from axon import governance as gov
     from axon import security as _security
     from axon import shares as _shares
 
     user_dir = _api._get_user_dir()
-    rid = getattr(req.state, "request_id", "")
-    surface = getattr(req.state, "surface", "api")
     # Sealed-share revoke is keyed off the ``ssk_`` key_id prefix
     # produced by ``api_routes/shares.py::share_generate`` for sealed
     # projects.
@@ -396,50 +345,25 @@ async def share_revoke(request: ShareRevokeRequest, req: Request):
             )
             status = 404 if is_not_found else 400
             raise HTTPException(status_code=status, detail=message)
-        gov.emit(
-            "share_revoked",
-            "share",
-            request.key_id,
-            project=request.project,
-            details={
-                "security_mode": "sealed_v1",
-                "rotate": request.rotate,
-                "files_resealed": result.get("files_resealed", 0),
-                "invalidated_share_key_ids": result.get("invalidated_share_key_ids", []),
-            },
-            surface=surface,
-            request_id=rid,
-        )
         return result
     try:
         result = _shares.revoke_share_key(owner_user_dir=user_dir, key_id=request.key_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    gov.emit(
-        "share_revoked",
-        "share",
-        request.key_id,
-        project=result.get("project", ""),
-        surface=surface,
-        request_id=rid,
-    )
     return result
 
 
 @router.post("/share/extend")
-async def share_extend(request: ShareExtendRequest, req: Request):
+async def share_extend(request: ShareExtendRequest):
     """Renew a share key's expiry — or clear it (``ttl_days=null``).
     Pairs with ``POST /share/generate``'s ``ttl_days`` to give owners a
     hard cutoff for forgotten shares while still letting them keep an
     in-use share alive on demand.
     """
     from axon import api as _api
-    from axon import governance as gov
     from axon import shares as _shares
 
     user_dir = _api._get_user_dir()
-    rid = getattr(req.state, "request_id", "")
-    surface = getattr(req.state, "surface", "api")
     try:
         result = _shares.extend_share_key(
             owner_user_dir=user_dir,
@@ -457,15 +381,6 @@ async def share_extend(request: ShareExtendRequest, req: Request):
         else:
             status = 422
         raise HTTPException(status_code=status, detail=msg)
-    gov.emit(
-        "share_extended",
-        "share",
-        request.key_id,
-        project=result.get("project", ""),
-        details={"new_expires_at": result.get("expires_at")},
-        surface=surface,
-        request_id=rid,
-    )
     return result
 
 

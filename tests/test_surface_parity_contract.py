@@ -386,7 +386,7 @@ class TestB1ParitySweep:
     """New capabilities from the B1 parity sweep are present in all required surfaces."""
 
     def test_b1_capabilities_in_registry(self):
-        """All 7 new SP-B1 capability IDs are present in the registry."""
+        """The surviving SP-B1 capability IDs are present in the registry."""
         from axon.surface_contract import REGISTRY
 
         expected = {
@@ -394,31 +394,26 @@ class TestB1ParitySweep:
             "store_whoami",
             "seal_project",
             "mount_refresh",
-            "governance_overview",
-            "governance_audit",
-            "governance_projects",
         }
         registered = {c.id for c in REGISTRY}
         missing = expected - registered
         assert not missing, f"SP-B1 capabilities missing from registry: {missing}"
 
-    def test_governance_commands_in_repl(self):
-        """/governance and /mount-refresh are present in repl.py."""
+    def test_mount_refresh_command_in_repl(self):
+        """/mount-refresh is present in repl.py."""
         from axon.repl import _SLASH_COMMANDS
 
-        # Entries may have trailing spaces (e.g. "/governance " for subcommand completion)
+        # Entries may have trailing spaces (e.g. "/share " for subcommand completion)
         slash_cmd_prefixes = {c.strip() for c in _SLASH_COMMANDS}
-        assert "/governance" in slash_cmd_prefixes, "Missing /governance in _SLASH_COMMANDS"
         assert "/mount-refresh" in slash_cmd_prefixes, "Missing /mount-refresh in _SLASH_COMMANDS"
         # Verify handlers exist via source (broad search, not quote-style-sensitive)
         repl_src = _repl_source()
-        assert "governance" in repl_src, "Missing /governance handler body in repl.py"
         assert "mount-refresh" in repl_src, "Missing /mount-refresh handler body in repl.py"
 
-    def test_governance_flags_in_cli(self):
-        """--governance, --share-extend, --store-whoami, --mount-refresh are in cli.py."""
+    def test_b1_flags_in_cli(self):
+        """--share-extend, --store-whoami, --mount-refresh are in cli.py."""
         cli_src = _cli_source()
-        for flag in ("--governance", "--share-extend", "--store-whoami", "--mount-refresh"):
+        for flag in ("--share-extend", "--store-whoami", "--mount-refresh"):
             assert flag in cli_src, f"Missing CLI flag: {flag}"
 
     def test_new_vscode_tools_in_manifest(self):
@@ -437,17 +432,3 @@ class TestB1ParitySweep:
         assert (
             '"extend"' in repl_src or "'extend'" in repl_src
         ), "Missing /share extend handler in repl.py"
-
-    def test_governance_on_primary_surfaces(self):
-        """governance_overview and governance_audit are declared on API, REPL, CLI, VSCODE."""
-        from axon.surface_contract import REGISTRY, Surface
-
-        target_ids = {"governance_overview", "governance_audit", "governance_projects"}
-        for cap in REGISTRY:
-            if cap.id not in target_ids:
-                continue
-            for surface in (Surface.API, Surface.REPL, Surface.CLI, Surface.VSCODE):
-                assert surface in cap.supported_surfaces, (
-                    f"Capability '{cap.id}' is missing from {surface} "
-                    f"(expected PRIMARY_SURFACES coverage)"
-                )

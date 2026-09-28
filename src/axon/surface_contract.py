@@ -404,21 +404,23 @@ REGISTRY: list[Capability] = [
         },
         api_route="/sessions",
     ),
-    # ── Governance ────────────────────────────────────────────────────────────
+    # ── Maintenance ───────────────────────────────────────────────────────────
     Capability(
         id="active_leases",
         name="Active leases",
-        category="governance",
+        category="maintenance",
+        # Tier.TWO (not API_ONLY) while VS Code still registers the
+        # get_active_leases LM tool, so TestVsCodeManifestContract keeps
+        # checking it; the agent-surface slim-down removes it from VS Code.
         tier=Tier.TWO,
         description="List active write-lease counts per project; used to confirm it is safe to enter maintenance state.",
         supported_surfaces=frozenset({Surface.API, Surface.VSCODE}),
         intentional_exceptions={
-            Surface.REPL: "Governance operator tool — not meaningful in single-session interactive use",
-            Surface.CLI: "Governance operator tool — not meaningful in single-session interactive use",
+            Surface.REPL: "Operator diagnostic paired with API-only maintenance state control",
+            Surface.CLI: "Operator diagnostic paired with API-only maintenance state control",
         },
         api_route="/registry/leases",
     ),
-    # ── Maintenance ───────────────────────────────────────────────────────────
     Capability(
         id="maintenance_state",
         name="Maintenance state control",
@@ -500,39 +502,6 @@ REGISTRY: list[Capability] = [
         supported_surfaces=PRIMARY_SURFACES,
         intentional_exceptions={},
         api_route="/mount/refresh",
-    ),
-    # ── Governance overview (SP-B1 parity sweep) ─────────────────────────────
-    Capability(
-        id="governance_overview",
-        name="Governance overview",
-        category="governance",
-        tier=Tier.TWO,
-        description="Return aggregated operator status: projects, graph, write-leases, shares, and Copilot sessions.",
-        supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={},
-        api_route="/governance/overview",
-    ),
-    # ── Governance audit (SP-B1 parity sweep) ────────────────────────────────
-    Capability(
-        id="governance_audit",
-        name="Governance audit log",
-        category="governance",
-        tier=Tier.TWO,
-        description="Return filtered audit log entries for operator review.",
-        supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={},
-        api_route="/governance/audit",
-    ),
-    # ── Governance projects (SP-B1 parity sweep) ─────────────────────────────
-    Capability(
-        id="governance_projects",
-        name="Governance project list",
-        category="governance",
-        tier=Tier.TWO,
-        description="Return all projects with maintenance state and graph statistics for operator review.",
-        supported_surfaces=PRIMARY_SURFACES,
-        intentional_exceptions={},
-        api_route="/governance/projects",
     ),
 ]
 
