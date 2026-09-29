@@ -2,9 +2,15 @@
 
 ## [Unreleased]
 
-A slim-down pass: the tool had grown to 244 config fields, 57 MCP tools and a
-2.6 GB default install, much of it behind code paths a default configuration
-never reaches. Nothing a default install can do was removed.
+_Nothing yet._
+
+## [0.5.0] - 2026-09-29
+
+A slim-down pass: the tool had grown to 244 config fields, 57 MCP tools, 18
+guides and a multi-gigabyte default install, much of it behind code paths a
+default configuration never reaches. Nothing a default install can do was
+removed. End state: 162 config fields, 18 MCP tools, 20 VS Code LM tools, 69
+REST routes and 4 guides.
 
 ### 💥 Breaking
 
@@ -256,6 +262,22 @@ never reaches. Nothing a default install can do was removed.
 
 ### 🐛 Fixes
 
+- **Deleting a document lets the same text be re-ingested**
+  ([#168](https://github.com/jyunming/Axon/issues/168)). `POST /delete` removed
+  the chunks but left their dedup hashes, so ingesting the same text again was
+  silently skipped while the call reported success. All delete paths (REST, CLI
+  `--delete-doc` / `--delete-doc-id`, agent tool) now go through
+  `AxonBrain.delete_documents`, which also forgets the source-level records.
+- **Project, share, mount and session metadata are written atomically.**
+  `meta.json`, `store_meta.json`, the active-project file, share manifests,
+  mount descriptors and session files were written straight over the live file,
+  so a crash or a cloud-sync lock mid-write could leave a truncated file. They
+  now use a per-writer temp file plus rename; a sealed project's crashed temps
+  are removed before sealing (never another machine's in-flight one).
+- **A symbol lookup right after a restart saw an empty corpus** (the code-symbol
+  channel read a lazily loaded BM25 corpus without loading it), the API's
+  source-dedup records are now persisted across restarts, and
+  `RemoteBrain.ingest()` returns a chunk count like `AxonBrain.ingest()`.
 - **`axon --dry-run` returns ranked chunks again.** The flag also set
   `AXON_DRY_RUN`, which made the query embed as a zero vector, so every dense
   score was 0 and the default similarity threshold filtered everything. The
@@ -409,6 +431,17 @@ never reaches. Nothing a default install can do was removed.
   per process — the guides now seal and share from one REPL session or an
   unlocked `axon-api`. The landing page drops Streamlit and its stale tool
   counts (18 MCP tools, 20 VS Code LM tools).
+
+## [0.4.6] - 2026-09-01
+
+### ⚡ Performance
+
+- **`fastembed` is the default embedding provider**
+  ([#154](https://github.com/jyunming/Axon/pull/154)): an ONNX export of the
+  same model, cutting `axon-api` cold start from about 20 s to about 2 s.
+  `fastembed` is now a base dependency, caches its model under
+  `~/.axon/model_cache/fastembed`, and `sentence_transformers` loads pass
+  `local_files_only=True` when the model is already cached.
 
 ## [0.4.5] - 2026-09-01
 
