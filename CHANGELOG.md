@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`axon --ingest` and the REPL's `/ingest` accept `http(s)://` URLs**, and raw text
+  can be ingested from the CLI (`--ingest-text TEXT`, `-` for stdin, `--text-source NAME`)
+  and the REPL (`/ingest-text [--source NAME] <text>`). This makes the `ingest_url` /
+  `ingest_text` REPL and CLI claims in `surface_contract.py` true; with a running
+  `axon-api` both go through `POST /ingest_url` / `POST /add_text`.
+
 ### Fixed
 
 - **One-shot sealed CLI commands work.** `axon --project-seal`, `--share-generate`

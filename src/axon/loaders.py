@@ -406,6 +406,11 @@ class HTMLLoader(BaseLoader):
         ]
 
 
+def is_http_url(value: str) -> bool:
+    """True for an ``http://`` or ``https://`` string (what ``URLLoader`` accepts)."""
+    return isinstance(value, str) and value.strip().lower().startswith(("http://", "https://"))
+
+
 class URLLoader(BaseLoader):
     """Loader for HTTP/HTTPS URLs with SSRF mitigations.
     Fetches the URL using httpx (already in project deps), strips HTML if the

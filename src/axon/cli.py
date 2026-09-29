@@ -130,6 +130,22 @@ def _print_shares_listing(
     print()
 
 
+def _read_ingest_text(value: str) -> str:
+    """Resolve ``--ingest-text``: ``-`` reads stdin, anything else is the text itself."""
+    text = sys.stdin.read() if value == "-" else value
+    if not text.strip():
+        print("  Error: no text to ingest.")
+        sys.exit(1)
+    return text
+
+
+def _remote_ingest_outcome(result: dict) -> str:
+    """One-word outcome of a ``/ingest_url`` or ``/add_text`` server response."""
+    if result.get("status") == "skipped":
+        return "was already in the knowledge base (skipped)"
+    return "ingested"
+
+
 def _run_via_server(server: dict, args, config) -> str:
     """Execute store-mutating CLI commands against a detected axon-api server.
 
@@ -145,6 +161,7 @@ def _run_via_server(server: dict, args, config) -> str:
     of landing on the wrong project. Returns the project the server was left on.
     """
     from axon import server_client as sc
+    from axon.loaders import is_http_url
 
     base = server["_api_base"]
     headers = sc._headers(config)
@@ -175,7 +192,10 @@ def _run_via_server(server: dict, args, config) -> str:
         sc.remote_clear(base, headers, project=active)
         print(f"  Knowledge base cleared for project '{active}'.")
 
-    if getattr(args, "ingest", None):
+    if getattr(args, "ingest", None) and is_http_url(args.ingest):
+        result = sc.remote_ingest_url(base, args.ingest.strip(), headers, project=active)
+        print(f"  '{args.ingest}' {_remote_ingest_outcome(result)} (project '{active}').")
+    elif getattr(args, "ingest", None):
         print(f"  Ingesting '{args.ingest}' via server (project '{active}')...")
 
         def _progress(status: dict) -> None:
@@ -192,6 +212,13 @@ def _run_via_server(server: dict, args, config) -> str:
             + (f", {chunks} chunk(s)" if chunks is not None else "")
             + "."
         )
+
+    if getattr(args, "ingest_text", None):
+        text = _read_ingest_text(args.ingest_text)
+        result = sc.remote_add_text(
+            base, text, headers, project=active, source=getattr(args, "text_source", None)
+        )
+        print(f"  Text {_remote_ingest_outcome(result)} (project '{active}').")
 
     if getattr(args, "project_pack", None):
         result = sc.remote_project_pack(
@@ -548,7 +575,19 @@ def main():
     parser = argparse.ArgumentParser(description="Axon CLI")
     parser.add_argument("--version", action="version", version=f"axon-rag {_axon_version}")
     parser.add_argument("query", nargs="?", help="Question to ask")
-    parser.add_argument("--ingest", help="Path to file or directory to ingest")
+    parser.add_argument(
+        "--ingest", help="File, directory, or http(s):// URL to ingest into the knowledge base"
+    )
+    parser.add_argument(
+        "--ingest-text",
+        metavar="TEXT",
+        help="Raw text to ingest as one document ('-' reads it from stdin)",
+    )
+    parser.add_argument(
+        "--text-source",
+        metavar="NAME",
+        help="Source name / doc ID for --ingest-text (default: generated)",
+    )
     parser.add_argument(
         "--list", action="store_true", help="List all ingested sources in the knowledge base"
     )
@@ -1572,6 +1611,7 @@ def main():
     _entering_repl = (
         not args.query
         and not getattr(args, "ingest", None)
+        and not getattr(args, "ingest_text", None)
         and not args.list
         and not args.list_models
         and not getattr(args, "pull", None)
@@ -1731,6 +1771,7 @@ def main():
         or args.query
         or (args.list and not _list_fast_path_available)
         or getattr(args, "ingest", None)
+        or getattr(args, "ingest_text", None)
         or getattr(args, "refresh", False)
         or getattr(args, "list_stale", False)
         or getattr(args, "graph_finalize", False)
@@ -1760,6 +1801,7 @@ def main():
     # --local opts out and forces a local, in-process (server-bypassing) run.
     if not getattr(args, "local", False) and (
         getattr(args, "ingest", None)
+        or getattr(args, "ingest_text", None)
         or getattr(args, "project_new", None)
         or getattr(args, "project_delete", None)
         or getattr(args, "project_pack", None)
@@ -2330,9 +2372,15 @@ def main():
             print(f"  Error: {exc}")
             sys.exit(1)
         print(f"  Knowledge base cleared for project '{brain._active_project}'.")
-        if not (args.ingest or args.query):
+        if not (args.ingest or args.ingest_text or args.query):
             return
-    if args.ingest:
+    from axon.loaders import is_http_url
+
+    if args.ingest and is_http_url(args.ingest):
+        from axon.agent import _tool_ingest_url, print_ingest_result
+
+        print_ingest_result(_tool_ingest_url(brain, {"url": args.ingest}))
+    elif args.ingest:
         if os.path.isdir(args.ingest):
             asyncio.run(brain.load_directory(args.ingest))
         else:
@@ -2348,6 +2396,15 @@ def main():
                     if doc.get("metadata", {}).get("type") not in ("csv", "tsv", "image"):
                         doc["text"] = f"[File Path: {abs_path}]\n{doc['text']}"
                 brain.ingest(docs)
+    if args.ingest_text:
+        from axon.agent import _tool_add_text, print_ingest_result
+
+        print_ingest_result(
+            _tool_add_text(
+                brain,
+                {"text": _read_ingest_text(args.ingest_text), "source": args.text_source or ""},
+            )
+        )
     if args.list:
         _print_knowledge_base_listing(brain.list_documents())
         return

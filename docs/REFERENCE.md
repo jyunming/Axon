@@ -620,7 +620,9 @@ without a question opens the REPL afterwards.
 
 | Flag | Meaning |
 |---|---|
-| `--ingest PATH` | Ingest a file or directory (routed through a running `axon-api`) |
+| `--ingest PATH_OR_URL` | Ingest a file, a directory or an `http(s)://` URL (routed through a running `axon-api`) |
+| `--ingest-text TEXT` | Ingest raw text as one document; `-` reads it from stdin (routed through a running `axon-api`) |
+| `--text-source NAME` | Source name recorded for `--ingest-text` (also its document id when routed) |
 | `--no-dedup` | Re-ingest content even if its hash was seen |
 | `--chunk-strategy {recursive,semantic}` | Chunking for this ingest |
 | `--parent-chunk-size N` | Small-to-big retrieval: return N-token parent passages (0 = off) |
@@ -734,7 +736,8 @@ prints details.
 
 | Command | Does |
 |---|---|
-| `/ingest <path\|glob>` | Ingest a file, directory or glob (`./src/*.py`, `./notes/**/*.md`) |
+| `/ingest <path\|glob\|url>` | Ingest a file, directory, glob (`./src/*.py`, `./notes/**/*.md`) or `http(s)://` URL |
+| `/ingest-text [--source NAME] <text>` | Ingest raw text as one document |
 | `/list` | Ingested sources with chunk counts |
 | `/refresh` | Re-ingest tracked files that changed |
 | `/stale [days]` | Sources not re-ingested for N days (default 7) |

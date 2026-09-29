@@ -2285,3 +2285,51 @@ class TestReplConfigReset:
             _handle_config_cmd("reset", None, str(target))
             _handle_config_cmd("reset", None, str(target))
         assert not list(target.parent.glob(target.name + "*.tmp"))
+
+
+class TestReplIngestUrlAndText:
+    def test_ingest_url_ingests_the_fetched_page(self):
+        brain = _make_mock_brain()
+        brain.ingest.return_value = 2
+        doc = {"id": "u", "text": "page content", "metadata": {}}
+        with patch("axon.loaders.URLLoader") as loader:
+            loader.return_value.load.return_value = [doc]
+            _run_repl_with_commands(["/ingest https://example.com/page"], brain=brain)
+        loader.return_value.load.assert_called_once_with("https://example.com/page")
+        brain.ingest.assert_called_once_with([doc])
+
+    def test_ingest_url_is_never_globbed_as_a_path(self):
+        brain = _make_mock_brain()
+        brain.ingest.return_value = 1
+        with patch("axon.loaders.URLLoader") as loader:
+            loader.return_value.load.return_value = [{"id": "u", "text": "x", "metadata": {}}]
+            output = _run_repl_with_commands(["/ingest https://example.com/a"], brain=brain)
+        assert "No files matched" not in output
+
+    def test_ingest_text_saves_a_document(self):
+        brain = _make_mock_brain()
+        brain.ingest.return_value = 1
+        _run_repl_with_commands(["/ingest-text remember this fact"], brain=brain)
+        (docs,), _ = brain.ingest.call_args
+        assert "remember this fact" in docs[0]["text"]
+
+    def test_ingest_text_source_option(self):
+        brain = _make_mock_brain()
+        brain.ingest.return_value = 1
+        _run_repl_with_commands(["/ingest-text --source notes1 some text"], brain=brain)
+        (docs,), _ = brain.ingest.call_args
+        assert docs[0]["metadata"]["source"] == "notes1"
+        assert "some text" in docs[0]["text"]
+
+    @pytest.mark.parametrize("cmd", ["/ingest-text", "/ingest-text   ", "/ingest-text --source x"])
+    def test_ingest_text_usage_when_empty(self, cmd):
+        brain = _make_mock_brain()
+        output = _run_repl_with_commands([cmd], brain=brain)
+        brain.ingest.assert_not_called()
+        assert "Usage: /ingest-text" in output
+
+    def test_ingest_text_is_a_listed_command(self):
+        from axon.repl import _SLASH_CMD_DESC, _SLASH_COMMANDS
+
+        assert "/ingest-text " in _SLASH_COMMANDS
+        assert "/ingest-text" in _SLASH_CMD_DESC

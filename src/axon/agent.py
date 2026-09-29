@@ -744,7 +744,9 @@ def _tool_ingest_path(brain, args: dict) -> str:
         "ingest_path called: path=%r project=%r cwd=%r", path, args.get("project"), os.getcwd()
     )
     # B1: Route URLs to URLLoader rather than the file-system glob
-    if path.startswith("http://") or path.startswith("https://"):
+    from axon.loaders import is_http_url
+
+    if is_http_url(path):
         return _tool_ingest_url(brain, {"url": path, "project": args.get("project", "")})
     # Expand ~ and resolve relative paths: try CWD first, then home directory.
     # This handles cases where the user typed @Downloads/file.pdf (relative to home)
@@ -1118,13 +1120,24 @@ def _tool_get_config(brain) -> str:
     return "\n".join(lines)
 
 
+def print_ingest_result(message: str, indent: str = "  ") -> None:
+    """Print a ``_tool_*`` ingest result on a terminal that may not render emoji."""
+    text = "\n".join(indent + line for line in message.splitlines())
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        print(text.encode("ascii", "replace").decode("ascii"))
+
+
 def _tool_ingest_url(brain, args: dict) -> str:
     from axon.loaders import URLLoader
 
     url = args.get("url", "").strip()
     if not url:
         return "No URL provided."
-    if not (url.startswith("http://") or url.startswith("https://")):
+    from axon.loaders import is_http_url
+
+    if not is_http_url(url):
         return f"Invalid URL — must start with http:// or https://: {url}"
     project = args.get("project", "").strip()
     if project:
