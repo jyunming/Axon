@@ -1681,7 +1681,7 @@ route in `surface_contract.py`'s intentional-exception reasons. `project` parame
 - `get_maintenance_status(name)` — read-only snapshot of a project's current maintenance state + lease registry (`{project, maintenance_state, active_leases, epoch, draining}`) — `maintenance.py:46`
 
 ### `src/axon/extensions/__init__.py`
-**Role:** Namespace-only package (no code, a single comment) holding the bundled VS Code extension VSIX artifact (`axon-copilot-0.4.6.vsix`) as package data, so `axon-ext`'s `_find_vsix()` (`ext_install.py:19`, section 9) can locate and install it without the user downloading anything separately. Not previously cataloged; added here since it's an explicit scope target.
+**Role:** Namespace-only package (no code, a single comment) holding the bundled VS Code extension VSIX artifact (`axon-copilot-0.5.0.vsix`) as package data, so `axon-ext`'s `_find_vsix()` (`ext_install.py:19`, section 9) can locate and install it without the user downloading anything separately. Not previously cataloged; added here since it's an explicit scope target.
 
 ### `src/axon/integrations/__init__.py`
 **Role:** Namespace docstring only (no code) — documents that `langchain` and `llama_index` submodules are optional-extra-gated adapters (`axon-rag[langchain]`, `axon-rag[llama-index]`), both wrapping `AxonBrain.search_raw` so they inherit reranking/hybrid/HyDE/multi-query/GraphRAG budget identically to REST/REPL.
