@@ -387,6 +387,32 @@ def _check_expiry_or_raise(
         )
 
 
+def _check_expiry_or_raise_transient_safe(
+    project_dir: Path,
+    key_id: str,
+    pubkey_hex: str,
+) -> None:
+    """:func:`_check_expiry_or_raise`, but an unreadable sidecar is not "expired".
+
+    ``_check_expiry_or_raise`` maps an ``OSError`` on the sidecar read to
+    :class:`ShareExpiredError`, and callers of that error auto-destroy the
+    grantee's key. A read that fails only transiently (cloud placeholder,
+    sync in flight) must not wipe the key, so it surfaces here as a plain
+    :class:`SecurityError` instead.
+    """
+    from . import ShareExpiredError as _Expired
+
+    try:
+        _check_expiry_or_raise(project_dir, key_id, pubkey_hex)
+    except _Expired as exc:
+        if isinstance(exc.__cause__, OSError):
+            raise SecurityError(
+                f"Cannot read the expiry file for {key_id} ({exc.__cause__}); "
+                "it may still be syncing. Retry once it has finished."
+            ) from exc
+        raise
+
+
 def share_kek_path(project_dir: Path, key_id: str) -> Path:
     """Return the on-disk path of the master-wrapped KEK for *key_id*.
     Owner-only: this file holds the per-share KEK encrypted under the
@@ -745,6 +771,8 @@ def redeem_sealed_share(
             derivation produces an invalid DEK (token corruption), or
             I/O error writing the mount descriptor. SEALED2 strings
             with a malformed pubkey field also raise here.
+        ShareExpiredError: the share's signed expiry has already passed
+            (or its signature fails verification); nothing is stored.
         ValueError: share_string is a non-sealed legacy share (let the
             caller route to ``axon.shares.redeem_share_key`` instead).
     """
@@ -822,6 +850,9 @@ def redeem_sealed_share(
             "Either the owner has revoked this share, or the file has not "
             "yet synced to your machine."
         )
+    # Refuse an already-expired share up front instead of caching a DEK that
+    # get_grantee_dek would then reject (and auto-destroy) on first use.
+    _check_expiry_or_raise_transient_safe(owner_project_dir, key_id, pubkey_hex)
     # Derive the KEK and unwrap the DEK. Wipe the token from local
     # variables ASAP — once the DEK is in the keyring there's no need
     # to keep the token in memory.
@@ -1081,7 +1112,7 @@ def get_grantee_dek(key_id: str, user_dir: Path | None = None) -> bytes:
                 # Note: ``_check_expiry_or_raise`` is a no-op when the
                 # expiry sidecar doesn't exist — most shares (TTL-less)
                 # pay zero cost on this path.
-                _check_expiry_or_raise(Path(target), key_id, pubkey_hex)
+                _check_expiry_or_raise_transient_safe(Path(target), key_id, pubkey_hex)
     service = _share_keyring_service(key_id)
     try:
         secret = _kr.get_secret(service, "dek")

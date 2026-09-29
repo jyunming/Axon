@@ -57,7 +57,7 @@ import pytest
 pytest.importorskip("cryptography", reason="requires axon-rag[sealed] / cryptography")
 pytest.importorskip("keyring")
 
-from axon.security import ShareExpiredError  # noqa: E402
+from axon.security import SecurityError, ShareExpiredError  # noqa: E402
 from axon.security.master import bootstrap_store  # noqa: E402
 from axon.security.seal import project_seal  # noqa: E402
 from axon.security.share import (  # noqa: E402
@@ -131,6 +131,43 @@ def _populate_and_seal(owner_user_dir: Path, project: str = "research") -> Path:
     bootstrap_store(owner_user_dir, "owner-pw")
     project_seal(project, owner_user_dir)
     return proj
+
+
+def _mint_redeem_then_expire(owner_user_dir, grantee_user_dir, key_id, project="research"):
+    """Mint a valid TTL share, redeem it, then re-sign its expiry into the past.
+
+    Redeem refuses an already-expired share, so "redeemed and later expired"
+    has to be simulated by moving the owner's signed sidecar afterwards.
+    """
+    from axon.security.master import get_master_key
+    from axon.security.share import _write_expiry_sidecar
+    from axon.security.signing import derive_signing_keypair
+
+    share = generate_sealed_share(
+        owner_user_dir,
+        project,
+        "bob",
+        key_id,
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+    redeem = redeem_sealed_share(grantee_user_dir, share["share_string"])
+    priv, _pub = derive_signing_keypair(get_master_key(owner_user_dir))
+    _write_expiry_sidecar(
+        owner_user_dir / project, key_id, datetime.now(timezone.utc) - timedelta(seconds=1), priv
+    )
+    return share, redeem
+
+
+def _fail_expiry_reads(monkeypatch):
+    """Make reading any ``*.expiry`` sidecar raise OSError (cloud placeholder / sync in flight)."""
+    real = Path.read_text
+
+    def _read_text(self, *args, **kwargs):
+        if self.name.endswith(".expiry"):
+            raise OSError("simulated sync placeholder")
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", _read_text)
 
 
 # ---------------------------------------------------------------------------
@@ -221,17 +258,83 @@ class TestGranteeRedeemThenTtl:
         assert len(dek) == 32
 
     def test_get_dek_raises_when_expired(self, kr_backend, owner_user_dir, grantee_user_dir):
-        """Owner mints with past expiry → grantee redeem succeeds (the
-        wrap+sig are valid, just the timestamp has passed) → next
-        get_grantee_dek raises ShareExpiredError."""
+        """Grantee redeems a valid share; once its signed expiry passes, the
+        next get_grantee_dek raises ShareExpiredError."""
+        _populate_and_seal(owner_user_dir)
+        _mint_redeem_then_expire(owner_user_dir, grantee_user_dir, "ssk_e2e_expired")
+        with pytest.raises(ShareExpiredError, match="expired at"):
+            get_grantee_dek("ssk_e2e_expired", user_dir=grantee_user_dir)
+
+
+class TestRedeemExpiryGate:
+    def test_redeem_refuses_already_expired_share(
+        self, kr_backend, owner_user_dir, grantee_user_dir
+    ):
+        from axon.mounts import list_mount_descriptors
+        from axon.security import keyring as _kr
+        from axon.security.share import _share_keyring_service
+
         _populate_and_seal(owner_user_dir)
         past = datetime.now(timezone.utc) - timedelta(seconds=1)
         share = generate_sealed_share(
-            owner_user_dir, "research", "bob", "ssk_e2e_expired", expires_at=past
+            owner_user_dir, "research", "bob", "ssk_e2e_redeem_exp", expires_at=past
+        )
+        with pytest.raises(ShareExpiredError, match="expired at"):
+            redeem_sealed_share(grantee_user_dir, share["share_string"])
+        # Nothing was stored on the grantee side.
+        assert _kr.get_secret(_share_keyring_service("ssk_e2e_redeem_exp"), "dek") is None
+        assert list_mount_descriptors(grantee_user_dir) == []
+
+    def test_redeem_accepts_share_with_future_expiry(
+        self, kr_backend, owner_user_dir, grantee_user_dir
+    ):
+        _populate_and_seal(owner_user_dir)
+        future = datetime.now(timezone.utc) + timedelta(hours=1)
+        share = generate_sealed_share(
+            owner_user_dir, "research", "bob", "ssk_e2e_redeem_ok", expires_at=future
+        )
+        assert redeem_sealed_share(grantee_user_dir, share["share_string"])["key_id"] == (
+            "ssk_e2e_redeem_ok"
+        )
+
+    def test_redeem_unreadable_expiry_is_not_reported_as_expired(
+        self, kr_backend, owner_user_dir, grantee_user_dir, monkeypatch
+    ):
+        _populate_and_seal(owner_user_dir)
+        future = datetime.now(timezone.utc) + timedelta(hours=1)
+        share = generate_sealed_share(
+            owner_user_dir, "research", "bob", "ssk_e2e_redeem_io", expires_at=future
+        )
+        _fail_expiry_reads(monkeypatch)
+        with pytest.raises(SecurityError, match="Cannot read the expiry file") as ei:
+            redeem_sealed_share(grantee_user_dir, share["share_string"])
+        assert not isinstance(ei.value, ShareExpiredError)
+
+
+class TestUnreadableExpiryDoesNotDestroy:
+    def test_get_dek_unreadable_sidecar_keeps_dek_and_descriptor(
+        self, kr_backend, owner_user_dir, grantee_user_dir, monkeypatch
+    ):
+        from axon.mounts import list_mount_descriptors
+        from axon.security import keyring as _kr
+        from axon.security.share import _share_keyring_service
+
+        _populate_and_seal(owner_user_dir)
+        future = datetime.now(timezone.utc) + timedelta(hours=1)
+        share = generate_sealed_share(
+            owner_user_dir, "research", "bob", "ssk_e2e_io", expires_at=future
         )
         redeem_sealed_share(grantee_user_dir, share["share_string"])
-        with pytest.raises(ShareExpiredError, match="expired at"):
-            get_grantee_dek("ssk_e2e_expired", user_dir=grantee_user_dir)
+        _fail_expiry_reads(monkeypatch)
+        with pytest.raises(SecurityError, match="Cannot read the expiry file") as ei:
+            get_grantee_dek("ssk_e2e_io", user_dir=grantee_user_dir)
+        # A transient read failure is not "expired": callers only auto-destroy
+        # on ShareExpiredError, so the key and mount must survive.
+        assert not isinstance(ei.value, ShareExpiredError)
+        assert _kr.get_secret(_share_keyring_service("ssk_e2e_io"), "dek") is not None
+        assert len(list_mount_descriptors(grantee_user_dir)) == 1
+        monkeypatch.undo()
+        assert len(get_grantee_dek("ssk_e2e_io", user_dir=grantee_user_dir)) == 32
 
 
 # ---------------------------------------------------------------------------
@@ -247,11 +350,7 @@ class TestAutoDestroy:
         from axon.mounts import list_mount_descriptors
 
         proj = _populate_and_seal(owner_user_dir)
-        past = datetime.now(timezone.utc) - timedelta(seconds=1)
-        share = generate_sealed_share(
-            owner_user_dir, "research", "bob", "ssk_e2e_auto", expires_at=past
-        )
-        redeem = redeem_sealed_share(grantee_user_dir, share["share_string"])
+        share, redeem = _mint_redeem_then_expire(owner_user_dir, grantee_user_dir, "ssk_e2e_auto")
         mount_name = redeem["mount_name"]
 
         # Sanity: descriptor + DEK both present pre-destroy
@@ -287,11 +386,7 @@ class TestAutoDestroy:
         from axon.main import AxonBrain
 
         _populate_and_seal(owner_user_dir)
-        past = datetime.now(timezone.utc) - timedelta(seconds=1)
-        share = generate_sealed_share(
-            owner_user_dir, "research", "bob", "ssk_e2e_idem", expires_at=past
-        )
-        redeem = redeem_sealed_share(grantee_user_dir, share["share_string"])
+        share, redeem = _mint_redeem_then_expire(owner_user_dir, grantee_user_dir, "ssk_e2e_idem")
 
         brain = MagicMock()
         brain.config = MagicMock()
@@ -312,11 +407,7 @@ class TestAutoDestroy:
         from axon.mounts import list_mount_descriptors
 
         _populate_and_seal(owner_user_dir)
-        past = datetime.now(timezone.utc) - timedelta(seconds=1)
-        share = generate_sealed_share(
-            owner_user_dir, "research", "bob", "ssk_e2e_prefix", expires_at=past
-        )
-        redeem = redeem_sealed_share(grantee_user_dir, share["share_string"])
+        share, redeem = _mint_redeem_then_expire(owner_user_dir, grantee_user_dir, "ssk_e2e_prefix")
         mount_name = redeem["mount_name"]
 
         brain = MagicMock()
@@ -594,11 +685,7 @@ class TestSwitchProjectExpiredSealed:
         from axon.security.share import _share_keyring_service
 
         proj = _populate_and_seal(owner_user_dir)
-        past = datetime.now(timezone.utc) - timedelta(seconds=1)
-        share = generate_sealed_share(
-            owner_user_dir, "research", "bob", "ssk_e2e_switch", expires_at=past
-        )
-        redeem = redeem_sealed_share(grantee_user_dir, share["share_string"])
+        share, redeem = _mint_redeem_then_expire(owner_user_dir, grantee_user_dir, "ssk_e2e_switch")
 
         brain = MagicMock()
         brain.config = MagicMock()

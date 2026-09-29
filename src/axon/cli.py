@@ -59,6 +59,34 @@ def _print_knowledge_base_listing(rows: list) -> None:
         print(f"  {r['source']:<60} {r['chunks']:>6}")
 
 
+def _ensure_store_unlocked(user_dir: Path) -> None:
+    """Prompt for the sealed-store passphrase when a one-shot command needs the master key.
+
+    The unlocked master key lives only in the running process, so a separate
+    ``axon --store-unlock`` cannot carry over to ``--project-seal`` and friends.
+    Without a terminal, or when the store is not initialised, this does nothing and
+    the underlying "locked" error is reported as before.
+    """
+    from axon import security as _security
+
+    try:
+        st = _security.store_status(user_dir)
+    except Exception:
+        return
+    if not st.get("initialized") or st.get("unlocked"):
+        return
+    if not sys.stdin.isatty():
+        return
+    import getpass as _gp
+
+    passphrase = _gp.getpass("  Sealed-store passphrase: ")
+    try:
+        _security.unlock_store(user_dir, passphrase)
+    except _security.SecurityError as exc:
+        print(f"  Unlock failed: {exc}")
+        sys.exit(1)
+
+
 def _print_shares_listing(
     sharing: list, shared: list, sealed_sharing: list, *, indent: str = "  "
 ) -> None:
@@ -1907,6 +1935,7 @@ def main():
             # --project-new / --project-delete; project names are
             # required to be lowercase per axon.projects._parse_name.
             project_name = args.project_seal.lower()
+            _ensure_store_unlocked(Path(config.projects_root))
             try:
                 result = _security.project_seal(project_name, Path(config.projects_root))
                 status = result.get("status", "sealed")
@@ -2019,6 +2048,7 @@ def main():
 
                     from axon import security as _security
 
+                    _ensure_store_unlocked(user_dir)
                     _key_id = f"ssk_{_secrets.token_hex(8)}"
                     _expires_at = (_dt.now(_tz.utc) + _td(days=_ttl)) if _ttl else None
                     result = _security.generate_sealed_share(
@@ -2104,6 +2134,7 @@ def main():
                     )
                     sys.exit(2)
                 rotate = bool(getattr(args, "share_rotate", False))
+                _ensure_store_unlocked(user_dir)
                 try:
                     result = _security.revoke_sealed_share(
                         owner_user_dir=user_dir,
@@ -2643,6 +2674,7 @@ def main():
 
                 from axon import security as _security
 
+                _ensure_store_unlocked(user_dir)
                 _key_id = f"ssk_{_secrets.token_hex(8)}"
                 _expires_at2 = (_dt.now(_tz.utc) + _td(days=_ttl2)) if _ttl2 else None
                 result = _security.generate_sealed_share(
@@ -2726,6 +2758,7 @@ def main():
                 )
                 sys.exit(2)
             rotate = bool(getattr(args, "share_rotate", False))
+            _ensure_store_unlocked(user_dir)
             try:
                 result = _security.revoke_sealed_share(
                     owner_user_dir=user_dir,

@@ -63,27 +63,11 @@ they aren't lost; fixing them is a separate decision from this doc.
 
 *Share validity (0.5.0 PR6 follow-ups):*
 
-- **`_list_sub_projects` follows symlinks**, so a symlink loop under `subs/`
-  could recurse without bound.
-- **`redeem_sealed_share` accepts a share whose expiry has already passed.**
-  It fails on first use instead of at redeem.
 - **Plaintext expiry allows 5 minutes of clock skew; sealed expiry is strict.**
   Intentional for now, but the two kinds disagree near the boundary.
-- **`get_grantee_dek` can auto-destroy on a transient read error.**
-  `share._check_expiry_or_raise` maps an `OSError` reading the `.expiry` sidecar
-  to `ShareExpiredError`, and callers auto-destroy on that. `share_status`
-  treats the same `OSError` as `unverifiable` — but a read that fails only on
-  the later `get_grantee_dek` call (cloud placeholder, sync in flight) still
-  wipes the grantee's key.
 
 *Found while consolidating the docs (0.5.0 PR7a):*
 
-- **The CLI's sealed-store flags can't complete a sealed workflow.** The master
-  key is cached per process (`master._unlocked_masters`) and each `--store-*`
-  flag exits, so `--project-seal`, `--share-generate` on a sealed project and
-  `--share-rotate` always fail with "Store … is locked". The guides use the REPL
-  or an unlocked `axon-api`; `scripts/qa/SEALED_SHARE_SMOKE.md` step 1 still
-  uses the CLI flow.
 - **`--non-interactive` does not stop the REPL.** It only feeds
   `_entering_repl`; `axon --ingest DIR --non-interactive` still opens the REPL
   afterwards.
@@ -1171,8 +1155,8 @@ Role: The largest module — sealed-share generation/redemption/revocation betwe
 
 - `is_sealed_share_envelope(decoded)` — True if a base64-decoded string starts with `SEALED1:` or `SEALED2:` — centralizes prefix routing so callers don't hardcode either — `share.py:106`
 - `generate_sealed_share(owner_user_dir, project, grantee, key_id, *, expires_at=None)` — mints a per-share token+KEK, wraps a copy of the project DEK, persists the KEK under the owner's master (enables selective re-wrap later), builds a SEALED2 `share_string` embedding the owner's Ed25519 pubkey, optionally writes a signed expiry sidecar — `share.py:563`
-- `redeem_sealed_share(grantee_user_dir, share_string)` — parses SEALED1/SEALED2 envelopes, unwraps the DEK via the share token, persists it to the grantee's keyring (or file fallback per `keyring_mode`), writes a `mount_type="sealed"` mount descriptor — `share.py:727`
-- `get_grantee_dek(key_id, user_dir=None)` — fetches the grantee's cached DEK; runs the TTL expiry check first (`ShareExpiredError` if elapsed/tampered/unverifiable), resolves via keyring then file fallback — the read path used at `switch_project` time — `share.py:1032`
+- `redeem_sealed_share(grantee_user_dir, share_string)` — parses SEALED1/SEALED2 envelopes, unwraps the DEK via the share token, refuses a share whose expiry has already passed (`ShareExpiredError`, via `_check_expiry_or_raise_transient_safe`, before any key is derived), persists the DEK to the grantee's keyring (or file fallback per `keyring_mode`), writes a `mount_type="sealed"` mount descriptor — `share.py:727`
+- `get_grantee_dek(key_id, user_dir=None)` — fetches the grantee's cached DEK; runs the TTL expiry check first (`ShareExpiredError` if elapsed/tampered/unverifiable; an unreadable `.expiry` file — sync in flight — raises a plain `SecurityError` via `_check_expiry_or_raise_transient_safe` so callers do not auto-destroy the key), resolves via keyring then file fallback — the read path used at `switch_project` time — `share.py:1032`
 - `delete_grantee_dek(key_id, user_dir=None)` — removes both the keyring entry and file-fallback copy of a grantee DEK; idempotent, returns whether anything was deleted — `share.py:1752`
 - `revoke_sealed_share(owner_user_dir, project, key_id, *, rotate=False)` — dispatches to soft or hard revoke — `share.py:1164`
   - Soft (`_soft_revoke`, internal but conceptually reusable): deletes the wrap/KEK/expiry sidecar for one key_id; cached grantee DEKs still work until a hard rotate — `share.py:1228`

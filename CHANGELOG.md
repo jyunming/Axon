@@ -2,7 +2,20 @@
 
 ## [Unreleased]
 
-_Nothing yet._
+### Fixed
+
+- **One-shot sealed CLI commands work.** `axon --project-seal`, `--share-generate`
+  on a sealed project and a sealed `--share-revoke` now prompt for the store
+  passphrase on the terminal instead of failing with "Store … is locked" (the
+  master key lives only in the process that unlocked it). Without a terminal they
+  still fail with the locked error.
+- **A symlink loop under a project's `subs/` no longer recurses without bound.**
+  Project listing skips symlinked sub-projects and stops at the nesting limit.
+- **`redeem_sealed_share` refuses a share that has already expired**, instead of
+  mounting it and failing on first use.
+- **A transient error reading a share's expiry file no longer destroys the
+  grantee's key.** It now raises a retryable error; only a genuinely expired or
+  tampered share is auto-destroyed.
 
 ## [0.5.0] - 2026-09-29
 

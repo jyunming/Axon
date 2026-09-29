@@ -130,9 +130,10 @@ wrapped under your passphrase with scrypt. The wrapped master is kept in the OS 
 ### Owner
 
 Sealing and sealed share generation need the master key **unlocked in the same process**.
-`axon --store-unlock` unlocks only the process it runs in, so do the sealed steps in one REPL
-session (with no `axon-api` running), or against a running `axon-api` that you unlock
-over REST.
+`axon --project-seal`, `axon --share-generate` (sealed project) and a sealed `axon --share-revoke`
+prompt for the store passphrase on the terminal. `axon --store-unlock` unlocks only the
+process it runs in, so it does not help a later command. Without a terminal, seal in a REPL
+session (with no `axon-api` running), or against a running `axon-api` that you unlock over REST.
 
 ```bash
 axon --store-init "/path/to/OneDrive/axon"
@@ -266,7 +267,7 @@ rotate.
 
 | Error | Cause | Fix |
 |---|---|---|
-| `Store … is locked. Call unlock_store first.` / `SecurityError: Store is locked` | The master key isn't unlocked in this process | Unlock and seal/share in the same REPL session, or `POST /security/unlock` on the server |
+| `Store … is locked. Call unlock_store first.` / `SecurityError: Store is locked` | The master key isn't unlocked in this process (no terminal to prompt on) | Run the command from a terminal so it can ask for the passphrase, unlock in a REPL session, or `POST /security/unlock` on the server |
 | `SecurityError: Project DEK file missing` | Not sealed yet, or not synced yet | Owner: `/project seal <name>`; grantee: wait for sync |
 | `CacheCapacityError: Not enough disk space` | The temp directory needs about 1.1× the project size | Free space, or point `TMPDIR` / `TEMP` at a larger volume |
 | `InvalidTag` / wrapped key won't unwrap | A hard revoke happened; the grantee's key is stale | Owner issues a new share; grantee redeems it |

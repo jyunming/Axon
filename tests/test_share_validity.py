@@ -141,8 +141,20 @@ def _sealed_share(tmp_path: Path, key_id: str = "ssk_pr6", expires_at=None) -> d
 
     owner, grantee = _store(tmp_path)
     proj = _seal(owner)
-    gen = generate_sealed_share(owner, "research", "bob", key_id, expires_at=expires_at)
+    # redeem refuses an already-expired share, so mint with a valid expiry and
+    # move the signed sidecar into the past afterwards.
+    minted_at = expires_at
+    if expires_at is not None and expires_at <= datetime.now(timezone.utc):
+        minted_at = datetime.now(timezone.utc) + timedelta(hours=1)
+    gen = generate_sealed_share(owner, "research", "bob", key_id, expires_at=minted_at)
     red = redeem_sealed_share(grantee, gen["share_string"])
+    if minted_at is not expires_at:
+        from axon.security.master import get_master_key
+        from axon.security.share import _write_expiry_sidecar
+        from axon.security.signing import derive_signing_keypair
+
+        priv, _pub = derive_signing_keypair(get_master_key(owner))
+        _write_expiry_sidecar(proj, key_id, expires_at, priv)
     return {
         "owner": owner,
         "grantee": grantee,
