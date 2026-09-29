@@ -70,12 +70,6 @@ The first run after install also downloads the embedding model (about 90 MB). If
 is still slow, antivirus scanning the virtual environment on first touch is the usual
 cause — exclude its `site-packages` from real-time scanning.
 
-### `--non-interactive` still opens the REPL
-
-In this release `--non-interactive` only skips the first-run wizard and the start-up
-animation; `axon --ingest DIR` still opens the REPL afterwards. In scripts, pass a
-question, use a one-shot flag such as `--list`, or redirect stdin (`< /dev/null`).
-
 ---
 
 ## LLM providers
