@@ -1953,6 +1953,14 @@ class TestCliConfigReset:
 # ---------------------------------------------------------------------------
 
 
+def _patch_url_loader():
+    # patch.object on the sys.modules entry: on Python 3.10, patch("axon.loaders.X")
+    # resolves via the package attribute, which can be stale after other tests reload it.
+    import importlib
+
+    return patch.object(importlib.import_module("axon.loaders"), "URLLoader")
+
+
 class TestIngestUrlAndText:
     @pytest.mark.parametrize(
         "value,expected",
@@ -1974,7 +1982,7 @@ class TestIngestUrlAndText:
     def test_ingest_url_locally_uses_url_loader(self, brain, capsys):
         doc = {"id": "u", "text": "page", "metadata": {"source": "https://x.test"}}
         brain.ingest.return_value = 3
-        with patch("axon.loaders.URLLoader") as loader:
+        with _patch_url_loader() as loader:
             loader.return_value.load.return_value = [doc]
             code = run_cli("--ingest", "https://x.test", "--local")
         assert code == 0

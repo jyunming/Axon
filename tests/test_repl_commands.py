@@ -1955,7 +1955,7 @@ class TestReplIngestCommand:
     def test_ingest_url(self):
         brain = _make_mock_brain()
         brain.ingest = MagicMock()
-        with patch("axon.loaders.URLLoader") as MockLoader:
+        with _patch_url_loader() as MockLoader:
             instance = MockLoader.return_value
             instance.load.return_value = [{"text": "page content", "metadata": {}}]
             output = _run_repl_with_commands(["/ingest https://example.com/page"], brain=brain)
@@ -2287,12 +2287,20 @@ class TestReplConfigReset:
         assert not list(target.parent.glob(target.name + "*.tmp"))
 
 
+def _patch_url_loader():
+    # patch.object on the sys.modules entry: on Python 3.10, patch("axon.loaders.X")
+    # resolves via the package attribute, which can be stale after other tests reload it.
+    import importlib
+
+    return patch.object(importlib.import_module("axon.loaders"), "URLLoader")
+
+
 class TestReplIngestUrlAndText:
     def test_ingest_url_ingests_the_fetched_page(self):
         brain = _make_mock_brain()
         brain.ingest.return_value = 2
         doc = {"id": "u", "text": "page content", "metadata": {}}
-        with patch("axon.loaders.URLLoader") as loader:
+        with _patch_url_loader() as loader:
             loader.return_value.load.return_value = [doc]
             _run_repl_with_commands(["/ingest https://example.com/page"], brain=brain)
         loader.return_value.load.assert_called_once_with("https://example.com/page")
@@ -2301,9 +2309,10 @@ class TestReplIngestUrlAndText:
     def test_ingest_url_is_never_globbed_as_a_path(self):
         brain = _make_mock_brain()
         brain.ingest.return_value = 1
-        with patch("axon.loaders.URLLoader") as loader:
+        with _patch_url_loader() as loader:
             loader.return_value.load.return_value = [{"id": "u", "text": "x", "metadata": {}}]
             output = _run_repl_with_commands(["/ingest https://example.com/a"], brain=brain)
+        loader.return_value.load.assert_called_once_with("https://example.com/a")
         assert "No files matched" not in output
 
     def test_ingest_text_saves_a_document(self):
@@ -2358,7 +2367,7 @@ class TestReplIngestUrlAndTextRemoteBrain:
     def test_ingest_url_works_on_remote_brain(self):
         brain = self._remote_brain()
         doc = {"id": "u", "text": "page", "metadata": {}}
-        with patch("axon.loaders.URLLoader") as loader:
+        with _patch_url_loader() as loader:
             loader.return_value.load.return_value = [doc]
             output = _run_repl_with_commands(["/ingest https://example.com/p"], brain=brain)
         brain.ingest.assert_called_once_with([doc])
