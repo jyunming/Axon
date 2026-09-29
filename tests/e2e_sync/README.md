@@ -30,7 +30,7 @@ sync semantics.
 | Microsoft Graph throttling at scale         |                         |                        |     **✅**    |
 
 The bottom three rows are fundamentally Windows-kernel / Microsoft-
-specific and stay covered by `docs/SHARE_MOUNT_SEALED_SMOKE.md` (run
+specific and stay covered by `scripts/qa/SEALED_SHARE_SMOKE.md` (run
 quarterly + before each release).
 
 ## Prerequisites
@@ -107,4 +107,4 @@ COULD use the dev's already-signed-in OneDrive client + Microsoft
 Graph SDK + DPAPI-cached refresh token. Reference: `abraunegg/onedrive`
 runs that pattern in its CI. We chose Nextcloud-in-Docker as the
 default because it covers ~95% of what matters without per-dev setup.
-See `docs/SHARE_MOUNT_SEALED_SMOKE.md` for the full reasoning.
+See `scripts/qa/SEALED_SHARE_SMOKE.md` for the manual counterpart.

@@ -194,7 +194,7 @@ _DEFAULT_CONFIG_YAML = """\
 # Axon Configuration — edit to customise behaviour.
 
 
-# Full option reference: axon --help  or  docs/ADMIN_REFERENCE.md
+# Full option reference: axon --help  or  docs/REFERENCE.md (section 3)
 
 
 embedding:
@@ -273,7 +273,7 @@ query_transformations:
 
 
 repl:
-  shell_passthrough: local_only      # Allow ! shell commands: local_only | any | disabled
+  shell_passthrough: local_only      # Allow ! shell commands: local_only | always | off
 
 
 web_search:
@@ -1949,7 +1949,7 @@ class AxonConfig:
                         suggestion=(
                             "Move Axon state off cloud-sync (OneDrive/Dropbox/Google Drive) "
                             "and network shares; see docs/TROUBLESHOOTING.md "
-                            "(Share mount) for details."
+                            "(Sharing and sync folders) for details."
                         ),
                     )
                 )

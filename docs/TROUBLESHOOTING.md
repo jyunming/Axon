@@ -1,29 +1,289 @@
-# Troubleshooting Guide
+# Troubleshooting
 
-Common issues and fixes for Axon.
+Common problems and their fixes. Sealed-sharing errors have their own table in
+[Sharing](SHARING.md#troubleshooting-sealed-sharing); every setting named here is described
+in the [Reference](REFERENCE.md).
 
-> **First thing to try:** run `axon --doctor`. It checks Python version, Ollama daemon, default model pulled, AxonStore base writable, and recommended extras — each failure carries a one-line "do this next" hint. Most of the issues listed below are caught (and explained) by the doctor before they surface as a cryptic error on your first query.
+> **First, run `axon --doctor`.** It checks the Python version, that the store is
+> writable (both required), and — as advisories — whether Ollama answers, whether the
+> configured model is pulled, a `local` LLM endpoint, the recommended extras and newer
+> releases. Each problem comes with a one-line next step. `axon --config-validate` checks
+> `config.yaml` for unknown keys, bad values and risky combinations.
 
----
-
-## Ollama: Not Running When You Query
-
-**Symptom:** You run `axon` and the prompt appears, but the first query hangs or returns an error like `httpx.ConnectError` or `Connection refused`.
-
-**Cause:** Ollama is not running. Axon starts successfully without Ollama, but fails the moment it tries to call the LLM (on the first query, not at startup).
-
-**Fix:**
-1. Open the Ollama app from your Applications / Start menu, **or** run `ollama serve` in a separate terminal.
-2. Verify it is up: `curl http://localhost:11434` — you should see `Ollama is running`.
-3. Confirm your model is pulled: `ollama list` — the model in your `config.yaml` must appear here.
-
-**Tip:** If you want Ollama to start automatically on login, enable it in your system settings (macOS: System Settings → General → Login Items; Windows: Task Manager → Startup tab).
+**Contents:** [Install and start-up](#install-and-start-up) ·
+[LLM providers](#llm-providers) · [Ingest and retrieval](#ingest-and-retrieval) ·
+[GraphRAG and RAPTOR](#graphrag-and-raptor) · [Vector stores](#vector-stores) ·
+[REST API](#rest-api) · [VS Code and MCP](#vs-code-and-mcp) ·
+[Sharing and sync folders](#sharing-and-sync-folders)
 
 ---
 
-## TurboQuantDB: queries crash the process, or `[Errno 22] Invalid argument` on ingest
+## Install and start-up
 
-**Symptoms:** any of these, on a store that used to work —
+### `pip install axon-rag[...]` fails with "no matches found"
+
+Your shell treats the square brackets as a glob. Quote the requirement:
+`pip install "axon-rag[starter]"`.
+
+### `axon: command not found`
+
+The virtual environment you installed into isn't active. Activate it
+(`source .venv/bin/activate`, or `.venv\Scripts\activate` on Windows), or call the full
+path (`.venv/bin/axon`).
+
+### The setup wizard didn't appear
+
+Plain `axon` runs the wizard only when there is no config file *and* no projects yet. Any
+command that loads the config (`axon --ingest …`, `axon --doctor`, a question) creates
+`~/.config/axon/config.yaml`, after which the wizard runs only on request: `axon --setup`,
+or `/config wizard` in the REPL.
+
+### Encoding errors on Windows
+
+Documents with non-ASCII text can fail to load under a legacy code page. Set
+`PYTHONUTF8=1` before starting Axon (in PowerShell: `$env:PYTHONUTF8 = "1"`, or add it to
+your profile). Windows Terminal renders the REPL best.
+
+### `axon-api` won't start: port in use, or "already serving this store"
+
+`Could not bind 0.0.0.0:8420 — the port is already in use` means another process holds the
+port: `axon-api --port 9000` (or `AXON_PORT=9000`), and point clients at the new port. If
+the message says another `axon-api` is already serving the store, you probably have a
+server running already — use it, or stop it. `AXON_ALLOW_MULTIPLE_SERVERS=1` overrides the
+guard, but two servers writing one store is how index files get damaged
+([below](#turboquantdb-queries-crash-the-process-or-errno-22-invalid-argument-on-ingest)).
+
+### `axon-api` or the VS Code extension is slow to start
+
+Through 0.4.5 the default embedder (`sentence_transformers`) imported PyTorch at every
+start — 15–20 seconds. Since 0.4.6 the default is `fastembed` (ONNX, same vectors for
+`all-MiniLM-L6-v2`, no re-ingest needed) and start-up takes about two seconds. If an older
+config still says `sentence_transformers`, switch it:
+
+```yaml
+embedding:
+  provider: fastembed
+  model: sentence-transformers/all-MiniLM-L6-v2
+```
+
+The first run after install also downloads the embedding model (about 90 MB). If start-up
+is still slow, antivirus scanning the virtual environment on first touch is the usual
+cause — exclude its `site-packages` from real-time scanning.
+
+### `--non-interactive` still opens the REPL
+
+In this release `--non-interactive` only skips the first-run wizard and the start-up
+animation; `axon --ingest DIR` still opens the REPL afterwards. In scripts, pass a
+question, use a one-shot flag such as `--list`, or redirect stdin (`< /dev/null`).
+
+---
+
+## LLM providers
+
+### Ollama isn't running when you ask
+
+**Symptom:** the REPL opens, but the first question hangs or fails with
+`httpx.ConnectError` / `Connection refused`. Axon starts without Ollama and only needs it
+when it calls the model.
+
+**Fix:** open the Ollama app or run `ollama serve`; check with
+`curl http://localhost:11434` (`Ollama is running`) and `ollama list`. On another host or
+port, set `OLLAMA_HOST` or `llm.base_url`.
+
+### The model isn't pulled
+
+With `provider: ollama`, asking a question or opening the REPL pulls a missing model
+automatically when Ollama is reachable (`Model '…' not found locally — pulling from
+Ollama...`; `llama3.1:8b` is about 4.7 GB). To do it yourself: `ollama pull llama3.1:8b`,
+`axon --pull llama3.1:8b` or `/pull` in the REPL.
+
+### Answers are empty, or the model forgets the conversation
+
+- **Reasoning models** (Gemma 4, GPT-OSS, DeepSeek-R1 derivatives) spend tokens on hidden
+  reasoning before answering. `llm.max_tokens` defaults to 8192; raise it before
+  suspecting retrieval.
+- **Ollama context:** Axon asks Ollama for an 8192-token context window on every call, so
+  history is not silently truncated at Ollama's 2048 default. Very long sessions can still
+  overflow — `/compact` summarises the history.
+- **Small models** (1–3B) often ignore instructions, which degrades multi-query,
+  citations, GraphRAG extraction and RAPTOR summaries. Use a 7B+ instruction-tuned model,
+  or turn those features off (`/rag multi`, `/rag cite`).
+
+### The wrong provider is used
+
+A bare `--model` or `/model` name picks the provider: `gemini-*` → Gemini,
+`gpt-*` / `o1-*` / `o3-*` / `o4-*` → OpenAI, anything else → Ollama — even when you also
+passed `--provider`. HuggingFace-style names such as `meta-llama/Llama-3.1-8B-Instruct`
+therefore go to Ollama. Prefix the provider (`--model vllm/meta-llama/Llama-3.1-8B-Instruct`)
+or set it in `config.yaml`:
+
+```yaml
+llm:
+  provider: vllm
+  model: meta-llama/Llama-3.1-8B-Instruct
+  vllm_base_url: http://localhost:8000/v1
+```
+
+For `grok` and `copilot`, set `llm.provider` in `config.yaml` (the prefix form doesn't
+accept them).
+
+### vLLM: `Connection refused` or `404 … model … was not found`
+
+Check the vLLM server itself: `curl http://localhost:8000/v1/models` lists what it serves.
+Copy the exact model id into `llm.model`, make `llm.vllm_base_url` match the server, or
+change it live with `/vllm-url http://host:8000/v1`.
+
+### `local` provider: empty answers, timeouts, "unreachable"
+
+For llama.cpp's `llama-server`, LM Studio, TGI, LocalAI or any other OpenAI-compatible
+server. Axon never starts or loads models for you; check the endpoint with
+`axon --doctor` (the *Local LLM endpoint* line) or `/local-url ping`. *Reachable but no
+models* is a real state — a router-mode `llama-server` answers before a model is resident;
+load one and retry.
+
+- **`APITimeoutError` on `step_back` / `query_decompose`:** these make several sequential
+  calls. `llm.timeout` is 300 s for `local`; raise it or use a faster model. It is a
+  per-read bound — every streamed chunk resets it — so cap `llm.max_tokens` for a hard
+  limit.
+- **Ingest hangs with `graph_rag: true`:** `graph_rag_depth: standard` makes an LLM call
+  per chunk, which can take minutes each on a slow model. Use `graph_rag_depth: light` (no
+  LLM calls) and keep `graph_rag_community: false`. `axon --config-validate` warns about
+  this combination.
+- **Port clash:** `local_base_url` defaults to `:8080`, `axon-api` to `:8420`. Move
+  whichever side conflicts (`axon-api --port`, `/local-url`).
+
+### Gemini: `API key not valid` or `RESOURCE_EXHAUSTED`
+
+A `403 API key not valid` means a wrong or expired key, or the Generative Language API
+isn't enabled for the key's Google Cloud project — set `GEMINI_API_KEY` or
+`llm.gemini_api_key`. `429 … Quota exceeded` is the rate limit; wait, upgrade the plan, or
+switch model for a while (`/model llama3.1:8b`). Gemma models don't accept a system
+instruction; Axon folds the system prompt into the first user message automatically.
+
+### Cloud keys aren't picked up
+
+Keys come from `config.yaml`, the environment, a `.env` file in the working directory, or
+`~/.axon/.env` (where the REPL's `/keys set <provider>` saves them). `/keys` shows which
+are set. `api.key` in `config.yaml` is only a legacy alias for the OpenAI key.
+
+---
+
+## Ingest and retrieval
+
+### `axon --dry-run` prints 0 chunks
+
+In this release the `--dry-run` CLI flag also replaces query embeddings with zero vectors,
+so every dense score is 0 and the default `similarity_threshold` (0.3) filters everything.
+Add `--threshold 0` to see the ranking (it will be driven by BM25), or check retrieval
+without an LLM through `axon-api`: `POST /search`, or `POST /query` with `"dry_run": true`,
+which embed normally. `axon --list` confirms what was ingested.
+
+### A question finds nothing although the document is there
+
+- Check `axon --list` and that you are in the right project (`/project list`).
+- `similarity_threshold` (0.3) is compared against the dense cosine score; very short or
+  oddly worded questions can fall below it. Try `--threshold 0.2` or `/rag threshold 0.2`.
+- Changed the embedding model since ingesting? Old vectors don't match — re-ingest.
+- The query router applies a profile per question and can turn your transformations off
+  for simple lookups; `rag.query_router: "off"` uses your settings exactly.
+
+### Re-ingesting deleted text does nothing
+
+**Symptom:** you deleted a document and ingested the same text again; the call succeeds
+but the text never shows up, and the log says `Dedup: skipped N already-seen chunk(s)`.
+
+Through 0.4.6, deleting through `POST /delete` (and so `delete_documents`) removed the
+chunks but not their hashes. Current releases clear them. For text deleted on an older
+release, either delete it again after upgrading (if any chunk remains), ingest once with
+`rag.dedup_on_ingest: false` (or `axon --ingest … --no-dedup`), or `axon --clear --yes` and
+re-ingest. Chunks ingested with `contextual_retrieval: true` on 0.4.6 or earlier need the
+dedup-off route even after upgrading.
+
+### `top_k` looks ignored in raw results
+
+With hybrid search or reranking Axon fetches about three times `top_k` candidates to fuse
+and rerank; the LLM still receives `top_k`. Diagnostic and raw views can show the larger
+candidate set.
+
+### `403 … outside the allowed ingest directory`
+
+`POST /ingest` (and `ingest_knowledge(path=...)`) only read under `RAG_INGEST_BASE`, which
+defaults to the directory `axon-api` was started in. Start the server with
+`RAG_INGEST_BASE=/path/to/docs` (VS Code: the `axon.ingestBase` setting), or upload the
+files with `POST /ingest/upload`.
+
+### Web search is on but no web results appear
+
+Web fallback needs a Brave key (`BRAVE_API_KEY`, `web_search.brave_api_key`, or
+`/keys set brave` in the REPL) and `web_search.enabled: true`. Without CRAG-Lite it fires
+only when local retrieval returns nothing; with `rag.crag_lite: true` it also fires on
+low-confidence results. Brave failures fall back quietly — look for `BraveSearch error` in
+the server log. Too many web answers? Lower `crag_lite_confidence_threshold` (e.g. to 0.2)
+or turn CRAG-Lite off. `429` from Brave means the monthly quota is used up.
+
+---
+
+## GraphRAG and RAPTOR
+
+### The first ingest is very slow
+
+RAPTOR and GraphRAG are off in the shipped `config.yaml`; if ingest is slow you turned
+them on (or built `AxonConfig()` in Python, where they default on). RAPTOR makes about one
+LLM call per five chunks; GraphRAG `standard` about one to three per chunk. Options:
+
+```yaml
+rag:
+  graph_rag_depth: light                 # regex extraction, no LLM calls
+  graph_rag_relation_budget: 15          # relation extraction for the 15 densest chunks per batch
+  graph_rag_min_entities_for_relations: 5
+  graph_rag_entity_min_frequency: 3      # prune rare entities before community detection
+  raptor_min_source_size_mb: 2.0         # RAPTOR only for sources above 2 MB
+  raptor_chunk_group_size: 10            # fewer, larger summaries
+```
+
+Or turn both off for the bulk ingest and on again afterwards — dedup skips unchanged
+chunks.
+
+### The entity graph is empty, or GraphRAG adds nothing
+
+- The log says `GraphRAG: entity extraction returned 0 entities` → the model didn't follow
+  the extraction instructions. Use a 7B+ instruction-tuned model, or `graph_rag_depth:
+  light`.
+- `graph_rag_budget: 0` removes the guaranteed graph slots; the default is 3.
+- The question uses different words from the extracted entities.
+- The graph is built at ingest: documents ingested before you turned `graph_rag` on have
+  no entities — re-ingest them (with `--no-dedup`).
+- Check with `axon --graph-status` / `/graph status`, and that the flag is on (`/rag`).
+
+### Community summaries hang on the first global question
+
+With `graph_rag_community_lazy: true` summaries are written on the first `global` / `hybrid`
+query — one LLM call per community, which can be hundreds. Cap them with
+`graph_rag_global_top_communities: 10`, reduce `graph_rag_community_levels`, set
+`graph_rag_community_lazy: false` to build them during ingest, or run
+`axon --graph-finalize` (`/graph finalize`, `POST /graph/finalize`) after a batch ingest.
+
+### `pip install "axon-rag[graphrag]"` and graspologic
+
+The `graphrag` extra installs `networkx`, `leidenalg` and `igraph`, which have wheels for
+Python 3.13. It does not install `graspologic`, whose 0.3.x releases need `gensim` 3.8 and
+fail to build on Python 3.13 / NumPy 2 (`'dict' object has no attribute
+'__NUMPY_SETUP__'`). Use `graph_rag_community_backend: louvain` (default) or `leidenalg`;
+`auto` tries graspologic first and can hang on Python 3.13.
+
+### `No module named 'gliner'` / `'transformers'`
+
+`graph_rag_ner_backend: gliner` needs `pip install "axon-rag[gliner]"`;
+`graph_rag_relation_backend: rebel` needs `pip install "axon-rag[rebel]"`. Or set both back
+to `llm`.
+
+---
+
+## Vector stores
+
+### TurboQuantDB: queries crash the process, or `[Errno 22] Invalid argument` on ingest
+
+**Symptoms**, on a store that used to work:
 
 ```
 pyo3_runtime.PanicException: ...            # kills the process outright
@@ -32,721 +292,166 @@ OSError: [WinError 1224] The requested operation cannot be performed
                          on a file with a user-mapped section open
 ```
 
-**Cause:** a bug in TurboQuantDB before **0.8.5** ([tqdb#102](https://github.com/jyunming/TurboQuantDB/issues/102)). `close()` did not release the memory mapping, so the next resize of the codes file failed — on Windows a mapped file accepts in-place writes but refuses to grow or truncate. That left `live_codes.bin` truncated, and later reads panicked from Rust. The panic surfaces as PyO3's `PanicException`, which inherits `BaseException` rather than `Exception`, so ordinary `except Exception:` handlers do not catch it and the process dies instead of degrading.
-
-It is much likelier to bite when **two processes share one store** — for example an `axon-api` left running on the old default port 8000 alongside a newer one on 8420. Two live mappings of one file is exactly the condition the leak needs.
+**Cause:** a bug in TurboQuantDB before **0.8.5**
+([tqdb#102](https://github.com/jyunming/TurboQuantDB/issues/102)): `close()` didn't release
+the memory map, so a later resize of the codes file failed (Windows refuses to grow or
+truncate a mapped file), leaving `live_codes.bin` truncated and later reads panicking in
+Rust. PyO3's `PanicException` isn't an `Exception`, so the process dies instead of
+degrading. Two processes on one store — say an old `axon-api` on port 8000 next to a new
+one on 8420 — make it far likelier.
 
 **Fix:**
 
 ```bash
 pip install -U "tqdb>=0.9.1"
-```
-
-Axon 0.5.0 requires that floor, so a fresh install cannot land on an affected version. If you upgraded Axon in place, check what you actually have:
-
-```bash
 python -c "import tqdb; print(tqdb.__version__)"
 ```
 
-**Every machine sharing a store must be on the same tqdb minor.** The 0.8/0.9 `quantizer.bin` change is one-directional: 0.9 reads what 0.8 wrote, but 0.8 **cannot** read what 0.9 wrote, and it fails with the same EOF error as above. That is why the requirement is `>=0.9.1` rather than a range spanning both — with share-mounts, one machine writing what another cannot read is an ordinary setup, not a contrived one.
+Current Axon requires that floor. **Every machine sharing a store must be on the same tqdb
+minor:** 0.9 reads what 0.8 wrote, but 0.8 cannot read what 0.9 wrote (it fails with the
+same end-of-file error).
 
-**If a store cannot be opened**, upgrading alone does not fix it — whether the file is genuinely damaged or simply written in a format this build no longer reads. Rebuild it:
+**If a store still won't open**, upgrading alone doesn't repair it. Rebuild it from the
+chunk text Axon keeps in `bm25_index/` — no source files are re-read, no LLM calls run, the
+graph is untouched, and the old `vector_store_data/` is renamed aside (restored
+automatically if the rebuild fails):
 
 ```bash
-axon --rebuild-vector-store --rebuild-dry-run   # what would be re-embedded
-axon --rebuild-vector-store                      # do it
-axon --project myproj --rebuild-vector-store     # a specific project
+axon --rebuild-vector-store --rebuild-dry-run    # what would be re-embedded
+axon --rebuild-vector-store
+axon --project myproj --rebuild-vector-store     # another project
 ```
 
-This re-embeds the chunk text from `bm25_index/`, which holds it with ids and metadata — so no source files are re-read, no LLM extraction re-runs, and the entity/relation graph is untouched. The old `vector_store_data/` is renamed with a timestamp rather than deleted, and if the rebuild fails part-way it is put back automatically.
+Until then Axon keeps running: retrieval returns nothing and says why, and ingest is
+refused rather than starting a fresh store over unreadable files. The rebuild reports
+chunks that share an id (indexed once; the rest stay keyword-searchable) and `os error
+1224`, which means another process — usually a running `axon-api` — holds the store; stop
+it first.
 
-Until you rebuild, Axon keeps working: it starts normally, retrieval returns nothing and says why, and ingest is refused rather than silently starting a fresh store over files it merely could not read.
+**Prevention:** one server per store.
 
-Two things the rebuild will tell you:
+### Chroma: `InvalidDimensionException`
 
-- **Chunks sharing an id** are indexed once and the rest reported. Ids are the store's primary key, so duplicates cannot all be indexed; the extras stay searchable by keyword. Colliding ids are worth fixing wherever they are generated.
-- **`os error 1224`** ("file with a user-mapped section open") means another process — usually a running `axon-api` — holds the store. That is the single-instance protection, not damage. Stop it first.
-
-**Prevention:** run one server per store. `axon-api` writes a single-instance lock for this reason; the failure mode above is what happens when a second process predates the lock or points at the store by a different path.
-
----
-
-## ChromaDB: `InvalidDimensionException`
-
-**Error:**
 ```
 chromadb.errors.InvalidDimensionException: Embedding dimension 384 does not match collection dimensionality 768
 ```
 
-**Cause:** You switched the embedding model (e.g., from `nomic-embed-text` at 768d to `all-MiniLM-L6-v2` at 384d) but the existing ChromaDB collection was created with the old dimension.
-
-**Fix:**
-
-> ⚠️ **Data loss warning:** The steps below delete all indexed documents. Back up `~/.axon/` (or wherever `AXON_STORE_BASE` points) before proceeding if you want to preserve your data.
-
-```bash
-# Non-Docker install — delete the local data directories
-rm -rf ~/.axon/AxonStore/$(whoami)/default/chroma_data ~/.axon/AxonStore/$(whoami)/default/bm25_index
-# Then restart axon — it will re-create empty indexes
-# Docker install
-docker compose stop
-rm -rf ./chroma_data ./bm25_index
-docker compose up -d
-```
-
-Re-ingest your files after restarting.
-
-**Prevention:** Before switching embedding models, always back up your data directory. After switching, you must re-ingest everything — there is no migration path between different embedding dimensions.
+The embedding model changed after the collection was created. Switch back, or start over
+for that project: back up the store, then `axon --clear --yes` (or create a new project)
+and re-ingest. There is no migration between embedding dimensions. With Docker, stop the
+containers before deleting data directories — deleting under a running Chroma produces
+`Could not connect to tenant default_tenant`; `docker compose down`, remove the data,
+`docker compose up -d`.
 
 ---
 
-## ChromaDB: `Could not connect to tenant default_tenant`
+## REST API
 
-**Error:**
-```
-ValueError: Could not connect to tenant default_tenant. Are you sure it exists?
-```
+### `401 Invalid or missing X-API-Key header`
 
-**Cause:** The ChromaDB data directory was partially deleted while containers were still running, corrupting the SQLite metadata.
+The server has `RAG_API_KEY` set. Send `X-API-Key: <key>`; for MCP set `RAG_API_KEY` in the
+client's env block, for VS Code the `axon.apiKey` setting.
 
-**Fix:** Fully stop Docker, delete, and restart:
-```bash
-docker compose down
-rm -rf ./chroma_data
-docker compose up -d
-```
+### `409` project mismatch
 
----
+A `project` field is an assertion: the server is serving another project. Switch first
+(`POST /project/switch`) or drop the field. The `detail` names the active project.
 
-## Ollama: LLM Forgets Conversation History
+### `429 Too Many Requests`
 
-**Symptom:** The assistant doesn't remember what you discussed earlier in the same session, even though sessions are enabled.
+Per-IP limits per 60 seconds: `/ingest_url` 20, `/ingest/upload` 30, `/share/generate`
+and `/share/redeem` 10, `/security/bootstrap` and `/security/change-passphrase` 10, plus a
+failed-attempt limit on `/security/unlock`. They are fixed. Batch instead: `POST /add_texts`
+for many texts, several files per `/ingest/upload`, or `POST /ingest` for a directory on
+the server.
 
-**Cause:** Ollama defaults to a 2048-token context window (`num_ctx`). When RAG context documents fill this window, conversation history gets silently truncated.
+### `413` / `422` on uploads and long inputs
 
-**Fix:** This is now handled automatically — `num_ctx` is set to 8192 in all Ollama calls. If you still experience issues with very long conversations, you can increase it further in `llm.py` (`OpenLLM` class, search for `num_ctx`).
+`413` — a file above `api.max_upload_bytes` (500 MiB); `422` — more files than
+`api.max_files_per_request` (1000). Both are `api:` settings in `config.yaml`. A `query`
+longer than 8192 characters is also a `422` and is not configurable — ask a shorter
+question and put the long text into the knowledge base.
 
----
+### `504 Query timed out`
 
-## SentenceTransformers: `unexpected keyword argument 'convert_to_list'`
+`/query` gives up after `AXON_QUERY_TIMEOUT` seconds (120), or the request's `timeout`.
+Turn off HyDE / reranking / decomposition for that request, or raise the limit.
 
-**Error:**
-```
-TypeError: SentenceTransformer.encode() got an unexpected keyword argument 'convert_to_list'
-```
+### `503` with `X-Axon-Mount-Sync-Pending: true`
 
-**Cause:** Some versions of `sentence-transformers` don't support the `convert_to_list` parameter.
-
-**Fix:** Already patched — the code now uses `.tolist()` on the numpy array instead.
+The active project is a mounted share whose owner re-ingested and whose files are still
+syncing. Retry after the sync client catches up.
 
 ---
 
-## Brave Search: `truth_grounding` Enabled But No Web Results
+## VS Code and MCP
 
-**Symptom:** Web search toggle is on but no 🌐 sources appear.
+### Copilot doesn't show Axon's tools
 
-**Cause:** Missing or invalid Brave API key.
+Confirm the extension (*Axon Copilot*) is enabled, run *Reload Window*, and open Copilot
+Chat — the tools register on activation. For MCP hosts, check the server is configured
+(`claude mcp list`, `/tools` in Codex) and that `axon-api` is running:
+`curl http://localhost:8420/health`.
 
-**Fix:**
-1. Get a free API key at [https://brave.com/search/api/](https://brave.com/search/api/)
-2. Either set `BRAVE_API_KEY` in your `.env` file, or enter it in the built-in web GUI's Settings panel (`/gui/`) under "🌐 Web Search"
+### Tools fail with `Failed to fetch` / `ECONNREFUSED`
 
----
+`axon-api` isn't running or isn't where the client looks. Check
+`curl http://localhost:8420/health`; set `axon.apiBase` (VS Code) or `RAG_API_BASE` (MCP)
+to the server's URL — `http://localhost:8420`, not `http://0.0.0.0:8420`.
 
-## General: `.env` File
+### `autoStart` doesn't start the server
 
-Create a `.env` file in the project root for API keys:
-```env
-GEMINI_API_KEY=your-gemini-key
-BRAVE_API_KEY=your-brave-key
-OLLAMA_CLOUD_KEY=your-ollama-cloud-key
-OLLAMA_CLOUD_URL=https://your-endpoint
-```
+The extension couldn't find a Python with Axon installed. Run `axon` once from the
+environment you installed into (it writes `~/.axon/.python_path`), or set
+`axon.pythonPath`. Auto-start is for Linux and macOS; on Windows start `axon-api` yourself.
 
-The `.env` file is optional — Docker Compose won't fail if it's missing.
+### A path ingest never finishes
 
----
+`ingest_knowledge(path=...)` and `refresh` are asynchronous: poll `get_job_status` with the
+returned `job_id` until `completed` or `failed`. Large directories take minutes; if it never
+moves, read the `axon-api` log.
 
-## Answer Quality Variability with Advanced RAG Features
+### Image ingest fails with "model does not support images"
 
-**Symptom:** Features like `multi_query`, inline citations, GraphRAG entity extraction, or RAPTOR summarisation produce inconsistent or degraded results.
+`ingest_image` needs a Copilot model with vision (GPT-4o, Claude Sonnet / Opus). Pick one in
+Copilot Chat's model selector, or pass `alt_text` to supply the description yourself.
 
-**Cause:** These features rely on the LLM following structured instructions. Smaller models (e.g., `llama3.2:1b`, `gemma:2b`) may ignore instructions, produce malformed output, or refuse to answer when context is complex. This is not a bug — it reflects the capability limits of the model.
+### An agent can't clear, delete or seal
 
-**Guidance:**
-- Use a capable model (7B+ parameters) for best results with advanced RAG features.
-- If `multi_query` degrades answer quality, disable it: `/rag multi` or set `multi_query: false` in `config.yaml`.
-- If citations are missing or the model refuses, try a larger model or disable citation mode: `/rag cite`.
-- GraphRAG entity extraction requires an LLM that can follow extraction instructions reliably. If the entity graph remains empty after ingestion, check the server logs for a zero-entity warning and consider switching to a larger model.
-
----
-
-## About the GraphRAG Feature
-
-Axon's `graph_rag` option implements a **GraphRAG-style pipeline** with the following capabilities:
-
-- Hierarchical community detection: Leiden algorithm via `graspologic` when available, Louvain fallback otherwise.
-- LLM-generated community reports and summaries per community cluster.
-- Map-reduce global search: community reports are chunked, mapped in parallel by LLM, then reduced into a single ranked answer.
-- Token-budgeted local search over community hierarchy: entity descriptions, relation descriptions, community snippets, and raw text units assembled within a configurable token budget.
-- Entity and relation graphs with strength tracking and support-count accumulation.
-- Optional claim/covariate extraction (`graph_rag_claims: true`).
-- Optional entity and relation description canonicalization (`graph_rag_canonicalize`, `graph_rag_canonicalize_relations`).
-
-What remains approximate compared to the Microsoft GraphRAG reference implementation:
-- The Louvain fallback produces a synthetic hierarchy via multi-resolution clustering (not true Leiden).
-- Candidate ranking is unified (degree + embedding similarity) rather than full DRIFT search.
-- No query-time claim filtering.
-
-Known limits:
-- Extraction quality depends entirely on the configured LLM. A weak or small model will produce a noisy or empty graph.
-- Entity matching uses exact match for single tokens and token-Jaccard for multi-token phrases. Aliases, acronyms, and spelling variants are not resolved without canonicalization enabled.
+By design. Destructive, credential and store-administration operations are human-only
+since 0.5.0; the [Reference](REFERENCE.md#92-what-agents-can-and-cannot-do) lists where a
+person does each one.
 
 ---
 
-## GraphRAG Adds No Extra Results
+## Sharing and sync folders
 
-**Symptom:** GraphRAG is enabled and ingestion succeeded (entities were extracted), but query results never include any entity-linked documents beyond the normal top_k.
+### `/project mounts/…` says "Unknown sub-command"
 
-**Cause:** One of the following:
-- `graph_rag_budget` is set to `0`, which disables the guaranteed expansion slots.
-- Entity extraction worked but entity matching at query time finds no overlap (e.g. the query uses different terminology than the indexed entities).
-- The entity graph is empty — see the section below.
+The REPL needs `switch`: `/project switch mounts/owner_research`. On the CLI it is
+`axon --project mounts/owner_research`.
 
-**Fix:**
-- Confirm `graph_rag_budget > 0` in `config.yaml` (default is `3`):
-  ```yaml
-  rag:
-    graph_rag: true
-    graph_rag_budget: 3
-  ```
-- Check server logs for `GraphRAG: entity extraction returned 0 entities` — if present, see the section below.
-- Try the REPL: `/rag graph-rag` to verify the flag is on at runtime.
+### Sealing or a sealed share fails with "Store … is locked"
 
----
+The master key is unlocked per process, and each `axon --…` command is its own process.
+Unlock and seal / share in one REPL session (`/store unlock <passphrase>`, then
+`/project seal …`, `/share generate …`), or unlock a running `axon-api` with
+`POST /security/unlock`. See [Sharing](SHARING.md#owner-1).
 
-## GraphRAG: Entity Graph Empty After Ingestion
+### A project in OneDrive / Dropbox / Google Drive
 
-**Symptom:** GraphRAG is enabled but retrieval does not expand with entity-connected documents. Logs show: `GraphRAG: entity extraction returned 0 entities across all chunks.`
+Consumer sync clients are not a safe live store for plaintext projects: SQLite forbids its
+WAL mode on filesystems that can't replicate locks and shared memory
+([sqlite.org/useovernet.html](https://sqlite.org/useovernet.html)), and sync clients delay,
+reorder or half-publish binary index updates. Axon's `dynamic_graph` backend avoids WAL and
+grantees read a JSON snapshot instead of the database, but the vector-store files remain
+exposed. Use **sealed** sharing for any cloud-synced folder — only ciphertext is synced and
+the grantee decrypts into a local cache: [setup](SHARING.md#sealed-sharing-onedrive--dropbox--google-drive),
+[filesystem matrix](SHARING.md#filesystem-compatibility-matrix). `axon --config-validate`
+warns when the store sits on a sync or network path.
 
-**Cause:** The LLM failed to extract any entities. Common reasons:
-- Model is too small or not instruction-tuned.
-- The model returned bullets or lists despite the "no bullets" instruction (now stripped automatically), but returned empty output entirely.
-- LLM request timed out during entity extraction.
+### A shared project disappeared, or says revoked / expired / unverifiable
 
-**Fix:** Switch to a larger or more capable model. A 7B+ instruction-tuned model (e.g., `llama3.1:8b`, `mistral:7b`) reliably extracts entities.
-
----
-
-## Provider Auto-Detection for vLLM / HuggingFace-style Model Names
-
-**Symptom:** You set `llm_model: meta-llama/Llama-3.1-8B-Instruct` but the model is served via vLLM, not Ollama.
-
-**Cause:** Axon infers `llm_provider` from the model name when the provider is not explicitly set. HuggingFace-style names (e.g., `org/model-name`) are inferred as `ollama` by default, since Ollama also accepts many such names.
-
-**Fix:** Explicitly set the provider in `config.yaml`:
-```yaml
-llm:
-  provider: vllm
-  model: meta-llama/Llama-3.1-8B-Instruct
-  vllm_base_url: http://localhost:8000/v1
-```
-
----
-
-## VS Code Extension: Tools Not Appearing in Copilot Chat
-
-**Symptom:** After installing the VSIX, no `axon_*` tools appear in Copilot Chat.
-
-**Cause:** Extension not loaded or VS Code not reloaded after install.
-
-**Fix:**
-1. Open Extensions panel (Ctrl+Shift+X) and confirm "Axon Copilot" shows as **enabled**.
-2. Reload VS Code: Ctrl+Shift+P → "Reload Window".
-3. Open Copilot Chat (Ctrl+Shift+I) — tools are registered on activation.
-
----
-
-## VS Code Extension: Requests Fail with Connection Error
-
-**Symptom:** Copilot tools return `Failed to fetch` or `ECONNREFUSED`.
-
-**Fix:**
-1. Confirm `axon-api` is running: `curl http://localhost:8420/health`
-2. Check `axon.apiBase` in VS Code settings matches the server address exactly (default: `http://localhost:8420`).
-3. On Windows, ensure the API is bound to `localhost`, not `0.0.0.0` — both should work from the same machine, but double-check `AXON_HOST` in `.env`.
-
----
-
-## VS Code Extension: `axon_ingestPath` Stuck in "processing"
-
-**Symptom:** After calling `axon_ingestPath`, the status never reaches `completed`.
-
-**Cause:** The ingest job is async. Poll `axon_getIngestStatus(job_id)` until it returns `completed` or `failed`. Large directories (many files) may take minutes.
-
-**Fix:** Ask Copilot to check the status: *"Check if my ingest job `<job_id>` is done"* — or wait and retry. If permanently stuck, check `axon-api` logs for errors.
-
----
-
-## VS Code Extension: `autoStart` Does Not Start the Server
-
-**Symptom:** The extension shows as active but `axon-api` is not running and `autoStart` is `true`.
-
-**Cause:** Python executable not found. The extension discovers Python via (in order):
-1. `axon.pythonPath` setting
-2. `~/.axon/.python_path` (written by the `axon` CLI on first run)
-3. `pipx` installation
-4. Workspace virtual environment
-5. System `python3` / `python`
-
-**Fix:** Run `axon` once from the terminal (the CLI writes its Python path to `~/.axon/.python_path`), or set `axon.pythonPath` explicitly in VS Code settings.
-
----
-
-## VS Code Extension / `axon-api`: Slow to Start (Cold Start)
-
-**Symptom:** The extension's "Axon API server started successfully" notification (or a manually-started `axon-api`) takes ~15-20+ seconds to appear.
-
-**Cause (fixed in 0.4.6):** Through 0.4.5, the default embedding provider (`sentence_transformers`) imports `torch`/`transformers` on every server start — that import alone typically costs 10-17s, plus a few more seconds of HuggingFace Hub "check for updates" network calls even when the model is already cached locally.
-
-**Fix:** 0.4.6 changed the default `embedding.provider` to `fastembed` (ONNX runtime, no torch import) — verified to produce bit-identical vectors to `sentence_transformers`' `all-MiniLM-L6-v2` for the same model, so no re-ingest is needed. Cold start drops to ~2s. If you're still on `sentence_transformers` and want the speed-up, edit `~/.config/axon/config.yaml`:
-```yaml
-embedding:
-  provider: fastembed
-  model: sentence-transformers/all-MiniLM-L6-v2
-```
-`sentence_transformers` remains fully supported — set `embedding.provider: sentence_transformers` if you specifically need a model outside FastEmbed's catalog (see [SETUP.md](SETUP.md#5-embedding-model-setup)).
-
-If startup is still slow after switching to `fastembed`, the remaining cost is almost always Windows Defender (or another AV) scanning the Python interpreter/venv on first touch — excluding the venv's `site-packages` folder from real-time scanning is the next thing to try.
-
----
-
-## `top_k` and Raw Retrieval Count
-
-**Symptom:** The API or internal retrieval returns more chunks than the configured `top_k` value.
-
-**Cause:** When `hybrid_search` or `rerank` is enabled, Axon internally fetches `top_k × 3` candidates to allow for score merging and re-ranking. The final result passed to the LLM is capped at `top_k` after all processing. Internal retrieval methods (used in debugging or qualification scripts) may show the pre-cap candidate set.
-
-**Guidance:** `top_k` controls how many chunks the LLM receives as context. The pre-cap overfetch is intentional and improves hybrid/reranked result quality.
-
----
-
-## API: HTTP 429 Too Many Requests
-
-**Error:**
-```
-Error: HTTP 429 Too Many Requests
-{"detail": "Rate limit exceeded. Retry after 60s."}
-```
-
-**Cause:** Per-IP rate limiting is enforced on `/share/*`, `/ingest/*`, and `/security/*`
-endpoints. The default limit is 10 requests per 60-second window. Bulk operations that
-send many requests in a short period will trigger this limit.
-
-**Fix:**
-- Wait 60 seconds before retrying.
-- For bulk text ingest, use `POST /add_texts` (batched JSON) to send multiple documents in one
-  request. For file uploads, use `POST /ingest/upload` which accepts multiple files per request.
-- To raise the default limits for trusted environments, increase them in `config.yaml`:
-  ```yaml
-  api:
-    rate_limit_requests: 50      # requests per window (default: 10)
-    rate_limit_window_seconds: 60
-  ```
-
----
-
-## API: HTTP 413 Request Entity Too Large
-
-**Error:**
-```
-Error: HTTP 413 Request Entity Too Large
-{"detail": "Upload exceeds maximum size of 500 MiB"}
-```
-
-**Cause:** The uploaded file or batch exceeds `max_upload_bytes` (default 500 MiB). This limit
-was added to harden the ingest API against oversized payloads.
-
-Note: exceeding `max_files_per_request` (default 1000 files) returns HTTP **422**, not 413.
-
-**Fix:**
-- Split large uploads into batches below the 500 MiB threshold.
-- For the file-count limit (HTTP 422), split the batch into smaller requests.
-- To raise limits for trusted environments, adjust them in `config.yaml`:
-  ```yaml
-  api:
-    max_upload_bytes: 1073741824   # 1 GiB
-    max_files_per_request: 5000
-  ```
-
----
-
-## API: HTTP 422 Unprocessable Entity on Long Queries
-
-**Error:**
-```
-Error: HTTP 422 Unprocessable Entity
-{"detail": [{"loc": ["body", "query"], "msg": "ensure this value has at most 4096 characters"}]}
-```
-
-**Cause:** The query text exceeds the `max_length` field validation added to the request
-schema. This prevents excessively long strings from being passed through the pipeline.
-
-**Fix:**
-- Shorten the query to under 4096 characters, or rephrase it as a more focused question.
-- For programmatic use cases that genuinely need longer input, increase the field limit
-  in `config.yaml`:
-  ```yaml
-  api:
-    max_query_length: 8192   # characters (default: 4096)
-  ```
-
----
-
-## Re-ingesting deleted text does nothing
-
-**Symptom:** You deleted a document, then ingested the same text again (under the same or a
-different id). The ingest call succeeds, but the text never shows up in search results. The log
-shows `Dedup: skipped N already-seen chunk(s)`.
-
-**Cause:** Ingest skips any chunk whose text hash it has already seen. In Axon 0.4.6 and earlier, deleting a
-document through `POST /delete` (and so the MCP / VS Code `delete_documents` tools) removed its
-chunks but not their hashes, so the same text stayed marked "already seen" forever.
-
-**Fix:** Upgrade to a release after 0.4.6 (PR #169). Deleting now clears the chunks' dedup hashes, so the text can be ingested again.
-For text deleted *before* upgrading, the stale hashes are still there. Either:
-- delete it again after upgrading (if any of its chunks still exist), or
-- re-ingest once with dedup off (`rag.dedup_on_ingest: false` in `config.yaml`), then turn it back on, or
-- `POST /clear` the project and re-ingest everything (clears all hashes).
-
-Chunks ingested with `contextual_retrieval: true` on 0.4.6 or earlier need the dedup-off route even when
-deleted after upgrading: their stored text was rewritten, so the original hash can't be recovered.
-
----
-
-## `pip install axon[graphrag]` fails with `gensim` build error
-
-**Error:**
-```
-error: metadata-generation-failed
-...AttributeError: 'dict' object has no attribute '__NUMPY_SETUP__'
-gensim
-```
-
-**Cause:** `graspologic` 0.3.x on PyPI depends on `gensim` 3.8.x, which cannot build against NumPy 2.x or Python 3.13. This is a known upstream incompatibility.
-
-**Fix:** The `[graphrag]` extra no longer includes `graspologic`. It uses `leidenalg` + `igraph` instead, which ship pre-built wheels for all platforms and Python 3.13:
-
-```bash
-pip install -e ".[graphrag]"
-# installs: networkx, leidenalg, igraph
-```
-
-The default is now `graph_rag_community_backend: louvain` (safe on all platforms). To upgrade to Leiden resolution-sweeping:
-
-```yaml
-rag:
-  graph_rag_community_backend: louvain    # default — networkx only, no extra deps
-  # graph_rag_community_backend: leidenalg  # recommended when igraph/leidenalg are installed
-  # graph_rag_community_backend: auto       # graspologic → leidenalg → louvain fallback chain
-  #                                          # (unsafe on Python 3.13 — graspologic import hangs)
-```
-
-If you have `graspologic` installed from a Python ≤ 3.12 / NumPy 1.x environment and want Axon to use it, set `graph_rag_community_backend: auto`.
-
----
-
-## `pip install graspologic` fails on Python 3.13 / NumPy 2.x
-
-**Cause:** `graspologic` 0.3.x depends on `gensim` 3.8.x, which fails to build on Python 3.13 or with NumPy 2.x due to an `AttributeError` involving `__NUMPY_SETUP__`. Additionally, `graspologic` requires `networkx < 3.0`, which conflicts with other modern dependencies in the Axon stack.
-
-**Fix (Manual Patching):**
-If you must use `graspologic` on Python 3.13:
-1. Install dependencies manually: `pip install graspologic-native umap-learn gensim>=4.0`.
-2. Install `graspologic` without dependencies: `pip install graspologic==0.3.1 --no-deps`.
-3. Force modern NetworkX: `pip install "networkx>=3.0"`.
-4. Patch the `graspologic` source to support NetworkX 3.x:
-   ```python
-   # Run this snippet to replace deprecated 'OrderedGraph' references
-   import pathlib
-   import site
-   sp = pathlib.Path(site.getsitepackages()[0]) / "graspologic"
-   for p in sp.rglob("*.py"):
-       content = p.read_text(encoding="utf-8")
-       new = content.replace("nx.OrderedGraph", "nx.Graph").replace("nx.OrderedDiGraph", "nx.DiGraph")
-       if new != content:
-           p.write_text(new, encoding="utf-8")
-   ```
-This resolves the `AttributeError: module 'networkx' has no attribute 'OrderedGraph'` error.
-
----
-
-## `pre-commit install` fails with `core.hooksPath` error
-
-**Error:**
-```
-[ERROR] Cowardly refusing to install hooks with `core.hooksPath` set.
-hint: `git config --unset-all core.hooksPath`
-```
-
-**Cause:** Your Git configuration has an explicit `core.hooksPath` set (common in some managed environments or CI setups), which prevents `pre-commit` from installing its own hooks into `.git/hooks`.
-
-**Fix:**
-Unset the global or local hooks path, install, and then re-set if necessary:
-```bash
-git config --unset core.hooksPath
-pre-commit install
-```
-
----
-
-## First ingest is very slow with RAPTOR + GraphRAG enabled
-
-**Symptom:** Ingest of a 10–50 document corpus takes several minutes instead of seconds.
-
-**Cause:** RAPTOR and GraphRAG are disabled in the shipped `config.yaml` but enabled in the code dataclass defaults — if you are hitting this, you have explicitly enabled them. RAPTOR makes ~1 LLM call per 5 chunks
-(summary generation). GraphRAG makes ~1–3 LLM calls per chunk (entity extraction, optionally
-relation extraction). For 100 chunks that is 100–300 LLM calls before any query can be answered.
-
-**Mitigations (choose one or combine):**
-
-1. **Use the light extraction tier** — no LLM calls for entity extraction, ~0 ms per chunk:
-   ```yaml
-   rag:
-     graph_rag_depth: light
-   ```
-
-2. **Budget relation extraction** — the default ships with `graph_rag_relation_budget: 30`, which caps
-   relation extraction to the 30 most entity-dense chunks per batch. Reduce further if needed:
-   ```yaml
-   rag:
-     graph_rag_relation_budget: 15      # strict budget (0 = unlimited)
-     graph_rag_min_entities_for_relations: 5  # also skip sparse chunks
-   ```
-
-3. **Prune singleton entities** — `graph_rag_entity_min_frequency: 2` (default) excludes entities that
-   appear in only one chunk before community detection, reducing graph size and community count:
-   ```yaml
-   rag:
-     graph_rag_entity_min_frequency: 3  # stricter: entities must appear in >= 3 chunks
-   ```
-
-4. **Limit RAPTOR to small sources** — skip RAPTOR for sources smaller than N MB:
-   ```yaml
-   rag:
-     raptor_min_source_size_mb: 2.0
-   ```
-
-5. **Increase RAPTOR group size** — more chunks per summary = fewer summaries = fewer LLM calls:
-   ```yaml
-   rag:
-     raptor_chunk_group_size: 10   # default is 5
-   ```
-
-6. **Disable both for bulk ingest**, then re-enable for daily use (dedup skips unchanged chunks):
-   ```yaml
-   rag:
-     raptor: false
-     graph_rag: false
-   ```
-
----
-
-## `ImportError: No module named 'gliner'`
-
-**Cause:** `graph_rag_ner_backend: gliner` is set in `config.yaml` but the `gliner` package is not installed.
-
-**Fix:**
-```bash
-pip install axon[gliner]
-```
-
-Or revert to the default LLM backend:
-```yaml
-rag:
-  graph_rag_ner_backend: llm   # default — no extra install needed
-```
-
----
-
-## `ImportError: No module named 'transformers'` when using REBEL
-
-**Cause:** `graph_rag_relation_backend: rebel` is set but the `transformers` package is not installed.
-
-**Fix:**
-```bash
-pip install axon[rebel]
-```
-
-Or revert to the default LLM backend:
-```yaml
-rag:
-  graph_rag_relation_backend: llm   # default
-```
-
----
-
-## Community generation hangs / takes very long on first global query
-
-**Cause:** In lazy mode (`graph_rag_community_lazy: true`), community summaries are generated on
-the first global query. If many communities exist and no pre-filter is applied, the LLM is called
-once per community — this can be 50–200+ calls on large corpora.
-
-**Mitigations:**
-
-1. **Limit community summaries at query time** (pre-filters before LLM calls):
-   ```yaml
-   rag:
-     graph_rag_global_top_communities: 10   # default is 0, meaning no cap
-   ```
-
-2. **Reduce community depth** (fewer clusters = fewer summaries):
-   ```yaml
-   rag:
-     graph_rag_community_levels: 1
-   ```
-
-3. **Pre-generate summaries at ingest time** instead of lazily:
-   ```yaml
-   rag:
-     graph_rag_community_lazy: false   # generate immediately after ingest
-   ```
-
-4. **Use the `/finalize` command** (REPL) or `POST /graph/finalize` (API) after batch ingest
-   to trigger community detection and summary generation before the first query.
-
----
-
-## vLLM: `Connection refused` or `404 Not Found`
-
-**Error:**
-```
-httpx.ConnectError: [Errno 111] Connection refused
-```
-or
-```
-openai.NotFoundError: 404 The model `mistral-7b-instruct` was not found
-```
-
-**Cause:** Either vLLM is not running, or the model name in `config.yaml` doesn't match what vLLM is serving.
-
-**Fix:**
-
-1. Confirm your vLLM server is running and healthy:
-   ```bash
-   curl http://localhost:8420/v1/models
-   ```
-   The response lists all served models.
-
-2. Set `vllm_base_url` to match your vLLM server address and copy the exact model name from the `/v1/models` response:
-   ```yaml
-   llm:
-     provider: vllm
-     model: mistral-7b-instruct-v0.2   # must match exactly
-     vllm_base_url: http://localhost:8000/v1
-   ```
-
-3. Change the URL at runtime from the REPL:
-   ```
-   axon> /vllm-url http://your-server:8000/v1
-   ```
-
----
-
-## Local LLM (`provider: local`): empty answers, timeouts, or "unreachable"
-
-Covers any OpenAI-compatible server you run yourself — llama.cpp's
-`llama-server`, LM Studio, text-generation-inference, LocalAI.
-
-**First, check the endpoint.** Axon never starts or loads models for you:
-
-```bash
-axon --doctor          # includes a "Local LLM endpoint" check
-```
-```
-axon> /local-url ping
-```
-
-`reachable but no models` is a real state, not a bug — a router-mode
-`llama-server` answers `/models` before any model is resident. Load one with
-your own tooling, then retry.
-
-**Symptom: answers come back empty, or advanced RAG silently degrades.**
-Reasoning models (Gemma 4, GPT-OSS, DeepSeek-R1 derivatives) emit their chain of
-thought in a non-standard `reasoning_content` field and can spend thousands of
-tokens there before producing any `content`. Axon falls back to that field, and
-`llm.max_tokens` defaults to 8192 so the model is not cut off mid-thought. If
-answers are still empty, raise it further before suspecting retrieval.
-
-**Symptom: `APITimeoutError` on `step_back` or `query_decompose`.**
-Those strategies make several sequential LLM calls. `llm.timeout` resolves to
-300 s for `provider: local` (60 s elsewhere), but a slow model can still exceed
-it. Raise `llm.timeout`, or use a faster model.
-
-Note the timeout is a **soft** bound, not a wall-clock deadline: it is applied
-per read and every chunk received resets it. Measured, `llm.timeout: 30` against
-a slowly generating local model raised after 96 s. To bound total time, cap
-`llm.max_tokens` instead.
-
-**Symptom: ingest hangs for many minutes with `graph_rag: true`.**
-`graph_rag_depth` ships as `standard`, which makes **one LLM call per chunk**. On
-a slow local model a single call can run past ten minutes. Use regex extraction
-instead — same entities, no LLM calls:
-
-```yaml
-rag:
-  graph_rag_depth: light
-```
-
-`axon --doctor` warns about this combination. Keep `graph_rag_community: false`
-(the shipped default) too — community detection adds a map-reduce over community
-reports, which is many more sequential calls.
-
-**Symptom: port conflict.** `local_base_url` defaults to `:8080`; `axon-api`
-itself defaults to `:8420` — non-colliding on purpose. If something else on
-your machine already holds one of these ports, move the conflicting side:
-`axon-api --port <other>` (or `AXON_PORT`) for the API, `/local-url` or
-`llm.local_base_url` for the local LLM server.
-
----
-
-## Gemini: `API key not valid` or `RESOURCE_EXHAUSTED`
-
-**Error:**
-```
-google.api_core.exceptions.PermissionDenied: 403 API key not valid.
-```
-or
-```
-google.api_core.exceptions.ResourceExhausted: 429 Quota exceeded
-```
-
-**Cause 1 — Invalid key:** The key is wrong, expired, or the Gemini API is not enabled for the project.
-
-**Fix:**
-```bash
-export GEMINI_API_KEY=AIza...
-# or in config.yaml:
-# llm:
-#   gemini_api_key: AIza...
-```
-Enable the Generative Language API in Google Cloud Console for the project that owns the key.
-
-**Cause 2 — Quota exhausted:** You hit the free-tier rate limit (typically 15 requests/minute on the free plan).
-
-**Fix:** Wait 60 seconds and retry, or upgrade to a paid Gemini API plan. Alternatively switch to a local model temporarily:
-```
-axon> /model llama3.1:8b
-```
-
-**Cause 3 — Gemma model + system prompt:** Gemma models (e.g. `gemma-3-27b-it`) don't support `system_instruction` in the Gemini SDK. Axon automatically falls back to prepending the system prompt to the first user message — no action needed, but if you see unexpected output check the model name is recognised as a Gemma variant.
-
-## Share mount: putting a project under OneDrive / Dropbox / Google Drive
-
-Axon's share-mount model assumes the owner's project directory sits on a **coherent filesystem** (local disk, or on-prem SMB3 from a Windows-native grantee). Consumer cloud-sync tools do **not** qualify:
-
-- **SQLite WAL corrupts on cloud sync.** SQLite's own maintainers categorically forbid WAL mode on filesystems where advisory locks or shared-memory mappings cannot be replicated coherently (see https://sqlite.org/useovernet.html and https://sqlite.org/wal.html). OneDrive / Dropbox / Google Drive all fit this description.
-- **Axon mitigations in the default install:** the Dynamic Graph backend (`.dynamic_graph.db`) now uses journal mode `DELETE` instead of `WAL`, so there are no `-wal`/`-shm` sidecars for sync clients to re-order. Grantees on a share mount never open the owner's `.dynamic_graph.db`; they read a read-only JSON snapshot (`.dynamic_graph.snapshot.json`) that the owner exports on every ingest.
-- **What's still risky for plaintext sharing:** cloud-sync is not a supported live-storage layer for plaintext vector store binaries. Sync clients can delay, reorder, or partially publish binary index updates, making the index temporarily inconsistent during sync. **Sealed sharing** (AES-256-GCM encrypted) is the correct solution for cloud sync: only the encrypted bytes are on the cloud drive, and the grantee decrypts into a local ephemeral cache at query time. See [SHARING.md](SHARING.md#sealed-sharing-onedrive--dropbox--google-drive) for the setup walkthrough.
-
-For the full supported / unsupported filesystem matrix and the per-backend recommendation table, see [SHARING.md](SHARING.md#filesystem-compatibility-matrix).
+See [How share validity is decided](SHARING.md#how-share-validity-is-decided):
+`unverifiable` means the owner's record can't be read yet (offline, sync incomplete) and
+fixes itself; `revoked` and `expired` need a new share from the owner.

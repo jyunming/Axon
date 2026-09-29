@@ -25,10 +25,10 @@
 
 Most RAG tools make you choose between **cloud power** and **data privacy**. Axon is local-first — full capability with zero egress when you run on Ollama or vLLM; cloud providers (OpenAI, Gemini, Grok, GitHub Copilot, Ollama Cloud) stay optional.
 
-- 🔒 **Private by default** — local inference via Ollama or vLLM is the recommended path; cloud providers (OpenAI, Gemini, Grok, GitHub Copilot, Ollama Cloud) remain opt-in. No telemetry. Strict offline / air-gap mode shuts every outbound call off entirely.
+- 🔒 **Private by default** — local inference via Ollama or vLLM is the recommended path; cloud providers (OpenAI, Gemini, Grok, GitHub Copilot, Ollama Cloud) remain opt-in. No telemetry. An offline mode blocks model downloads and web search for air-gapped machines.
 - 📄 **Ingest anything** — 54 file formats (PDF, DOCX, Jupyter, code, images, URLs) in one command. SHA-256 dedup skips unchanged files.
 - 🤖 **Works in your tools** — `@axon` in Copilot Chat, MCP for Claude Code / Codex / Gemini CLI / Cursor, Graph panel in VS Code or your browser.
-- 🤝 **Built for teams** — share your knowledge base with signed, revocable read-only keys. Sealed (AES-256-GCM encrypted) sharing works safely through OneDrive, Dropbox, and Google Drive. Per-user permissions, full audit trail, no extra infrastructure. [Quick setup →](#sealed-sharing-quick-start)
+- 🤝 **Built for teams** — share your knowledge base with signed, revocable read-only keys. Sealed (AES-256-GCM encrypted) sharing works safely through OneDrive, Dropbox, and Google Drive. Read-only mounts, expiring keys, no extra infrastructure. [Quick setup →](#-sealed-sharing-quick-start)
 - 🕸️ **See your knowledge as a graph** — interactive 3D entity-relationship graph. Embedded webview in VS Code; opens in your browser everywhere else. Click any node to inspect its supporting chunks and source excerpt.
 - 🔬 **Production-grade retrieval** — hybrid search, reranking, HyDE, multi-query expansion, and automatic web fallback. Zero manual tuning.
 
@@ -91,7 +91,7 @@ Most RAG tools make you choose between **cloud power** and **data privacy**. Axo
 ### 🏗️ Projects & Privacy
 - Isolated knowledge base per project, with nesting
 - Federated search across projects (`@projects`, `@mounts`, `@store`)
-- **Strict offline / air-gapped mode** — zero outbound calls
+- **Offline / air-gapped mode** — local models only, no downloads
 - **AxonStore** — signed read-only sharing across OS users
 
 </td>
@@ -105,7 +105,7 @@ Files are ciphertext on disk — cloud providers see only encrypted bytes.
 - Dropbox
 - Google Drive (Mirror mode)
 
-→ [Sharing Guide](docs/SHARING.md) | [Quick Setup →](#sealed-sharing-quick-start)
+→ [Sharing Guide](https://github.com/jyunming/Axon/blob/main/docs/SHARING.md) | [Quick Setup →](#-sealed-sharing-quick-start)
 
 </td>
 </tr>
@@ -114,7 +114,7 @@ Files are ciphertext on disk — cloud providers see only encrypted bytes.
 
 ### 🛡️ Operations & Agents
 - Graceful maintenance states: `normal → draining → readonly → offline`
-- **REST API** — 68 endpoints with Swagger docs at `/docs`
+- **REST API** — 69 routes with Swagger docs at `/docs`
 - **MCP server** — 18 focused tools for Claude Code, Codex, Gemini, Cursor, Copilot (destructive/admin operations stay human-only)
 - **`@axon`** VS Code chat participant with Graph panels
 
@@ -128,10 +128,13 @@ Files are ciphertext on disk — cloud providers see only encrypted bytes.
 
 ```bash
 pip install "axon-rag[starter]"   # Python 3.10+. Sealed sharing + extra loaders. Web GUI ships with axon-api.
-axon                              # First run auto-launches the setup wizard, then drops into the REPL.
+axon --ingest ./my-notes          # index a folder: local embeddings, no LLM calls
+axon "What do my notes say about the release plan?"   # cited answer from a local Ollama model
 ```
 
-That's it. The wizard configures your LLM provider, embedding model, and retrieval defaults; subsequent runs go straight to the REPL.
+The first question pulls the default model (`llama3.1:8b`) into [Ollama](https://ollama.com) if
+it is missing, or use a cloud model: `axon --model gpt-4o-mini "…"` with `OPENAI_API_KEY` set.
+`axon` on its own opens the REPL; on a fresh machine it runs the setup wizard first.
 
 <details>
 <summary><b>See it run — first-run wizard, ingest, and a cited query</b></summary>
@@ -151,7 +154,7 @@ axon update                       # Check PyPI and upgrade the package + VS Code
 
 Local inference uses [Ollama](https://ollama.com) or vLLM (self-hosted). Cloud providers (OpenAI, Gemini, Grok, GitHub Copilot, Ollama Cloud) work via API keys.
 
-**[→ Setup guide for VS Code, MCP, and cloud providers →](https://github.com/jyunming/Axon/blob/main/docs/SETUP.md)**
+**[→ Getting Started — from install to a cited answer →](https://github.com/jyunming/Axon/blob/main/docs/GETTING_STARTED.md)**
 
 ---
 
@@ -160,29 +163,32 @@ Local inference uses [Ollama](https://ollama.com) or vLLM (self-hosted). Cloud p
 Share an encrypted knowledge base through OneDrive, Dropbox, or Google Drive. Cloud providers see only ciphertext.
 
 ```bash
-pip install "axon-rag[sealed]"   # install sealed extra on both machines
+pip install "axon-rag[starter]"   # on both machines (or the smaller [sealed] extra)
 ```
 
-**Owner (5 steps)**
+**Owner**
 
 ```bash
-axon --store-init "/path/to/OneDrive/AxonStore"  # 1. point store at sync folder
-axon --store-bootstrap "your-passphrase"          # 2. bootstrap master key (once per machine)
-axon --project-new research                       # 3. create project + ingest
-axon --project research --ingest /docs
-axon --project-seal research                      # 4. encrypt in place (≈1 s per 100 MB)
-axon --share-generate research alice              # 5. print SEALED1:... string — send to grantee
+axon --store-init "/path/to/OneDrive/axon"                  # 1. put the store in the synced folder
+axon --project-new research --ingest /path/to/documents     # 2. create a project and index it
+axon                                                        # 3. open the REPL for the sealed steps:
 ```
 
-**Grantee (3 steps)**
+```
+axon> /store bootstrap <passphrase>            first time only; later sessions: /store unlock <passphrase>
+axon> /project seal research                   encrypt the project in place
+axon> /share generate research alice           prints the share string — send it to alice
+```
+
+**Grantee**
 
 ```bash
-axon --store-init "/path/to/OneDrive/AxonStore"   # 1. same shared folder
-axon --share-redeem "SEALED1:..."                  # 2. redeem — DEK stored in OS keyring
-axon --project mounts/owner_research "question"   # 3. query; Axon decrypts to temp, wipes on exit
+axon --store-init "/path/to/OneDrive/axon"              # 1. the same synced folder
+axon --share-redeem "<share string>"                     # 2. key goes to the OS keyring
+axon --project mounts/owner_research "question"         # 3. decrypted to a temp cache, wiped on exit
 ```
 
-**[→ Full Sharing Guide](docs/SHARING.md)** — OneDrive setup, revocation, headless/Docker grantees, filesystem compatibility matrix.
+**[→ Full Sharing Guide](https://github.com/jyunming/Axon/blob/main/docs/SHARING.md)** — OneDrive / Dropbox / Google Drive setup, revocation, expiry, filesystem compatibility matrix.
 
 ---
 
@@ -238,7 +244,7 @@ Or connect via MCP for Copilot agent mode — point `.vscode/mcp.json` at `axon-
 
 > The VS Code extension surfaces **20 LM tools** to Copilot Chat — the 18 MCP tools (query, search, ingest, config, graph facts, sharing) plus `show_graph` and `ingest_image`.
 
-**[Full setup guide →](https://github.com/jyunming/Axon/blob/main/docs/SETUP.md)**
+**[VS Code and MCP setup →](https://github.com/jyunming/Axon/blob/main/docs/REFERENCE.md#10-vs-code-extension)**
 
 ---
 
@@ -251,7 +257,7 @@ Drop-in retrievers for LangChain and LlamaIndex agents — no REST round-trips, 
 from axon import AxonBrain, AxonConfig
 from axon.integrations.langchain import AxonRetriever
 
-brain = AxonBrain(AxonConfig.from_yaml("config.yaml"))
+brain = AxonBrain(AxonConfig.load())   # ~/.config/axon/config.yaml, or .load("path.yaml")
 retriever = AxonRetriever(brain=brain, top_k=5)
 
 docs = retriever.invoke("what does the project do?")  # list[Document]
@@ -271,36 +277,13 @@ Per-call overrides (e.g. force HyDE for one question): `retriever.with_overrides
 
 ## 📚 Documentation
 
-**Getting started**
-
 | | Guide | What it covers |
 |-|-------|---------------|
-| 🚀 | **[Getting Started](https://github.com/jyunming/Axon/blob/main/docs/GETTING_STARTED.md)** | First-time walkthrough — ingest, query, settings |
-| ⚙️ | **[Setup Guide](https://github.com/jyunming/Axon/blob/main/docs/SETUP.md)** | Install, models, VS Code extension, MCP connection |
-| 🔧 | **[Troubleshooting](https://github.com/jyunming/Axon/blob/main/docs/TROUBLESHOOTING.md)** | Common errors and platform-specific fixes |
-
-**Reference**
-
-| | Guide | What it covers |
-|-|-------|---------------|
-| 🔑 | **[Admin Reference](https://github.com/jyunming/Axon/blob/main/docs/ADMIN_REFERENCE.md)** | Every endpoint, REPL command, CLI flag, and config option |
-| ⚡ | **[Quick Reference](https://github.com/jyunming/Axon/blob/main/docs/QUICKREF.md)** | Commands and flags at a glance |
-| 📡 | **[API Reference](https://github.com/jyunming/Axon/blob/main/docs/API_REFERENCE.md)** | Full REST endpoint reference with request/response schemas |
-| 🔌 | **[MCP Tools](https://github.com/jyunming/Axon/blob/main/docs/MCP_TOOLS.md)** | All 18 MCP tool signatures with parameter defaults, and where each human-only operation lives |
-
-**Deep dives**
-
-| | Guide | What it covers |
-|-|-------|---------------|
-| 🤖 | **[Model Guide](https://github.com/jyunming/Axon/blob/main/docs/MODEL_GUIDE.md)** | Choosing LLM and embeddings; per-provider config examples |
-| 🔬 | **[Advanced RAG](https://github.com/jyunming/Axon/blob/main/docs/ADVANCED_RAG.md)** | HyDE, RAPTOR, GraphRAG, CRAG-Lite — how each technique works |
-| 🌐 | **[Web Search](https://github.com/jyunming/Axon/blob/main/docs/WEB_SEARCH.md)** | Brave Search integration, CRAG-Lite fallback setup |
-| 🏝️ | **[Offline / Air-gap Guide](https://github.com/jyunming/Axon/blob/main/docs/OFFLINE_GUIDE.md)** | Full air-gap setup, model pre-download, local-assets-only mode |
-| 💻 | **[Code RAG Guide](https://github.com/jyunming/Axon/blob/main/docs/CODE_RAG_GUIDE.md)** | Code graph retrieval and structural search |
-| 🤝 | **[AxonStore](https://github.com/jyunming/Axon/blob/main/docs/AXON_STORE.md)** | Multi-user sharing, revocation, and the lease lifecycle |
-| 🔐 | **[Sharing Guide](https://github.com/jyunming/Axon/blob/main/docs/SHARING.md)** | Plaintext and sealed sharing — which filesystems are safe, OneDrive/Dropbox/Google Drive setup, revocation |
-| 📈 | **[Evaluation Guide](https://github.com/jyunming/Axon/blob/main/docs/EVALUATION.md)** | RAGAS metrics, running evals, building testsets |
-| 🛠️ | **[Development Guide](https://github.com/jyunming/Axon/blob/main/docs/DEVELOPMENT.md)** | Tests, contributing, pre-commit hooks, packaging & release |
+| 🚀 | **[Getting Started](https://github.com/jyunming/Axon/blob/main/docs/GETTING_STARTED.md)** | Install, index a folder, get a cited answer — then the browser, VS Code, MCP and REST |
+| 📖 | **[Reference](https://github.com/jyunming/Axon/blob/main/docs/REFERENCE.md)** | Every setting, CLI flag, REPL command, REST route, MCP tool and VS Code feature; retrieval, graphs, projects, offline mode, operations, the Python API |
+| 🔐 | **[Sharing](https://github.com/jyunming/Axon/blob/main/docs/SHARING.md)** | Plaintext and sealed sharing, OneDrive / Dropbox / Google Drive, revocation and expiry |
+| 🔧 | **[Troubleshooting](https://github.com/jyunming/Axon/blob/main/docs/TROUBLESHOOTING.md)** | Error messages and their fixes |
+| 🛠️ | **[Contributing](https://github.com/jyunming/Axon/blob/main/CONTRIBUTING.md)** | Development setup, tests, evaluation, releases |
 
 ---
 

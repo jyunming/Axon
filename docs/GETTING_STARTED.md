@@ -1,69 +1,107 @@
-# Getting Started with Axon
+# Getting Started
 
-Axon has five different ways to use it — terminal chat, VS Code extension, REST API, browser UI, and MCP for AI coding agents — and they all share the same knowledge base. Ingest once, query from anywhere.
+From `pip install` to a cited answer about your own files. You need **Python 3.10 or
+later**, a folder of documents, and — only for the answer step — either
+[Ollama](https://ollama.com) or a cloud API key. Indexing needs neither.
 
-> **What is "ingesting"?** Ingesting means reading your files and turning them into a searchable index. Axon splits each document into small chunks, converts each chunk into a numeric representation (a vector), and stores them so it can quickly find the most relevant pieces when you ask a question.
-
-![Axon entry points](assets/diagrams/entry-points.png)
+![Axon REPL — startup banner, ingest, and a cited query](assets/repl-demo.png)
 
 ---
 
-## Quick Install
-
-> **Before you start:** Make sure you have [Python 3.10 or later](https://www.python.org/downloads/) installed. Run `python --version` to check.
+## 1. Install
 
 ```bash
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install "axon-rag[starter]"
 ```
 
-That installs Axon plus the recommended bundle (sealed-mount sharing, extra document loaders for EPUB/RTF/.msg). The web GUI needs no extra — `axon-api` serves it at `/gui/`. Power users who want only the bare retrieval engine can `pip install axon-rag` without the extra and add specific extras (`[chroma]`, `[qdrant]`, `[graphrag]`, `[gliner]`, `[langchain]`, `[llama-index]`) à la carte.
+`[starter]` adds sealed (encrypted) sharing and the EPUB / RTF / Outlook loaders; the
+browser GUI, REST API and MCP server are in every install. The quotes stop your shell from
+treating the brackets as a pattern.
 
-> **Tip:** Use a virtual environment so Axon's deps don't collide with other projects. See [SETUP.md § 2](SETUP.md#2-install-the-package) for step-by-step instructions.
-
-> **Working from a checkout?** `pip install -e .` from the cloned repo root gives you an editable install. Most users should use the PyPI command above.
+Check the machine:
 
 ```bash
-# Install Ollama — the free app that runs LLMs on your computer.
-# Download from https://ollama.com, install, then:
-ollama pull llama3.1:8b   # recommended — good quality, needs ~8 GB RAM
-ollama pull phi3:mini     # lighter option — needs ~4 GB RAM
+axon --doctor
 ```
 
-> **Verify everything's wired up** in one command:
-> ```bash
-> axon --doctor
-> ```
-> Prints a colored checklist (Python version, Ollama daemon, model pulled, store writable, recommended extras) so you don't discover a missing piece on your first query. Each warning carries a one-line "do this next" hint.
+Two checks must pass — the Python version and a writable store. The others are advice:
+if you haven't installed Ollama yet, *Ollama reachable* and *LLM model pulled* show `!`;
+that's expected until step 3, and irrelevant if you'll use a cloud key.
 
----
+## 2. Index a folder
 
-## Where Your Data Lives
+```bash
+axon --ingest ./my-notes
+```
 
-Axon uses two locations in your home folder:
+Point it at any folder or file — Markdown, text, PDF, Word, PowerPoint, Excel, CSV,
+notebooks, HTML, email and 24 source-code extensions are all read
+([the full list](REFERENCE.md#111-formats)). Three things happen the first time:
 
-| What | Linux / macOS | Windows |
-|---|---|---|
-| **Config file** | `~/.config/axon/config.yaml` | `C:\Users\<you>\.config\axon\config.yaml` |
-| **Knowledge base data** | `~/.axon/AxonStore/<username>/` | `C:\Users\<you>\.axon\AxonStore\<username>\` |
+- **The embedding model downloads** (about 90 MB, once) into
+  `~/.axon/model_cache/fastembed`. It runs locally with ONNX — no PyTorch.
+- **The config file is created** at `~/.config/axon/config.yaml` with the shipped defaults.
+- **Your files are chunked, embedded and indexed** into the `default` project. The
+  default configuration makes **no LLM calls** while indexing: the LLM-heavy features
+  (RAPTOR summaries, GraphRAG entity extraction) are off until you turn them on.
 
-Each project gets its own subfolder under your user directory (e.g. `~/.axon/AxonStore/<username>/default/`). **Back up the `AxonStore/` folder** to preserve your knowledge base, or set `AXON_STORE_BASE` to point to a different disk or network share.
+When indexing finishes, Axon opens its interactive prompt. Type `/list` to see what was
+indexed and `/quit` to leave. From the shell, `axon --list` shows the same (here for a
+two-file folder):
 
-**Rough disk estimates:**
+```
+  Knowledge Base — 2 file(s), 2 chunk(s)
+```
 
-| What | Approximate size |
-|---|---|
-| 100-page PDF | 5–10 MB in the vector store |
-| 1,000 code files | 50–100 MB |
-| Embedding model (`all-MiniLM-L6-v2`) | ~90 MB |
-| LLM via Ollama (`llama3.1:8b`) | ~4.7 GB |
+Run the same `--ingest` again after editing files: unchanged content is skipped
+(`axon --refresh` re-indexes only files that changed).
 
----
+## 3. Ask a question
 
-## First-time Configuration
+Answers need a language model. Pick one.
 
-> **New in v0.3.2:** running plain `axon` on a fresh checkout (no config file at the default path, no projects under the AxonStore base) now auto-launches this wizard before dropping into the REPL. Press <kbd>Ctrl</kbd>+<kbd>C</kbd> to skip and configure later.
+### Option A — local, with Ollama
 
-Run the interactive wizard to set your LLM provider, model, embedding settings, and retrieval flags — no manual YAML editing needed:
+Install Ollama from [ollama.com/download](https://ollama.com/download) and make sure it is
+running (the app, or `ollama serve`). Then just ask:
+
+```bash
+axon "What do my notes say about the release plan?"
+```
+
+The default model is `llama3.1:8b` (needs about 8 GB of RAM). If Ollama doesn't have it
+yet, Axon pulls it first — about 4.7 GB, with progress printed — and then answers. To
+download it ahead of time: `ollama pull llama3.1:8b`. On a smaller machine try
+`ollama pull phi3:mini` and add `--model phi3:mini`.
+
+### Option B — a cloud model
+
+Set the key for your provider and name a model; the model name picks the provider:
+
+```bash
+export GEMINI_API_KEY=...            # PowerShell: $env:GEMINI_API_KEY = "..."
+axon --model gemini-2.5-flash "What do my notes say about the release plan?"
+
+export OPENAI_API_KEY=...
+axon --model gpt-4o-mini "What do my notes say about the release plan?"
+```
+
+Use any model your key can access. Only the question and the retrieved passages are sent
+to the provider; your index stays on your machine. xAI Grok, vLLM, any OpenAI-compatible
+local server and GitHub Copilot work too — see [providers](REFERENCE.md#51-providers).
+
+### What you get back
+
+An answer grounded in your files, with inline citations such as `[Document 1]` pointing at
+the passages it used. If nothing relevant was found, Axon says so and answers from general
+knowledge, labelled as such — turn that off with `/discuss` in the REPL or
+`discussion_fallback: false` in the config.
+
+### Make your choice stick
+
+`--model` lasts for one command. To save a provider and model, run the wizard:
 
 ```bash
 axon --setup
@@ -71,454 +109,95 @@ axon --setup
 
 ![Axon config wizard — mode selection](assets/config_wizard.png)
 
-Choose a setup mode:
+*quick* asks only for the provider, model and embeddings. You can also edit
+`~/.config/axon/config.yaml` directly ([every setting](REFERENCE.md#3-configuration)), or
+store cloud keys from inside the REPL with `/keys set gemini` (saved to `~/.axon/.env`).
 
-| Mode | Sections | Best for |
-|------|----------|----------|
-| **quick** | 3 (provider, model, embeddings) | Fast start — sensible defaults for everything else |
-| **standard** | 16 (all main settings) | Most users — covers model paths, RAG flags, chunk strategy |
-| **full** | 16 + RAPTOR/GraphRAG sub-params | Power users and production deployments |
+## 4. Use the REPL
 
-> **Tip:** Press **Ctrl+C** at any prompt to exit immediately without saving. Your existing `config.yaml` is untouched until you confirm at the end.
+`axon` on its own opens an interactive prompt. Type questions; commands start with `/`.
 
-You can also run the wizard from inside the REPL at any time:
-
-```
-axon> /config wizard
-```
-
-> **Skip RAPTOR for small sources** — RAPTOR is worth enabling only when your sources are large (books, long specs). The wizard will warn you if you enable it on a small corpus.
-
----
-
-## How Ingestion Works
-
-When you run `/ingest ./my-docs/`, Axon:
-
-1. Reads every supported file in the folder
-
-2. Splits each file into small overlapping text chunks (~500 words each)
-
-3. Converts each chunk into a vector (a list of numbers that captures the meaning of the text)
-
-4. Saves the vectors in a local database — nothing is sent anywhere
-
-![Ingestion flow](assets/diagrams/ingestion-flow.png)
-
-## How Querying Works
-
-When you ask a question, Axon:
-
-1. Converts your question into a vector the same way it processed your documents
-
-2. Finds the stored chunks whose vectors are most similar to your question (the most relevant pieces)
-
-3. Sends those chunks plus your question to the LLM
-
-4. The LLM reads the relevant chunks and writes an answer with citations pointing back to your files
-
-![Query flow](assets/diagrams/query-flow.png)
-
----
-
-## Entry Point 1 — REPL (interactive chat in the terminal)
-
-The REPL is a chat interface that runs in your terminal. Type a question and press Enter.
-
-![Axon REPL startup](assets/repl-animation.gif)
-
-![Axon REPL session demo](assets/repl-demo.png)
-
-**Launch:**
-
-```bash
-axon
-```
-
-You should see the `axon>` prompt. That means Axon is ready. If you get an error on your first query, Ollama is most likely not running — see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
-
-**Ingest your documents first:**
-
-```
-axon> /ingest ./my-documents/       ← ingest everything in a folder
-axon> /ingest ./report.pdf          ← ingest a single file
-axon> /ingest https://example.com   ← ingest a web page
-```
-
-You'll see a confirmation like `Ingested 142 chunks from 18 files.`
-
-**Then ask questions:**
-
-```
-axon> What are the main topics in these documents?
-axon> Summarise the Q3 report
-axon> Explain this code @./src/main.py
-```
-
-> **`@./src/main.py`** — putting `@` before a file path attaches that file's contents to your question inline. You can also use `@./folder/` to attach a whole folder.
-
-**Useful commands:**
-
-| Command | What it does |
+| Command | Does |
 |---|---|
-| `/ingest <path>` | Ingest a file, folder, or URL |
-| `/list` | Show all ingested documents with chunk counts |
-| `/model <name>` | Switch LLM on the fly (e.g. `llama3.1:8b`, `gemini-1.5-flash`, `gpt-4o`) |
-| `/project switch <name>` | Change to a different knowledge base |
-| `/rag topk 10` | Retrieve the top 10 most relevant chunks per query (default is 10) |
-| `/rag rerank` | Toggle reranking — a second pass that re-scores retrieved chunks to improve relevance |
-| `/rag hyde` | Toggle HyDE — generates a hypothetical ideal answer first, then searches for similar text (helps with vague questions) |
-| `/llm temperature 0.2` | Set how creative the LLM is: `0.0` = focused and consistent, `2.0` = creative but unpredictable |
-| `/sessions` | Browse saved conversation history |
-| `/context` | Show current model, RAG settings, and how much of the context window is used (the context window is the maximum amount of text the LLM can hold in memory at once) |
-| `/search` | Toggle live web search (requires a Brave API key — see [WEB_SEARCH.md](WEB_SEARCH.md)) |
-| `/clear` | Clear the current conversation history (does **not** delete your ingested documents) |
-| `/help` | Full list of all commands |
+| `/ingest ./path` | Index a file, folder or glob (`./src/*.py`) |
+| `/list` | What's indexed |
+| `/model gpt-4o-mini` | Switch the LLM for this session |
+| `/rag` | Show retrieval settings; `/rag rerank`, `/rag hyde`, … toggle them |
+| `/project new work` | Create and switch to a separate knowledge base |
+| `/project switch default` | Back to the default one |
+| `/sessions`, `/resume <id>` | Earlier conversations |
+| `/context` | Model, settings and what the last answer used |
+| `/help` | Everything else |
+| `/quit` | Leave |
 
----
+Put `@path/to/file` in a question to attach a file to that one question without indexing
+it: `Explain this @./src/main.py`.
 
-## Entry Point 2 — VS Code Extension (`@axon` in Copilot Chat)
+## 5. Where things live
 
-> **Important:** `axon-api` must be running in a **separate terminal** before you use the extension. Start it with `axon-api` and leave that terminal open.
-
-The VS Code extension adds an `@axon` chat participant, a live Knowledge Graph panel, and a Code Graph panel directly inside VS Code alongside GitHub Copilot.
-
-**Install:**
-
-Run `axon-ext` after installing `axon-rag` to install automatically, or open VS Code → Extensions panel (`Ctrl+Shift+X`) → click `···` → **Install from VSIX** → select `axon-copilot-<version>.vsix` → reload VS Code.
-
-> **What is a VSIX file?** It is the file format for VS Code extensions — like an installer package specific to VS Code.
-
-**How the extension finds Python** (needed for `autoStart` — which means the extension can start `axon-api` automatically when you open VS Code):
-
-| Your install method | What to do |
+| What | Where |
 |---|---|
-| `pip install` into a virtual environment | Run `axon` once from the terminal — the path is saved automatically |
-| `pipx install axon` | Nothing — the extension finds pipx automatically |
-| Workspace virtual environment (`.venv/` folder) | Nothing — the extension checks your open folder automatically |
-| Custom path | Set `axon.pythonPath` in VS Code Settings (`Ctrl+,`, search "axon") |
+| Configuration | `~/.config/axon/config.yaml` |
+| Your knowledge bases | `~/.axon/AxonStore/<your-username>/` — one folder per project |
+| Embedding model cache | `~/.axon/model_cache/fastembed/` |
+| API keys saved by `/keys set` | `~/.axon/.env` |
+| CLI logs | `~/.axon/logs/` |
 
-After installing the VSIX and starting `axon-api`, open Copilot Chat (`Ctrl+Shift+I`) and use natural language:
-
-**Ingest documents:**
-
-```
-@axon ingest my documents at /path/to/docs
-@axon add this URL to my knowledge base: https://docs.example.com
-```
-
-**Ask questions:**
-
-```
-@axon search for information about the login flow
-@axon what does the authentication module do?
-```
-
-**Manage projects:**
-
-```
-@axon list all my projects
-@axon switch to the "work" project
-@axon what files have I ingested?
-```
-
-**Ingest an image** (requires a vision-capable model like GPT-4o, Claude, or LLaVA):
-
-```
-@axon describe and ingest this diagram: /path/to/architecture.png
-```
-
-**Open the Graph panel:**
-
-Just ask in Copilot Chat:
-
-```
-@axon show me the graph for how authentication works
-@axon visualise the retrieval pipeline
-```
-
-> Full setup guide including Python discovery, settings, and troubleshooting: [SETUP.md § 11](SETUP.md#11-vs-code-extension-github-copilot-integration)
+On Windows `~` is `C:\Users\<you>`. Back up `~/.axon/AxonStore/` to keep your data, or
+move it with `axon --store-init /other/disk` (or `AXON_STORE_BASE`).
 
 ---
 
-## Entry Point 3 — REST API (for scripts and integrations)
+## Other ways in
 
-The API lets your own programs, scripts, and automation tools talk to Axon over HTTP.
+Everything shares the same knowledge base, so index once and use it from anywhere.
 
-**Launch** (run this in a **separate terminal** and leave it running):
+![Axon entry points](assets/diagrams/entry-points.png)
+
+**Browser.** Start the server and open the web GUI — chat, a files view, the graph explorer
+and settings:
 
 ```bash
-axon-api   # starts at http://localhost:8420
+axon-api                     # http://localhost:8420/gui/  ·  API docs at /docs
 ```
 
-You should see `Uvicorn running on http://0.0.0.0:8420`. Leave this terminal open — closing it stops the API.
+**VS Code.** `axon-ext` installs the bundled extension: `@axon` in Copilot Chat, 20
+Copilot tools and a 3D graph panel. It starts `axon-api` for you on Linux and macOS; on
+Windows start `axon-api` yourself. [More](REFERENCE.md#10-vs-code-extension).
 
-**Easiest way to explore:** open `http://localhost:8420/docs` in your browser — this shows every endpoint with a form to try it interactively. No code needed.
-
-> **What is `curl`?** It is a command-line tool for making HTTP requests — like clicking a button in a browser, but scriptable. If you prefer a visual interface, use the Swagger UI at `/docs` instead.
-> **Getting a `403 Forbidden` error when ingesting?** Axon only allows reading files from within a configured base directory (`RAG_INGEST_BASE`). If you get a 403, check the `RAG_INGEST_BASE` value in your `.env` file and make sure it covers the folder you are trying to ingest from. By default it is set to your home directory.
-
-**Ingest a folder (returns immediately, runs in the background):**
+**AI coding agents (MCP).** With `axon-api` running:
 
 ```bash
-curl -X POST http://localhost:8420/ingest \
-  -H "Content-Type: application/json" \
-  -d '{"path": "/path/to/docs"}'
-# ← returns a job_id straight away; ingest runs in the background
-# Check if it finished (replace abc123 with your job_id)
-curl http://localhost:8420/ingest/status/abc123
-# ← keeps returning {"status": "processing"} until done, then {"status": "completed"}
+claude mcp add axon axon-mcp --env RAG_API_BASE=http://localhost:8420
 ```
 
-**Ingest a single piece of text:**
+Claude Desktop, Codex, Gemini CLI, Cursor and VS Code agent mode take the same server —
+[configs for each](REFERENCE.md#91-connecting-a-client). Agents get 18 tools to search,
+ingest, manage projects, tune settings, write graph facts and share; destructive and
+store-administration operations stay with you.
+
+**Scripts.** With `axon-api` running:
 
 ```bash
-curl -X POST http://localhost:8420/add_text \
-  -H "Content-Type: application/json" \
-  -d '{"text": "Important note to remember.", "metadata": {"source": "notes"}}'
+curl -X POST http://localhost:8420/query -H "Content-Type: application/json" \
+  -d '{"query": "What do my notes say about the release plan?"}'
 ```
 
-**Ask a question (returns a full synthesised answer):**
-
-```bash
-curl -X POST http://localhost:8420/query \
-  -H "Content-Type: application/json" \
-  -d '{"query": "What are the main topics?"}'
-```
-
-**Search without an LLM answer (returns raw matching chunks):**
-
-```bash
-curl -X POST http://localhost:8420/search \
-  -H "Content-Type: application/json" \
-  -d '{"query": "authentication flow", "top_k": 5}'
-```
+The response carries the answer plus `sources` and `citations` arrays
+([REST reference](REFERENCE.md#8-rest-api)). From Python, `AxonBrain` and the LangChain /
+LlamaIndex retrievers work in-process ([Python](REFERENCE.md#19-python-library)).
 
 ---
 
-## Entry Point 4 — Browser UI
-
-### Built-in WebGUI
-
-Served by `axon-api` at no extra cost. If the API is running, just open:
-
-**[http://localhost:8420/gui/](http://localhost:8420/gui/)**
-
-Features: chat, document ingest, graph explorer, knowledge base, project
-switcher, settings panel.
-
-**Ingest:** the paperclip / upload button.
-
-**Query:** type in the chat input at the bottom → press Enter.
-
-**Settings:** left sidebar → **Settings** → toggle hybrid search, reranking, HyDE, RAPTOR, and GraphRAG. Leave these off for now — they are advanced search techniques explained in the [RAPTOR + GraphRAG](#raptor--graphrag--getting-the-most-out-of-axon) section below.
-
----
-
-## Entry Point 5 — MCP Server (for AI coding agents)
-
-> **What is MCP?** Model Context Protocol is an open standard that lets AI coding agents call external tools programmatically. This is different from the VS Code extension (Entry Point 2): the extension gives you an `@axon` chat participant inside Copilot Chat; the MCP server gives any MCP-compatible agent direct access to all 51 Axon tools without a chat interface.
-
-`axon-mcp` is a standard stdio server built on the open MCP protocol. It works with **Claude Code, Claude Desktop, OpenAI Codex CLI, OpenAI Codex Desktop, Google Gemini CLI, Cursor, VS Code Copilot agent mode**, and any other MCP-compatible tool.
-
-![MCP workflow](assets/diagrams/mcp-workflow.png)
-
-**Supported clients — quick config reference:**
-
-| Tool | Config file | Notes |
-|---|---|---|
-| **Claude Code** | `~/.claude/settings.json` | `claude mcp add axon axon-mcp --env RAG_API_BASE=http://localhost:8420` |
-| **OpenAI Codex CLI** | `~/.codex/config.toml` | TOML format — see SETUP.md |
-| **Google Gemini CLI** | `~/.gemini/settings.json` | Same JSON shape as Claude Code |
-| **VS Code** (agent mode) | `.vscode/mcp.json` | Also needs `.vscode/settings.json` |
-| **Cursor** | `.cursor/mcp.json` | Same JSON shape as Claude Code |
-
-The JSON config is the same for Claude Code, Gemini CLI, VS Code, and Cursor — only the file path differs:
-
-```json
-{
-  "mcpServers": {
-    "axon": {
-      "command": "axon-mcp",
-      "env": { "RAG_API_BASE": "http://localhost:8420" }
-    }
-  }
-}
-```
-
-> `RAG_API_BASE` tells the MCP server where `axon-api` is running.
-
-**VS Code also needs** `.vscode/settings.json`:
-
-```json
-{ "chat.mcp.access": "all" }
-```
-
-**To activate:** start `axon-api`, then reload your editor. Axon's tools appear in the agent panel automatically.
-
-> Full setup for all platforms (Windows PATH, Linux venv, WSL, shared team): [SETUP.md § 10](SETUP.md#10-mcp-server-setup)
-
----
-
-## Projects — Multiple Knowledge Bases
-
-Each project has its own separate, isolated knowledge base. This lets you keep work documents, personal notes, and code repos separate from each other. Parent projects automatically search their child projects too.
-
-![Projects hierarchy](assets/diagrams/projects-hierarchy.png)
-
-```bash
-# REPL — create and switch projects
-/project new work                  # create a project called "work"
-/project new research/papers       # create a nested project (research → papers)
-/project switch work               # switch to "work"
-/project list                      # show all projects
-# CLI — single query against a specific project
-axon --project work "Summarise the Q3 report"
-axon --project research "What papers discuss attention mechanisms?"
-# API
-curl -X POST http://localhost:8420/query \
-  -H "Content-Type: application/json" \
-  -d '{"query": "What are the main topics?", "project": "work"}'
-```
-
-### Search across all projects at once
-
-These special scope names let you query multiple projects in one go. They are read-only — you cannot ingest while in a merged scope.
-
-| Command | What it searches |
-|---|---|
-| `/project @store` | Your default project + all local projects + all mounted shares |
-| `/project @projects` | All local projects only |
-| `/project @mounts` | Only projects shared with you by others (mounted via AxonStore) |
-| `/project myproject` | Switch back to a specific writable project |
-
----
-
-## RAPTOR + GraphRAG — Getting the Most Out of Axon
-
-Both features are **off by default** to keep your first ingest fast. Enable them once your documents are indexed and you want richer answers to complex questions.
-
-> **What are RAPTOR and GraphRAG?**
-> - **RAPTOR** — after ingesting, it generates summary notes that group related chunks together. Helps with big-picture questions that no single paragraph can answer on its own.
-> - **GraphRAG** — extracts named entities (people, places, concepts) and the relationships between them from your documents, then builds a graph. When you ask a question it can follow the connections to find related information you might otherwise miss.
-> **What is an "LLM call"?** One request sent to the language model (Ollama, OpenAI, etc.). More calls means longer ingest time but usually better answer quality.
-
-### When should you enable these?
-
-| Your corpus size | Recommendation |
-|---|---|
-| Fewer than 50 documents | Skip both — basic retrieval works well at this scale |
-| 50–5,000 documents | Start with `graph_rag_depth: light` — no extra ingest time, enables the interactive graph |
-| 5,000+ documents, or complex multi-topic content | Enable `graph_rag_depth: standard` and RAPTOR for the best answer quality on broad questions |
-
-### Feature comparison
-
-| Feature | What it adds | Extra ingest time |
-|---|---|---|
-| **RAPTOR** | Groups ~5 related chunks into a summary chunk. Good for long documents and multi-page questions | ~1 LLM call per 5 chunks |
-| **GraphRAG (light)** | Extracts noun phrases and maps how often they co-occur. Zero LLM calls. Enables the interactive graph | **None** |
-| **GraphRAG (standard)** | Adds LLM-written entity descriptions and relationship triples (e.g. "Alice **works at** Acme Corp"). Richer, better at connecting dots | ~1–3 LLM calls per chunk |
-| **RAPTOR + GraphRAG** | Combined — RAPTOR summaries feed into GraphRAG, cutting total LLM calls by ~50–80% | Less than running each separately |
-
-### Start with: free graph (no extra LLM calls)
-
-> **Prerequisite:** Graph features require extra libraries. Install them once:
-> ```bash
-> pip install "axon-rag[graphrag]"
-> ```
-> The quotes are required on most terminals. (Package is `axon-rag` on PyPI; `axon` is the CLI.)
-
-Edit `~/.config/axon/config.yaml` (Linux/macOS) or `C:\Users\<you>\.config\axon\config.yaml` (Windows):
-
-```yaml
-rag:
-  graph_rag: true
-  graph_rag_depth: light      # uses text patterns only — no LLM calls
-  graph_rag_relations: false  # turn off relationship extraction (LLM-heavy)
-  graph_rag_community: false  # turn off community detection
-```
-
-### Upgrade to a richer graph
-
-```yaml
-rag:
-  graph_rag_depth: standard   # LLM writes a description for each extracted entity
-  graph_rag_relations: true   # also extracts relationships between entities
-```
-
-### Reduce ingest time
-
-**Skip RAPTOR for small files:**
-
-```yaml
-rag:
-  raptor_min_source_size_mb: 2.0   # skip RAPTOR for any source file smaller than 2 MB
-```
-
-**Turn both off during a big initial ingest, then turn on for daily use:**
-
-```yaml
-rag:
-  raptor: false
-  graph_rag: false
-```
-
----
-
-### Visualize the graph
-
-**Easiest: just ask the AI**
-
-In VS Code Copilot Chat:
-
-```
-@axon show me the graph for how retrieval works
-@axon visualise the authentication module
-```
-
-In any MCP-connected agent (Claude Code, Gemini CLI, Cursor, Copilot agent mode) — just ask naturally:
-
-```
-Show me the knowledge graph for the authentication flow
-```
-
-The graph opens as an embedded panel inside VS Code, or in your default browser everywhere else. No commands needed.
-
-![Axon VS Code Graph Panel — answer, cited sources, and interactive 3D code graph](assets/vscode-graph-panel.png)
-
-Clicking any citation or graph node opens the source file at the exact line in the editor.
-
-**Alternatives — open the graph directly:**
-
-| Where | Command |
-|---|---|
-| **REPL** | `/graph viz` — exports to HTML and opens in browser |
-| **VS Code Command Palette** | `Ctrl+Shift+P` → `Axon: Show Graph for Query…` |
-| **API** | `curl http://localhost:8420/graph/visualize -o graph.html` |
-
-| Tab | What it shows | How to enable |
-|---|---|---|
-| **Knowledge Graph** | Entity–relation graph from your documents | Set `graph_rag: true` in `config.yaml` |
-| **Code Graph** | File/class/function graph with import edges | Set `code_graph: true` in `config.yaml` |
-
----
-
-## Fully local / offline setup
-
-To run Axon with no internet at all, or to enforce that all model files are pre-downloaded, see the **[Offline / Air-Gap Guide](OFFLINE_GUIDE.md)**.
-
----
-
-## Where to go next
-
-| Guide | What it covers |
-|---|---|
-| [SETUP.md](SETUP.md) | Full install, all model options, VS Code extension config, MCP setup |
-| [QUICKREF.md](QUICKREF.md) | All REPL commands, CLI flags, and API endpoints at a glance |
-| [MODEL_GUIDE.md](MODEL_GUIDE.md) | Choosing an LLM and embedding model for your hardware |
-| [ADVANCED_RAG.md](ADVANCED_RAG.md) | Deep dive into HyDE, RAPTOR, GraphRAG, CRAG-Lite — how each technique works |
-| [WEB_SEARCH.md](WEB_SEARCH.md) | Enabling Brave Search fallback when your knowledge base doesn't have the answer |
-| [CODE_RAG_GUIDE.md](CODE_RAG_GUIDE.md) | Code graph retrieval — querying your codebase structurally |
-| [AXON_STORE.md](AXON_STORE.md) | Sharing your knowledge base with teammates using AxonStore |
-| [OFFLINE_GUIDE.md](OFFLINE_GUIDE.md) | Running with no internet / pre-downloaded models |
-| [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | Common errors and fixes |
+## Next steps
+
+- **Separate knowledge bases** for work, research and code:
+  [projects and scopes](REFERENCE.md#16-projects-scopes-and-sessions).
+- **Better answers** on hard questions — reranking, HyDE, multi-query and friends:
+  [retrieval features](REFERENCE.md#12-retrieval-features). Entity graphs and summaries for
+  large corpora: [knowledge graphs](REFERENCE.md#13-knowledge-graphs). Source code:
+  [code retrieval](REFERENCE.md#14-code-retrieval).
+- **Share a knowledge base**, including through OneDrive, Dropbox or Google Drive with
+  encryption: [Sharing](SHARING.md).
+- **No internet at all:** [offline and air-gapped operation](REFERENCE.md#17-offline-and-air-gapped-operation).
+- **Something wrong?** [Troubleshooting](TROUBLESHOOTING.md) — start with `axon --doctor`.

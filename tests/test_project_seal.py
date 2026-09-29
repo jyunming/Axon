@@ -143,7 +143,7 @@ class TestProjectSealCoverage:
 
     def test_version_json_stays_plaintext(self, kr_backend, user_dir):
         """Grantees need to detect changes without the DEK — so version.json
-        is deliberately NOT sealed (per docs/SHARE_MOUNT_SEALED.md §4.6)."""
+        is deliberately NOT sealed (per docs/architecture/SEALED_SHARING_DESIGN.md §4.6)."""
         bootstrap_store(user_dir, "test-pass-ok")
         proj = _populate_plaintext_project(user_dir)
         project_seal("research", user_dir)

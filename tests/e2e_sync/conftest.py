@@ -21,7 +21,8 @@ Auto-skipped when:
 - the docker daemon refuses ``docker compose up`` (no daemon, no
   permissions, etc.).
 
-Setup is documented in ``docs/SHARE_MOUNT_SEALED_SMOKE.md``.
+Setup is documented in ``tests/e2e_sync/README.md``; the manual two-machine
+counterpart is ``scripts/qa/SEALED_SHARE_SMOKE.md``.
 """
 from __future__ import annotations
 

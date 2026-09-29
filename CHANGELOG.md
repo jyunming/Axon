@@ -376,6 +376,35 @@ never reaches. Nothing a default install can do was removed.
   CI workflows plus the Dockerfile: it installed the torch stack while leaving
   `fastembed` — the actual default embedding provider — commented out.
 
+### 📚 Documentation
+
+- **The user guides are consolidated from 17 files into 4**, each checked
+  against the source rather than carried over: `docs/GETTING_STARTED.md`
+  (rewritten as a first run — install, index a folder with no LLM calls, a cited
+  answer from Ollama or a cloud key), `docs/REFERENCE.md` (new: every setting,
+  CLI flag, REPL command, REST route, MCP tool and VS Code feature, plus
+  retrieval, graphs, projects, offline mode, operations and the Python API),
+  `docs/SHARING.md` (now also covers the store and identity from the old
+  AxonStore guide) and `docs/TROUBLESHOOTING.md`. `docs/README.md` indexes them.
+- **Retired and deleted, with every in-repo link repointed:** `SETUP.md`,
+  `ADMIN_REFERENCE.md`, `QUICKREF.md`, `API_REFERENCE.md`, `MCP_TOOLS.md`,
+  `MODEL_GUIDE.md`, `OFFLINE_GUIDE.md`, `ADVANCED_RAG.md`, `CODE_RAG_GUIDE.md`,
+  `AXON_STORE.md`, `WEB_SEARCH.md` (into `REFERENCE.md`), `DEVELOPMENT.md` and
+  `EVALUATION.md` (into the root `CONTRIBUTING.md`), and `SKILLS.md` — its
+  tool catalogue described tools removed in this release; the MCP section of
+  `REFERENCE.md` replaces it. `pyproject.toml`'s project URLs now point at the
+  four guides.
+- Claims the old guides made that the code doesn't support are gone or
+  corrected, among them: `api.key` protecting the REST API (it is the
+  `RAG_API_KEY` environment variable), configurable rate and query-length
+  limits, top-level mount/keyring keys (they live under `security:`),
+  `/query` fields such as `graph_rag` and `chat_history` (ignored), REPL
+  `/project <name>` and `/ingest <url>`, `AxonConfig.from_yaml()`, and a
+  multi-process CLI sealing flow that fails because the master key is unlocked
+  per process — the guides now seal and share from one REPL session or an
+  unlocked `axon-api`. The landing page drops Streamlit and its stale tool
+  counts (18 MCP tools, 20 VS Code LM tools).
+
 ## [0.4.5] - 2026-09-01
 
 A third capabilities-audit cycle, this time targeting v0.4.4 itself via an

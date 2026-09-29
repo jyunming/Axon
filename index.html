@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Axon — Private RAG. Local first. Graph native. Agent ready.</title>
-    <meta name="description" content="Axon is a private, local-first RAG engine with GraphRAG, sealed sharing, and 51 MCP tools. Drop in PDFs, code, and notebooks; ask anything; get cited answers from a local LLM. Nothing leaves your machine.">
+    <meta name="description" content="Axon is a private, local-first RAG engine with GraphRAG, sealed sharing, and 18 MCP tools. Drop in PDFs, code, and notebooks; ask anything; get cited answers from a local LLM. Nothing leaves your machine.">
     <!-- Favicon: SVG primary (modern browsers) + PNG fallback (older clients,
          crawlers, social previews that don't render SVG). -->
     <link rel="icon" type="image/svg+xml" href="docs/assets/brand/axon-favicon.svg">
@@ -14,7 +14,7 @@
     <link rel="mask-icon" href="docs/assets/brand/axon-favicon.svg" color="#00d4b4">
     <meta name="theme-color" content="#050a14">
     <meta property="og:title" content="Axon — Private RAG. Local first. Graph native.">
-    <meta property="og:description" content="Drop in PDFs, code, and notebooks; ask anything; get cited answers from a local LLM. 51 MCP tools, sealed cloud-drive sharing, GraphRAG. MIT licensed.">
+    <meta property="og:description" content="Drop in PDFs, code, and notebooks; ask anything; get cited answers from a local LLM. 18 MCP tools, sealed cloud-drive sharing, GraphRAG. MIT licensed.">
     <!-- Social preview parsers (Slack, Discord, Twitter, etc.) require absolute
          HTTPS URLs for og:image / twitter:image. Relative paths silently fail. -->
     <meta property="og:image" content="https://raw.githubusercontent.com/jyunming/Axon/main/docs/assets/axon-mark.png">
@@ -2140,7 +2140,7 @@
     <div class="container">
         <div class="stats-inner">
             <div class="stat-item reveal">
-                <div class="stat-val">51</div>
+                <div class="stat-val">18</div>
                 <div class="stat-lbl">MCP Tools</div>
             </div>
             <div class="stat-item reveal" style="transition-delay:0.05s">
@@ -2250,9 +2250,9 @@
             <div class="arch-nodes">
                 <div class="arch-node">REPL</div>
                 <div class="arch-node">REST · /query · /graph/*</div>
-                <div class="arch-node">MCP · 51 tools</div>
+                <div class="arch-node">MCP · 18 tools</div>
                 <div class="arch-node">VS Code · @axon</div>
-                <div class="arch-node">Streamlit</div>
+                <div class="arch-node">Web GUI · /gui/</div>
                 <div class="arch-node">LangChain</div>
                 <div class="arch-node">LlamaIndex</div>
             </div>
@@ -2299,7 +2299,7 @@
                 <div class="arch-node crypto">HKDF-SHA256</div>
                 <div class="arch-node">OS keyring</div>
                 <div class="arch-node">version.json</div>
-                <div class="arch-node">audit log</div>
+                <div class="arch-node">signed expiry</div>
             </div>
         </div>
     </div>
@@ -2361,7 +2361,7 @@
                 </tr>
                 <tr>
                     <td class="row-h">MCP / agent surface</td>
-                    <td class="cell-axon" data-col="Axon"><span class="ck-yes">●</span> 51 tools drop-in</td>
+                    <td class="cell-axon" data-col="Axon"><span class="ck-yes">●</span> 18 tools drop-in</td>
                     <td data-col="Cloud RAG"><span class="ck-no">✕</span> None</td>
                     <td data-col="Vanilla local"><span class="ck-no">✕</span> None</td>
                 </tr>
@@ -2396,7 +2396,7 @@
             <div class="sc-tile-meta">
                 <span class="sc-tile-num">02</span>
                 <span class="sc-tile-name">VS Code · @axon</span>
-                <span class="sc-tile-tag">39 LM tools · 3D graph webview</span>
+                <span class="sc-tile-tag">20 LM tools · 3D graph webview</span>
             </div>
         </div>
         <div class="sc-tile reveal" style="transition-delay:0.1s">
@@ -2404,7 +2404,7 @@
             <div class="sc-tile-meta">
                 <span class="sc-tile-num">03</span>
                 <span class="sc-tile-name">MCP for any agent</span>
-                <span class="sc-tile-tag">51 tools · stdio · Claude · Cursor · Codex</span>
+                <span class="sc-tile-tag">18 tools · stdio · Claude · Cursor · Codex</span>
             </div>
         </div>
         <div class="sc-tile reveal" style="transition-delay:0.15s">
@@ -2466,10 +2466,10 @@
                     </g>
 
                     <!-- Alice: command -->
-                    <text x="28" y="280" font-family="JetBrains Mono, monospace" font-size="7.5" fill="rgba(255,255,255,0.55)">$ axon --project-seal research</text>
-                    <text x="28" y="293" font-family="JetBrains Mono, monospace" font-size="7.5" fill="rgba(255,255,255,0.55)">$ axon --share-generate \</text>
+                    <text x="28" y="280" font-family="JetBrains Mono, monospace" font-size="7.5" fill="rgba(255,255,255,0.55)">axon&gt; /project seal research</text>
+                    <text x="28" y="293" font-family="JetBrains Mono, monospace" font-size="7.5" fill="rgba(255,255,255,0.55)">axon&gt; /share generate \</text>
                     <text x="28" y="305" font-family="JetBrains Mono, monospace" font-size="7.5" fill="rgba(255,255,255,0.55)">    research bob</text>
-                    <text x="28" y="320" font-family="JetBrains Mono, monospace" font-size="7" fill="#00d4b4">→ SEALED1:eyJrIjo•••</text>
+                    <text x="28" y="320" font-family="JetBrains Mono, monospace" font-size="7" fill="#00d4b4">→ SEALED2 share string</text>
                     <text x="28" y="332" font-family="JetBrains Mono, monospace" font-size="7" fill="rgba(255,255,255,0.4)">  send out-of-band</text>
 
                     <!-- MIDDLE: shared filesystem cloud + encryption gate -->
@@ -2499,7 +2499,7 @@
                         <!-- Revoke note -->
                         <g transform="translate(20 178)">
                             <text x="0" y="0" font-family="JetBrains Mono, monospace" font-size="7" fill="#f472b6">⟲ rotate → hard-revoke</text>
-                            <text x="0" y="13" font-family="JetBrains Mono, monospace" font-size="7" fill="rgba(255,255,255,0.45)">old SEALED1 token dies</text>
+                            <text x="0" y="13" font-family="JetBrains Mono, monospace" font-size="7" fill="rgba(255,255,255,0.45)">old share token dies</text>
                         </g>
                     </g>
 
@@ -2527,7 +2527,7 @@
 
                     <!-- Bob: command -->
                     <text x="380" y="190" font-family="JetBrains Mono, monospace" font-size="7.5" fill="rgba(255,255,255,0.55)">$ axon --share-redeem \</text>
-                    <text x="380" y="202" font-family="JetBrains Mono, monospace" font-size="7.5" fill="rgba(255,255,255,0.55)">    "SEALED1:eyJrIjo•••"</text>
+                    <text x="380" y="202" font-family="JetBrains Mono, monospace" font-size="7.5" fill="rgba(255,255,255,0.55)">    "&lt;share string&gt;"</text>
                     <text x="380" y="218" font-family="JetBrains Mono, monospace" font-size="7" fill="#00d4b4">✓ mounted</text>
 
                     <!-- Bob: query -->
@@ -2623,25 +2623,26 @@ $ curl -X POST localhost:8000/graph/retrieve \
             </div>
 
             <div class="codes-panel" id="tab-mcp">
-<span class="co"># ~/.config/claude/mcp_servers.json — Claude Code, Codex CLI, Cursor, etc.</span>
+<span class="co"># mcpServers block — Claude Desktop, Gemini CLI, Cursor (Claude Code: claude mcp add axon axon-mcp)</span>
 {
   "<span class="ck">mcpServers</span>": {
     "<span class="ck">axon</span>": {
       "<span class="ck">command</span>": <span class="cs">"axon-mcp"</span>,
-      "<span class="ck">env</span>": { "<span class="ck">RAG_API_KEY</span>": <span class="cs">"$AXON_KEY"</span> }
+      "<span class="ck">env</span>": { "<span class="ck">RAG_API_BASE</span>": <span class="cs">"http://localhost:8420"</span> }
     }
   }
 }
 
-<span class="co"># 51 tools become available to your agent. A few highlights:</span>
+<span class="co"># 18 tools become available to your agent (axon-api must be running). Highlights:</span>
 <span class="co">#   query_knowledge      — RAG query with citations</span>
 <span class="co">#   search_knowledge     — raw chunk search</span>
-<span class="co">#   ingest_path          — async ingest job</span>
-<span class="co">#   graph_retrieve       — point-in-time graph query (v0.3.2)</span>
-<span class="co">#   graph_conflicts      — list conflicted facts (v0.3.2)</span>
-<span class="co">#   graph_finalize       — community rebuild</span>
-<span class="co">#   share_project        — generate read-only share</span>
-<span class="co">#   seal_project         — encrypt at rest with AES-256-GCM</span>
+<span class="co">#   ingest_knowledge     — text, batch, URL, path or refresh ingest</span>
+<span class="co">#   graph_retrieve       — point-in-time graph query</span>
+<span class="co">#   update_fact          — write or correct a fact in the dynamic graph</span>
+<span class="co">#   share_project        — generate a read-only share</span>
+<span class="co">#   list_shares          — issued and received shares, with validity</span>
+<span class="co">#   extend_share         — renew or clear a share's expiry</span>
+<span class="co"># Destructive and store-admin operations stay human-only (CLI / REPL / REST).</span>
             </div>
 
             <div class="codes-panel" id="tab-langchain">
@@ -2649,7 +2650,7 @@ $ curl -X POST localhost:8000/graph/retrieve \
 <span class="ck">from</span> axon <span class="ck">import</span> AxonBrain, AxonConfig
 <span class="ck">from</span> axon.integrations.langchain <span class="ck">import</span> AxonRetriever
 
-brain = <span class="cf">AxonBrain</span>(AxonConfig.from_yaml(<span class="cs">"config.yaml"</span>))
+brain = <span class="cf">AxonBrain</span>(AxonConfig.<span class="cf">load</span>())
 retriever = <span class="cf">AxonRetriever</span>(brain=brain, top_k=<span class="cs">5</span>)
 
 <span class="co"># Drop into any LangChain chain that takes a Retriever:</span>
@@ -2670,7 +2671,7 @@ docs = retriever.<span class="cf">with_overrides</span>({"<span class="ck">hyde<
 <span class="ck">from</span> llama_index.core <span class="ck">import</span> VectorStoreIndex
 <span class="ck">from</span> llama_index.core.query_engine <span class="ck">import</span> RetrieverQueryEngine
 
-brain = <span class="cf">AxonBrain</span>(AxonConfig.from_yaml(<span class="cs">"config.yaml"</span>))
+brain = <span class="cf">AxonBrain</span>(AxonConfig.<span class="cf">load</span>())
 retriever = <span class="cf">AxonLlamaRetriever</span>(brain=brain, top_k=<span class="cs">5</span>)
 
 <span class="co"># Drop into any LlamaIndex query engine:</span>
@@ -2684,14 +2685,16 @@ nodes  = retriever.<span class="cf">retrieve</span>(<span class="cs">"What does 
 
             <div class="codes-panel" id="tab-python">
 <span class="co"># pip install axon-rag</span>
+<span class="ck">import</span> asyncio
 <span class="ck">from</span> axon <span class="ck">import</span> AxonBrain, AxonConfig
 
-<span class="co"># Bring your own config or load from YAML</span>
-cfg = <span class="cf">AxonConfig</span>.from_yaml(<span class="cs">"config.yaml"</span>)
+<span class="co"># ~/.config/axon/config.yaml, or AxonConfig.load("path.yaml")</span>
+cfg = <span class="cf">AxonConfig</span>.<span class="cf">load</span>()
 brain = <span class="cf">AxonBrain</span>(cfg)
 
-<span class="co"># Ingest a directory (sync) or kick off an async job</span>
-brain.<span class="cf">ingest_path</span>(<span class="cs">"~/research/papers"</span>)
+<span class="co"># Ingest a directory (async), or a list of documents directly</span>
+asyncio.<span class="cf">run</span>(brain.<span class="cf">load_directory</span>(<span class="cs">"./research/papers"</span>))
+brain.<span class="cf">ingest</span>([{"<span class="ck">id</span>": <span class="cs">"note-1"</span>, "<span class="ck">text</span>": <span class="cs">"Alice leads Globex."</span>, "<span class="ck">metadata</span>": {"<span class="ck">source</span>": <span class="cs">"notes"</span>}}])
 
 <span class="co"># Full RAG query — returns the LLM-synthesised answer string</span>
 answer = brain.<span class="cf">query</span>(
@@ -2724,13 +2727,13 @@ results, diagnostics, trace = brain.<span class="cf">search_raw</span>(
         <div class="ipath featured reveal">
             <div class="ipath-tag">Bundle <span class="ip-rec">★ Recommended · sealed-ready</span></div>
             <div class="ipath-name">axon-rag<span class="ip-pkg">[starter]</span></div>
-            <div class="ipath-desc"><strong>Sealed sharing on by default</strong> — AES-256-GCM + OS-keyring ready out of the box. Plus Streamlit UI and extra loaders (EPUB / RTF / .msg).</div>
-            <div class="ipath-deps">cryptography · keyring · streamlit</div>
+            <div class="ipath-desc"><strong>Sealed sharing on by default</strong> — AES-256-GCM + OS-keyring ready out of the box. Plus extra loaders (EPUB / RTF / .msg). The web GUI ships with <code>axon-api</code> in every install.</div>
+            <div class="ipath-deps">cryptography · keyring · ebooklib · striprtf · extract-msg</div>
         </div>
         <div class="ipath reveal" style="transition-delay:0.05s">
             <div class="ipath-tag">Minimal</div>
             <div class="ipath-name">axon-rag</div>
-            <div class="ipath-desc">Bare engine only — TurboQuantDB + BM25 + Ollama. <em>No sealed sharing, no UI.</em> Add <code>[sealed]</code> separately if you skip the bundle.</div>
+            <div class="ipath-desc">The engine — FastEmbed + TurboQuantDB + BM25 + Ollama, plus the REST API and web GUI. <em>No sealed sharing.</em> Add <code>[sealed]</code> separately if you skip the bundle.</div>
             <div class="ipath-deps">turboquantdb · ollama-py</div>
         </div>
         <div class="ipath reveal" style="transition-delay:0.1s">

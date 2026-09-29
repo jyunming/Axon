@@ -151,7 +151,7 @@ eval = [
     "deepeval>=0.21.0",
 ]
 sealed = [
-    # Phase 1 of the sealed-mount design (docs/SHARE_MOUNT_SEALED.md):
+    # Phase 1 of the sealed-mount design (docs/architecture/SEALED_SHARING_DESIGN.md):
     # cryptography ships AES-256-GCM, AES-KW (RFC 3394/5649), and HKDF-SHA256
     # natively and is well-audited. keyring abstracts DPAPI / Keychain /
     # Secret Service for the owner master key + grantee per-share DEK.
@@ -193,9 +193,9 @@ dev = [
     "pytest>=7.4.0,<8.0.0",
     "pytest-asyncio>=0.21.0,<1.0.0",
     "pytest-cov>=4.1.0,<5.0.0",
-    # v0.3.2 developer-experience: pre-commit pytest hook uses --testmon to
-    # skip tests whose dependencies haven't changed since the last green run.
-    # Local-only — CI keeps running the full suite. See DEVELOPMENT.md.
+    # Optional local selective runs (`pytest --testmon`). The pre-commit hook
+    # itself uses scripts/precommit_pytest_scoped.py; CI runs the full suite.
+    # See CONTRIBUTING.md.
     "pytest-testmon>=2.1.0,<3.0.0",
     "black==23.12.1",
     "ruff>=0.1.0,<1.0.0",
@@ -242,13 +242,9 @@ Homepage = "https://github.com/jyunming/Axon"
 Repository = "https://github.com/jyunming/Axon"
 Documentation = "https://github.com/jyunming/Axon/tree/main/docs"
 "Getting Started" = "https://github.com/jyunming/Axon/blob/main/docs/GETTING_STARTED.md"
-"Setup Guide" = "https://github.com/jyunming/Axon/blob/main/docs/SETUP.md"
-"API Reference" = "https://github.com/jyunming/Axon/blob/main/docs/API_REFERENCE.md"
-"MCP Tools" = "https://github.com/jyunming/Axon/blob/main/docs/MCP_TOOLS.md"
-"Advanced RAG" = "https://github.com/jyunming/Axon/blob/main/docs/ADVANCED_RAG.md"
-"Offline Guide" = "https://github.com/jyunming/Axon/blob/main/docs/OFFLINE_GUIDE.md"
-"Code RAG Guide" = "https://github.com/jyunming/Axon/blob/main/docs/CODE_RAG_GUIDE.md"
-"AxonStore Guide" = "https://github.com/jyunming/Axon/blob/main/docs/AXON_STORE.md"
+"Reference" = "https://github.com/jyunming/Axon/blob/main/docs/REFERENCE.md"
+"Sharing Guide" = "https://github.com/jyunming/Axon/blob/main/docs/SHARING.md"
+"Troubleshooting" = "https://github.com/jyunming/Axon/blob/main/docs/TROUBLESHOOTING.md"
 "Issue Tracker" = "https://github.com/jyunming/Axon/issues"
 "Release Notes" = "https://github.com/jyunming/Axon/releases"
 Security = "https://github.com/jyunming/Axon/blob/main/SECURITY.md"

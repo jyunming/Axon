@@ -1,7 +1,7 @@
 """Pydantic models for the dynamic (temporal) graph data layer.
 
 These models mirror the SQLite schema defined in
-``docs/DYNAMIC_GRAPH_ROADMAP.md`` (branch: ``docs/dynamic-graph-design``),
+``docs/architecture/DYNAMIC_GRAPH_ROADMAP.md`` (branch: ``docs/dynamic-graph-design``),
 which in turn follows Graphiti's bi-temporal data model:
   Episode  →  source_chunk_id, content, reference_time
   Entity   →  canonical_name, first_seen_at, last_seen_at

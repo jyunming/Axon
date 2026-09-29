@@ -11,7 +11,7 @@
 # CI; Nextcloud's WebDAV semantics are isomorphic to OneDrive at the
 # file-level abstraction Axon cares about (eventual consistency,
 # conflict-copy generation, ETag-based change detection, two-writer
-# races). See docs/SHARE_MOUNT_SEALED_SMOKE.md for the rationale.
+# races). See tests/e2e_sync/README.md for the rationale.
 
 services:
   nextcloud:
