@@ -2333,3 +2333,33 @@ class TestReplIngestUrlAndText:
 
         assert "/ingest-text " in _SLASH_COMMANDS
         assert "/ingest-text" in _SLASH_CMD_DESC
+
+
+class TestReplIngestUrlAndTextRemoteBrain:
+    """A REPL attached to a live axon-api holds a RemoteBrain, whose
+    _assert_write_allowed always raises; the server enforces write access."""
+
+    @staticmethod
+    def _remote_brain():
+        from axon.remote_brain import RemoteBrain
+
+        brain = _make_mock_brain()
+        brain.__class__ = RemoteBrain
+        brain._assert_write_allowed.side_effect = NotImplementedError("remote")
+        brain.ingest.return_value = 1
+        return brain
+
+    def test_ingest_text_works_on_remote_brain(self):
+        brain = self._remote_brain()
+        output = _run_repl_with_commands(["/ingest-text hello remote"], brain=brain)
+        brain.ingest.assert_called_once()
+        assert "NotImplementedError" not in output
+
+    def test_ingest_url_works_on_remote_brain(self):
+        brain = self._remote_brain()
+        doc = {"id": "u", "text": "page", "metadata": {}}
+        with patch("axon.loaders.URLLoader") as loader:
+            loader.return_value.load.return_value = [doc]
+            output = _run_repl_with_commands(["/ingest https://example.com/p"], brain=brain)
+        brain.ingest.assert_called_once_with([doc])
+        assert "NotImplementedError" not in output

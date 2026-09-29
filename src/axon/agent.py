@@ -927,6 +927,14 @@ def _dedup_skip_message(subject: str, project: str) -> str:
     )
 
 
+def _assert_write_unless_remote(brain, op: str) -> None:
+    from axon.remote_brain import RemoteBrain
+
+    if isinstance(brain, RemoteBrain):
+        return  # the server enforces write access for a REPL attached to it
+    brain._assert_write_allowed(op)
+
+
 def _tool_add_text(brain, args: dict) -> str:
     import uuid
 
@@ -935,7 +943,7 @@ def _tool_add_text(brain, args: dict) -> str:
     project = args.get("project", "").strip()
     if project:
         brain.switch_project(project)
-    brain._assert_write_allowed("ingest")
+    _assert_write_unless_remote(brain, "ingest")
     text = args.get("text", "").strip()
     if not text:
         return "No text provided."
@@ -1142,7 +1150,7 @@ def _tool_ingest_url(brain, args: dict) -> str:
     project = args.get("project", "").strip()
     if project:
         brain.switch_project(project)
-    brain._assert_write_allowed("ingest")
+    _assert_write_unless_remote(brain, "ingest")
     try:
         docs = URLLoader().load(url)
     except Exception as exc:

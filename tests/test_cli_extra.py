@@ -2039,3 +2039,20 @@ class TestIngestUrlAndText:
         assert b1["url"] == "https://x.test" and b1["project"] == "p"
         assert (m2, u2) == ("POST", "http://h/add_text")
         assert b2["text"] == "t" and b2["doc_id"] == "s" and b2["project"] == "p"
+
+
+class TestIngestTextValidatedUpFront:
+    @pytest.mark.parametrize("text", ["", "   "])
+    def test_blank_text_fails_before_clear(self, brain, text):
+        code = run_cli("--clear", "--yes", "--ingest-text", text, "--local")
+        assert code == 1
+        brain.clear.assert_not_called()
+        brain.ingest.assert_not_called()
+
+    def test_text_is_stripped_before_the_server_call(self, brain):
+        server = {"project": "alpha", "_api_base": "http://127.0.0.1:8420"}
+        with patch("axon.server_client.detect_server", return_value=server):
+            with patch("axon.server_client.remote_project_switch"):
+                with patch("axon.server_client.remote_add_text", return_value={}) as rt:
+                    run_cli("--ingest-text", "  padded  ")
+        assert rt.call_args.args[1] == "padded"

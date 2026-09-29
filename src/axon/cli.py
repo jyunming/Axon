@@ -132,8 +132,8 @@ def _print_shares_listing(
 
 def _read_ingest_text(value: str) -> str:
     """Resolve ``--ingest-text``: ``-`` reads stdin, anything else is the text itself."""
-    text = sys.stdin.read() if value == "-" else value
-    if not text.strip():
+    text = (sys.stdin.read() if value == "-" else value).strip()
+    if not text:
         print("  Error: no text to ingest.")
         sys.exit(1)
     return text
@@ -214,9 +214,12 @@ def _run_via_server(server: dict, args, config) -> str:
         )
 
     if getattr(args, "ingest_text", None):
-        text = _read_ingest_text(args.ingest_text)
         result = sc.remote_add_text(
-            base, text, headers, project=active, source=getattr(args, "text_source", None)
+            base,
+            args.ingest_text,
+            headers,
+            project=active,
+            source=getattr(args, "text_source", None),
         )
         print(f"  Text {_remote_ingest_outcome(result)} (project '{active}').")
 
@@ -1206,6 +1209,9 @@ def main():
             + (f" --project {args.project}" if args.project else "")
         )
         sys.exit(2)
+    # Resolve --ingest-text (and read stdin for "-") once, before any side effect.
+    if args.ingest_text is not None:
+        args.ingest_text = _read_ingest_text(args.ingest_text)
     # Snapshot first-run filesystem state BEFORE any AxonConfig.load() call —
     # AxonConfig.load auto-creates the default config file, so a naive check
     # later in main() would always see the config present. _is_first_run
@@ -2402,7 +2408,7 @@ def main():
         print_ingest_result(
             _tool_add_text(
                 brain,
-                {"text": _read_ingest_text(args.ingest_text), "source": args.text_source or ""},
+                {"text": args.ingest_text, "source": args.text_source or ""},
             )
         )
     if args.list:
