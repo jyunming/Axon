@@ -500,8 +500,6 @@ _KNOWN_YAML_KEYS: dict[str, set[str]] = {
         "path",
         "qdrant_url",
         "qdrant_api_key",
-        "qdrant_collection",
-        "lancedb_path",
         "tqdb_bits",
         "tqdb_fast_mode",
         "tqdb_rerank",
@@ -575,7 +573,7 @@ _KNOWN_YAML_KEYS: dict[str, set[str]] = {
         "hf_models_dir",
         "tokenizer_cache_dir",
     },
-    "web_search": {"enabled", "brave_api_key", "num_results", "safe_search"},
+    "web_search": {"enabled", "brave_api_key", "num_results"},
     "store": {"base"},
     "repl": {"shell_passthrough"},
     "api": {"key", "allow_origins", "host", "port", "max_upload_bytes", "max_files_per_request"},
@@ -599,6 +597,67 @@ _KNOWN_YAML_KEYS: dict[str, set[str]] = {
         "seal_padding_bytes",
     },
 }
+
+
+# Providers that send prompts or text to a third-party cloud service. ``ollama``,
+# ``vllm`` and ``local`` are treated as on-premises (their base URL is the
+# operator's choice). ``copilot`` goes through VS Code to GitHub Copilot.
+_CLOUD_LLM_PROVIDERS = frozenset(
+    {"gemini", "ollama_cloud", "openai", "grok", "copilot", "github_copilot"}
+)
+_CLOUD_EMBEDDING_PROVIDERS = frozenset({"openai"})
+
+
+class OfflineModeError(RuntimeError):
+    """A cloud provider was selected while ``offline.enabled`` is on."""
+
+
+def offline_violations(
+    cfg: "AxonConfig",
+    *,
+    llm_provider: str | None = None,
+    embedding_provider: str | None = None,
+    only: Literal["llm", "embedding"] | None = None,
+) -> list[str]:
+    """Messages for every cloud provider that offline mode forbids (empty when fine).
+
+    ``llm_provider`` / ``embedding_provider`` test a provider about to be switched
+    to, without mutating *cfg*; ``only`` restricts the check to one side. Only a real ``offline_mode is True`` counts, so a
+    duck-typed config never trips it.
+    """
+    if getattr(cfg, "offline_mode", False) is not True:
+        return []
+    problems: list[str] = []
+    llm = llm_provider or cfg.llm_provider
+    emb = embedding_provider or cfg.embedding_provider
+    if only != "embedding" and llm in _CLOUD_LLM_PROVIDERS:
+        problems.append(
+            f"offline mode is on but llm.provider is '{llm}', which calls a cloud service"
+        )
+    if only != "llm" and emb in _CLOUD_EMBEDDING_PROVIDERS:
+        problems.append(
+            f"offline mode is on but embedding.provider is '{emb}', which calls a cloud service"
+        )
+    return problems
+
+
+def enforce_offline_mode(
+    cfg: "AxonConfig",
+    *,
+    llm_provider: str | None = None,
+    embedding_provider: str | None = None,
+    only: Literal["llm", "embedding"] | None = None,
+) -> None:
+    """Raise :class:`OfflineModeError` if offline mode forbids the provider(s)."""
+    problems = offline_violations(
+        cfg, llm_provider=llm_provider, embedding_provider=embedding_provider, only=only
+    )
+    if problems:
+        raise OfflineModeError(
+            "; ".join(problems)
+            + ". Use ollama, vllm or local for the LLM and fastembed, sentence_transformers "
+            "or ollama for embeddings, or set offline.enabled: false."
+        )
 
 
 @dataclass
@@ -1257,6 +1316,10 @@ class AxonConfig:
             vs = data["vector_store"]
             if "provider" in vs:
                 config_dict["vector_store"] = vs["provider"]
+            if "qdrant_url" in vs:
+                config_dict["qdrant_url"] = vs["qdrant_url"]
+            if "qdrant_api_key" in vs:
+                config_dict["qdrant_api_key"] = vs["qdrant_api_key"]
             if "tqdb_bits" in vs:
                 config_dict["tqdb_bits"] = int(vs["tqdb_bits"])
             if "tqdb_fast_mode" in vs:
@@ -1456,9 +1519,6 @@ class AxonConfig:
         env_vllm = os.getenv("VLLM_BASE_URL")
         if env_vllm:
             config_dict["vllm_base_url"] = env_vllm
-        env_projects_root = os.getenv("AXON_PROJECTS_ROOT")
-        if env_projects_root:
-            config_dict["projects_root"] = env_projects_root
         env_ollama_models = os.getenv("OLLAMA_MODELS")
         if env_ollama_models:
             config_dict["ollama_models_dir"] = env_ollama_models
@@ -1881,6 +1941,20 @@ class AxonConfig:
                         "Set rag.graph_rag_depth: light for regex extraction (no LLM calls), "
                         "or rag.graph_rag_ner_backend: gliner, or point llm.local_base_url at "
                         "a faster model."
+                    ),
+                )
+            )
+        for _msg in offline_violations(cfg):
+            issues.append(
+                ConfigIssue(
+                    level="error",
+                    section="offline",
+                    field="enabled",
+                    message=_msg[0].upper() + _msg[1:] + "; Axon refuses to start this way.",
+                    suggestion=(
+                        "Pick a local provider (ollama, vllm, local; fastembed, "
+                        "sentence_transformers or ollama for embeddings), or set "
+                        "offline.enabled: false."
                     ),
                 )
             )

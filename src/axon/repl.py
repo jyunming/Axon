@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 
 from axon.cli import _print_project_tree, _print_shares_listing  # noqa: E402
-from axon.config import llm_provider_choices  # noqa: E402
+from axon.config import llm_provider_choices, offline_violations  # noqa: E402
 from axon.embeddings import OpenEmbedding  # noqa: E402
 from axon.llm import OpenLLM, _copilot_device_flow, _fetch_copilot_models  # noqa: E402
 from axon.rerank import OpenReranker  # noqa: E402
@@ -2871,6 +2871,10 @@ def _interactive_repl(
                         print(
                             f"    Unknown provider '{provider}'. Choose from: {', '.join(_PROVIDERS)}"
                         )
+                    elif offline_violations(brain.config, llm_provider=provider, only="llm"):
+                        print(
+                            f"    Blocked: offline mode is on and '{provider}' is a cloud provider."
+                        )
                     else:
                         brain.config.llm_provider = provider
                         brain.config.llm_model = model
@@ -2884,11 +2888,16 @@ def _interactive_repl(
                             _prompt_key_if_missing(provider, brain)
                 else:
                     inferred = _infer_provider(arg)
-                    brain.config.llm_provider = inferred
-                    brain.config.llm_model = arg
-                    brain.llm = OpenLLM(brain.config)
-                    print(f"    Switched LLM to {inferred}/{arg}")
-                    _prompt_key_if_missing(inferred, brain)
+                    if offline_violations(brain.config, llm_provider=inferred, only="llm"):
+                        print(
+                            f"    Blocked: offline mode is on and '{inferred}' is a cloud provider."
+                        )
+                    else:
+                        brain.config.llm_provider = inferred
+                        brain.config.llm_model = arg
+                        brain.llm = OpenLLM(brain.config)
+                        print(f"    Switched LLM to {inferred}/{arg}")
+                        _prompt_key_if_missing(inferred, brain)
             elif cmd == "/vllm-url":
                 if not arg:
                     print(f"    Current vLLM base URL: {brain.config.vllm_base_url}")
@@ -2934,12 +2943,21 @@ def _interactive_repl(
                     print("      /embed fastembed/BAAI/bge-small-en")
                     print("    !  Changing embedding model invalidates existing indexed documents.")
                 else:
+                    _embed_blocked = False
                     if "/" in arg:
                         provider, model = arg.split("/", 1)
                         if provider not in _EMBED_PROVIDERS:
                             # Could be a path like /home/user/model — treat as local st path
                             provider = brain.config.embedding_provider
                             model = arg
+                        elif offline_violations(
+                            brain.config, embedding_provider=provider, only="embedding"
+                        ):
+                            print(
+                                f"    Blocked: offline mode is on and '{provider}' "
+                                "is a cloud provider."
+                            )
+                            _embed_blocked = True
                         else:
                             brain.config.embedding_provider = provider
                             brain.config.embedding_model = model
@@ -2947,15 +2965,18 @@ def _interactive_repl(
                         provider = brain.config.embedding_provider
                         model = arg
                         brain.config.embedding_model = model
-                    try:
-                        print("    ⠿ Loading embedding model…", end="", flush=True)
-                        brain.embedding = OpenEmbedding(brain.config)
-                        print(
-                            f"\r    Embedding switched to {brain.config.embedding_provider}/{brain.config.embedding_model}"
-                        )
-                        print("    Re-ingest your documents so they use the new embedding model.")
-                    except Exception as e:
-                        print(f"\r    Failed to load embedding: {e}")
+                    if not _embed_blocked:
+                        try:
+                            print("    ⠿ Loading embedding model…", end="", flush=True)
+                            brain.embedding = OpenEmbedding(brain.config)
+                            print(
+                                f"\r    Embedding switched to {brain.config.embedding_provider}/{brain.config.embedding_model}"
+                            )
+                            print(
+                                "    Re-ingest your documents so they use the new embedding model."
+                            )
+                        except Exception as e:
+                            print(f"\r    Failed to load embedding: {e}")
             elif cmd == "/pull":
                 if not arg:
                     print("    Usage: /pull <model-name>")

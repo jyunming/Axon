@@ -46,7 +46,6 @@ Each OS user gets a namespace under {axon_store_base}/AxonStore/{username}/ cont
 import hashlib
 import json
 import logging
-import os
 import re
 import shutil
 import uuid
@@ -59,10 +58,7 @@ logger = logging.getLogger(__name__)
 
 
 def _resolve_projects_root() -> Path:
-    """Return the projects root, honouring AXON_PROJECTS_ROOT if set."""
-    env = os.environ.get("AXON_PROJECTS_ROOT")
-    if env:
-        return Path(env).expanduser()
+    """Return the default projects root (``AxonBrain`` overrides it from the AxonStore layout)."""
     return Path.home() / ".axon" / "projects"
 
 
@@ -74,7 +70,7 @@ _ACTIVE_FILE: Path = Path.home() / ".axon" / ".active_project"
 
 def set_projects_root(path: str | Path) -> None:
     """Override PROJECTS_ROOT at runtime (call before any project operations).
-    Priority order: explicit call here > AXON_PROJECTS_ROOT env var > default.
+    Priority order: explicit call here > default.
     Used by AxonBrain to apply the projects_root from config.yaml.
     """
     global PROJECTS_ROOT

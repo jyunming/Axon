@@ -80,27 +80,15 @@ they aren't lost; fixing them is a separate decision from this doc.
 - **Registry overclaims REPL/CLI ingest.** `surface_contract.py` lists REPL and
   CLI for `ingest_url` and `ingest_text`, but `/ingest` and `--ingest` only
   accept paths (a URL matches no loader and is skipped).
-- **YAML keys accepted by validation but never loaded:** `vector_store.qdrant_url`,
-  `vector_store.qdrant_api_key`, `vector_store.qdrant_collection`,
-  `vector_store.lancedb_path` and `web_search.safe_search` are in
-  `_KNOWN_YAML_KEYS`, but `load()` does not map them (only top-level
-  `qdrant_url` / `qdrant_api_key` work; the other two have no field).
 - **`api.key` loads into the legacy OpenAI-key alias `api_key`**, not REST
   authentication (`RAG_API_KEY` env var), and `save()` writes that alias back
   under `api.key`.
 - **`AXON_CACHE_DIR` is documented in `security/cache.py` but not read.** The
   sealed cache uses `tempfile.gettempdir()` (`TEMP` / `TMPDIR`).
-- **`AXON_PROJECTS_ROOT` is effectively ignored**: `load()` and `projects.py`
-  read it, but `AxonConfig.__post_init__` and `AxonBrain` reset the projects
-  root to the AxonStore layout.
 - **Project fast path can use the legacy root.** Observed (not root-caused):
   `axon --config <file with a custom store.base> --project-new N --local`, with
   `AXON_STORE_BASE` set, created `~/.axon/projects/N` — the no-brain fast path
   calls `projects.ensure_project` without `set_projects_root()`.
-- **`offline.enabled` doesn't restrict providers.** It locks HuggingFace
-  downloads and turns off web search, RAPTOR and GraphRAG, but a cloud
-  `llm.provider` or `embedding.provider: openai` still calls out; no validation
-  warning.
 - **`axon --doctor` checks Ollama even when the provider is a cloud one**
   (advisory warnings only).
 - **`--migrate-vectors` migrates Chroma to LanceDB only**, not to the default
@@ -338,7 +326,7 @@ Role: Defines `AxonConfig`, the single flat dataclass (~162 fields) that every e
 
 - `AxonConfig` (dataclass, ~162 fields) — central runtime configuration for embeddings, LLM providers, vector store/TQDB tuning, chunking, hybrid/rerank retrieval, RAPTOR, GraphRAG (33 knobs — the switches, backend choices, and levers TROUBLESHOOTING.md names; internal tuning constants live in `axon/graph_defaults.py` instead — see `_DEMOTED_GRAPH_TUNING` below), offline mode, security/keyring/seal settings, API limits — `config.py:625`
   - `AxonConfig.__post_init__()` — populates API keys/URLs from env vars (OPENAI_API_KEY, XAI_API_KEY, GEMINI_API_KEY, OLLAMA_CLOUD_KEY, VLLM_BASE_URL, etc.), derives `axon_store_base`/`projects_root`/`vector_store_path`/`bm25_path` from the AxonStore layout — `config.py:737`
-  - `AxonConfig.load(path=None)` (classmethod) — loads `~/.config/axon/config.yaml` (or an explicit path), auto-writes `_DEFAULT_CONFIG_YAML` on first run (via the shared `_atomic_persist.write_text_if_changed()` helper — see Infra), flattens nested YAML sections onto dataclass field names, applies high-priority env var overrides (OLLAMA_HOST, VLLM_BASE_URL, AXON_PROJECTS_ROOT, OLLAMA_MODELS), logs a warning (via `_REMOVED_FIELDS`) for any key that names a field removed in a past release, never raises on missing/malformed file — `config.py:1202`
+  - `AxonConfig.load(path=None)` (classmethod) — loads `~/.config/axon/config.yaml` (or an explicit path), auto-writes `_DEFAULT_CONFIG_YAML` on first run (via the shared `_atomic_persist.write_text_if_changed()` helper — see Infra), flattens nested YAML sections onto dataclass field names, applies high-priority env var overrides (OLLAMA_HOST, VLLM_BASE_URL, OLLAMA_MODELS), logs a warning (via `_REMOVED_FIELDS`) for any key that names a field removed in a past release, never raises on missing/malformed file — `config.py:1202`
   - `AxonConfig.save(path=None)` — persists config back to structured YAML via the shared `_atomic_persist.write_text_if_changed()` helper (atomic rename; skips the write entirely when content is unchanged); hand-maps ~85 renamed fields (e.g. `llm_provider`→`llm.provider`) then a "completion pass" (`_unsaved_field_names()`) dumps every remaining field verbatim under `rag:` so nothing silently reverts to its default; refuses to write into the system temp dir (guards against tests clobbering the real user config) — `config.py:1467`
   - `AxonConfig.validate(path=None)` (classmethod) — non-raising 3-pass validator: (1) structural — unknown YAML keys vs `_KNOWN_YAML_KEYS` unioned with `_derived_yaml_keys()` (see below), with `_REMOVED_FIELDS` keys reported as "no longer valid" (not a typo suggestion) and `difflib` close-match suggestions for genuine typos; (2) semantic — enum/range checks (`chunk_strategy`, `graph_rag_mode`, `graph_rag_depth`, `graph_backend`, `query_router`, `top_k`, `similarity_threshold`, `sentence_window_size`), missing-API-key warnings per provider, a slow-local-LLM+GraphRAG warning, and cloud-sync-unsafe-path warnings via `axon.paths.cloud_sync_path_reason`; (3) store health — AxonStore base/`store_meta.json` existence and env/config-base conflict detection. Returns `list[ConfigIssue]` — `config.py:1658`
 - `ConfigIssue(level, section, field, message, suggestion)` (dataclass) — one validation finding; `level` is `"error"|"warn"|"info"` — `config.py:605`

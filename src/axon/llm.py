@@ -25,7 +25,7 @@ try:
 except PackageNotFoundError:
     _AXON_VERSION = "0.0.0+dev"
 
-from axon.config import AxonConfig
+from axon.config import AxonConfig, enforce_offline_mode
 
 logger = logging.getLogger("Axon")
 
@@ -345,6 +345,7 @@ class OpenLLM:
     """
 
     def __init__(self, config: AxonConfig):
+        enforce_offline_mode(config, only="llm")
         self.config = config
         self._openai_clients: dict = {}
         # Guards every read/write of _openai_clients below. AxonBrain (and

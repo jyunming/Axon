@@ -255,8 +255,8 @@ The GitHub Copilot OAuth token (field `copilot_pat`) comes from `GITHUB_COPILOT_
 | `vector_store.tqdb_n_refinements` | `null` | HNSW refinement passes (null = TQDB default, 5) |
 | `vector_store.tqdb_hybrid` | `false` | TQDB-side BM25 + dense fusion |
 | `vector_store.tqdb_hybrid_weight` | `0.5` | Dense weight in that fusion |
-| `qdrant_url` (top level) | `""` | Qdrant server URL; empty = local file mode |
-| `qdrant_api_key` (top level) | `""` | Qdrant API key |
+| `vector_store.qdrant_url` (or top-level `qdrant_url`) | `""` | Qdrant server URL; empty = local file mode |
+| `vector_store.qdrant_api_key` (or top-level `qdrant_api_key`) | `""` | Qdrant API key |
 
 Storage paths are always derived from the store (`<store>/AxonStore/<user>/<project>/`);
 `vector_store.path` and `bm25.path` in a config file are ignored. TurboQuantDB presets:
@@ -466,7 +466,6 @@ Code-retrieval fields (`code_graph`, `code_graph_bridge`, `code_lexical_boost`,
 | `GITHUB_COPILOT_PAT` (`GITHUB_TOKEN`) | engine | OAuth token for `github_copilot` |
 | `BRAVE_API_KEY` | engine | Brave Search key |
 | `AXON_STORE_BASE` | engine | Store root; beats `store.base` |
-| `AXON_PROJECTS_ROOT` | engine | Directory holding the projects (maps to `projects_root`) |
 | `AXON_CONFIG_PATH` | `axon-api` | Config file for the server |
 | `AXON_HOST`, `AXON_PORT` | `axon-api` | Bind host and port |
 | `RAG_API_KEY` | `axon-api`, `axon-mcp` | Require (server) / send (client) the `X-API-Key` header |
@@ -1730,8 +1729,10 @@ Two switches, both under `offline:`:
 | `offline.enabled: true` | Sets `TRANSFORMERS_OFFLINE`, `HF_HUB_OFFLINE`, `HF_DATASETS_OFFLINE`; turns off web search; resolves model names to local folders | Turned off for the session |
 | `offline.local_assets_only: true` | The same HuggingFace lock-down and model resolution, plus a start-up check that fails if a model is missing | Stay on (they use your local LLM) |
 
-Neither switch changes your LLM provider — for no egress, keep `llm.provider` on `ollama`,
-`local` or `vllm` and the embedding provider off `openai`. Vector stores other than a remote
+`offline.enabled: true` refuses to start with a cloud provider: `llm.provider` must be
+`ollama`, `local` or `vllm`, and `embedding.provider` must not be `openai`. `axon
+--config-validate` reports it as an error, and `--provider`, `/model`, `/embed` and
+`POST /config/set` are refused the same way. `local_assets_only` leaves your providers alone. Vector stores other than a remote
 Qdrant are local. `dynamic_graph` projects are local SQLite files; their extraction uses the
 configured (local) LLM.
 

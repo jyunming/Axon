@@ -549,11 +549,8 @@ class TestSetProjectsRoot:
 
         _p.set_projects_root(tmp_path / "projects")
 
-    def test_projects_root_env_var_applied_at_module_load(self, tmp_path, monkeypatch):
-        """AXON_PROJECTS_ROOT is read by _resolve_projects_root at import time;
-
-
-        verify set_projects_root applies the same path so env-var behaviour is consistent."""
+    def test_projects_root_override_applies_to_project_dir(self, tmp_path, monkeypatch):
+        """project_dir() resolves under whatever PROJECTS_ROOT is set to."""
 
         import axon.projects as _p
 
@@ -1033,16 +1030,14 @@ import pytest
 
 
 class TestResolveProjectsRoot:
-    def test_env_var_overrides_default(self, tmp_path, monkeypatch):
-        """AXON_PROJECTS_ROOT env var is honored (line 49)."""
+    def test_env_var_is_ignored(self, tmp_path, monkeypatch):
+        """AXON_PROJECTS_ROOT was removed: the root comes from the AxonStore layout."""
 
         monkeypatch.setenv("AXON_PROJECTS_ROOT", str(tmp_path))
 
         import axon.projects as proj_mod
 
-        result = proj_mod._resolve_projects_root()
-
-        assert result == tmp_path
+        assert proj_mod._resolve_projects_root() != tmp_path
 
 
 # ---------------------------------------------------------------------------

@@ -26,6 +26,24 @@
   tab-completes, and `/help rag` gives the real `topk` range (1-50).
 - **`.env.example` lists only variables Axon reads**, with the right default port
   (8420).
+- **`vector_store.qdrant_url` and `vector_store.qdrant_api_key` in `config.yaml`
+  now load** (the top-level keys still work). `vector_store.qdrant_collection`,
+  `vector_store.lancedb_path` and `web_search.safe_search` were accepted by
+  validation but never read; they are now reported as unknown keys.
+
+### Changed
+
+- **Offline mode now refuses cloud providers.** With `offline.enabled: true`,
+  `llm.provider` of `openai`, `gemini`, `grok`, `ollama_cloud`, `copilot` or
+  `github_copilot`, or `embedding.provider: openai`, stops start-up with a clear
+  error (`axon --config-validate` reports it too). `--provider`, REPL `/model`
+  and `/embed`, and `POST /config/set` refuse the switch without changing the
+  running config. Previously these silently called out to the cloud.
+
+### Removed
+
+- **`AXON_PROJECTS_ROOT` is removed.** It was read but then overridden by the
+  AxonStore layout, so it never had an effect. Use `AXON_STORE_BASE`.
 
 ## [0.5.0] - 2026-09-29
 
