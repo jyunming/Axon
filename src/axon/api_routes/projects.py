@@ -110,6 +110,15 @@ async def update_config(request: ConfigUpdateRequest):
     reinit_llm = "llm_provider" in update_data or "llm_model" in update_data
     reinit_embed = "embedding_provider" in update_data or "embedding_model" in update_data
     reinit_rerank = "reranker_model" in update_data
+    from axon.config import offline_violations
+
+    _blocked = offline_violations(
+        brain.config,
+        llm_provider=update_data.get("llm_provider") if reinit_llm else None,
+        embedding_provider=update_data.get("embedding_provider") if reinit_embed else None,
+    )
+    if _blocked:
+        raise HTTPException(status_code=400, detail="; ".join(_blocked) + ". Nothing was applied.")
     # Only keys this endpoint actually models are applied. Extras are accepted by
     # the schema purely so they can be reported rather than vanishing.
     _declared = set(ConfigUpdateRequest.model_fields)

@@ -255,7 +255,7 @@ The GitHub Copilot OAuth token (field `copilot_pat`) comes from `GITHUB_COPILOT_
 | `vector_store.tqdb_n_refinements` | `null` | HNSW refinement passes (null = TQDB default, 5) |
 | `vector_store.tqdb_hybrid` | `false` | TQDB-side BM25 + dense fusion |
 | `vector_store.tqdb_hybrid_weight` | `0.5` | Dense weight in that fusion |
-| `vector_store.qdrant_url` (or top-level `qdrant_url`) | `""` | Qdrant server URL; empty = local file mode |
+| `vector_store.qdrant_url` (or top-level `qdrant_url`) | `""` | Qdrant server URL; empty = local file mode. The top-level key wins if both are set |
 | `vector_store.qdrant_api_key` (or top-level `qdrant_api_key`) | `""` | Qdrant API key |
 
 Storage paths are always derived from the store (`<store>/AxonStore/<user>/<project>/`);
@@ -1732,8 +1732,9 @@ Two switches, both under `offline:`:
 `offline.enabled: true` refuses to start with a cloud provider: `llm.provider` must be
 `ollama`, `local` or `vllm`, and `embedding.provider` must not be `openai`. `axon
 --config-validate` reports it as an error, and `--provider`, `/model`, `/embed` and
-`POST /config/set` are refused the same way. `local_assets_only` leaves your providers alone. Vector stores other than a remote
-Qdrant are local. `dynamic_graph` projects are local SQLite files; their extraction uses the
+`POST /config/set` / `POST /config/update` are refused the same way (nothing is changed), and
+turning `offline.enabled` on while a cloud provider is active is refused too.
+`local_assets_only` leaves your providers alone. Vector stores other than a remote Qdrant are local. `dynamic_graph` projects are local SQLite files; their extraction uses the
 configured (local) LLM.
 
 At start-up Axon logs a model audit — `[local]`, `[hf_cache]`, `[remote]`, `[MISSING]` or

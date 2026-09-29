@@ -37,8 +37,9 @@
   `llm.provider` of `openai`, `gemini`, `grok`, `ollama_cloud`, `copilot` or
   `github_copilot`, or `embedding.provider: openai`, stops start-up with a clear
   error (`axon --config-validate` reports it too). `--provider`, REPL `/model`
-  and `/embed`, and `POST /config/set` refuse the switch without changing the
-  running config. Previously these silently called out to the cloud.
+  and `/embed`, `POST /config/set` and `POST /config/update` refuse the switch
+  without changing the running config, and turning `offline.enabled` on while a
+  cloud provider is active is refused too. Previously these silently called out to the cloud.
 
 ### Removed
 

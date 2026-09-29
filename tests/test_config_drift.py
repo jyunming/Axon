@@ -154,3 +154,77 @@ class TestOfflineEnforcedWhereProvidersAreBuilt:
     def test_validate_is_quiet_for_a_local_setup(self, tmp_path):
         path = _write(tmp_path, "offline:\n  enabled: true\nllm:\n  provider: ollama\n")
         assert not [i for i in AxonConfig.validate(path) if i.section == "offline"]
+
+
+class TestOfflineTruthiness:
+    @pytest.mark.parametrize("value", ["true", 1, "yes"])
+    def test_non_bool_truthy_offline_still_enforced(self, value):
+        cfg = AxonConfig()
+        cfg.offline_mode = value
+        cfg.llm_provider = "openai"
+        assert offline_violations(cfg)
+
+    @pytest.mark.parametrize("value", [False, 0, ""])
+    def test_falsy_offline_never_blocks(self, value):
+        cfg = AxonConfig()
+        cfg.offline_mode = value
+        cfg.llm_provider = "openai"
+        assert offline_violations(cfg) == []
+
+
+class TestOfflineApiRoutes:
+    @pytest.fixture
+    def offline_client(self):
+        from fastapi.testclient import TestClient
+
+        import axon.api as api_module
+
+        brain = MagicMock()
+        brain.config = AxonConfig()
+        brain.config.offline_mode = True
+        brain.config.llm_provider = "ollama"
+        original = api_module.brain
+        api_module.brain = brain
+        yield TestClient(api_module.app, raise_server_exceptions=False), brain
+        api_module.brain = original
+
+    def test_config_update_refuses_cloud_provider_without_mutating(self, offline_client):
+        c, brain = offline_client
+        r = c.post("/config/update", json={"llm_provider": "openai"})
+        assert r.status_code == 400
+        assert brain.config.llm_provider == "ollama"
+
+    def test_config_update_allows_local_provider(self, offline_client):
+        c, brain = offline_client
+        r = c.post("/config/update", json={"llm_provider": "vllm", "persist": False})
+        assert r.status_code == 200
+        assert brain.config.llm_provider == "vllm"
+
+    def test_enabling_offline_with_cloud_provider_rolls_back(self, offline_client):
+        c, brain = offline_client
+        brain.config.offline_mode = False
+        brain.config.llm_provider = "gemini"
+        r = c.post("/config/set", json={"key": "offline.enabled", "value": True, "persist": False})
+        assert r.status_code == 400
+        assert brain.config.offline_mode is False
+
+    def test_enabling_offline_with_local_provider_succeeds(self, offline_client):
+        c, brain = offline_client
+        brain.config.offline_mode = False
+        r = c.post("/config/set", json={"key": "offline.enabled", "value": True, "persist": False})
+        assert r.status_code == 200
+        assert brain.config.offline_mode is True
+
+
+class TestCliOfflineError:
+    def test_cli_exits_cleanly_instead_of_traceback(self, tmp_path, monkeypatch, capsys):
+        import sys
+
+        from axon import cli
+
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text("offline:\n  enabled: true\nllm:\n  provider: openai\n", encoding="utf-8")
+        monkeypatch.setattr(sys, "argv", ["axon", "--config", str(cfg), "hello"])
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+        assert exc.value.code == 1
