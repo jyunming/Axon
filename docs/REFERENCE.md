@@ -588,7 +588,7 @@ without a question opens the REPL afterwards.
 |---|---|
 | `"question"` | Answer one question and exit |
 | `--stream` | Stream the answer token by token |
-| `--dry-run` | Retrieval only, no LLM: print diagnostics and ranked chunks (needs a question; in-process only — with a server running add `--local`). In this release the query is embedded as a zero vector, so add `--threshold 0` to see results — see [Troubleshooting](TROUBLESHOOTING.md#axon---dry-run-prints-0-chunks) |
+| `--dry-run` | Retrieval only, no LLM: print diagnostics and ranked chunks (needs a question; in-process only — with a server running add `--local`). |
 | `--cite` / `--no-cite` | Inline `[Document N]` citations |
 | `--discuss` / `--no-discuss` | General-knowledge fallback when nothing matches |
 | `--search` / `--no-search` | Brave web fallback (needs `BRAVE_API_KEY`) |

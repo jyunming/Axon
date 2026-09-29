@@ -1427,6 +1427,14 @@ class TestMainDryRun:
         run_cli("--dry-run", "what is axon?")
         brain.search_raw.assert_called_once_with("what is axon?")
 
+    def test_dry_run_does_not_zero_the_query_embedding(self, brain, monkeypatch):
+        monkeypatch.delenv("AXON_DRY_RUN", raising=False)
+        brain.search_raw.return_value = self._make_result()
+        run_cli("--dry-run", "what is axon?")
+        import os
+
+        assert not os.getenv("AXON_DRY_RUN")
+
     def test_dry_run_does_not_call_query(self, brain):
         brain.search_raw.return_value = self._make_result()
         run_cli("--dry-run", "what is axon?")

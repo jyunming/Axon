@@ -170,14 +170,6 @@ are set. `api.key` in `config.yaml` is only a legacy alias for the OpenAI key.
 
 ## Ingest and retrieval
 
-### `axon --dry-run` prints 0 chunks
-
-In this release the `--dry-run` CLI flag also replaces query embeddings with zero vectors,
-so every dense score is 0 and the default `similarity_threshold` (0.3) filters everything.
-Add `--threshold 0` to see the ranking (it will be driven by BM25), or check retrieval
-without an LLM through `axon-api`: `POST /search`, or `POST /query` with `"dry_run": true`,
-which embed normally. `axon --list` confirms what was ingested.
-
 ### A question finds nothing although the document is there
 
 - Check `axon --list` and that you are in the right project (`/project list`).

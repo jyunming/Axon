@@ -78,11 +78,6 @@ they aren't lost; fixing them is a separate decision from this doc.
 
 *Found while consolidating the docs (0.5.0 PR7a):*
 
-- **`axon --dry-run` returns no chunks by default.** The CLI sets
-  `AXON_DRY_RUN=1`, which makes `OpenEmbedding.embed()` return zero vectors, so
-  every dense score is 0 and the default `similarity_threshold` (compared
-  against `vector_score`) filters everything; with `--threshold 0` the ranking
-  is BM25-only. `POST /query {"dry_run": true}` and `/search` embed normally.
 - **The CLI's sealed-store flags can't complete a sealed workflow.** The master
   key is cached per process (`master._unlocked_masters`) and each `--store-*`
   flag exits, so `--project-seal`, `--share-generate` on a sealed project and
