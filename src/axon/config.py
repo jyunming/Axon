@@ -621,6 +621,13 @@ class ConfigIssue:
         }
 
 
+def llm_provider_choices() -> list[str]:
+    """Every provider ``AxonConfig.llm_provider`` accepts (its Literal)."""
+    import typing
+
+    return list(typing.get_args(AxonConfig.__dataclass_fields__["llm_provider"].type))
+
+
 @dataclass
 class AxonConfig:
     """Configuration for Axon."""

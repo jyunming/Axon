@@ -73,13 +73,10 @@ they aren't lost; fixing them is a separate decision from this doc.
 
 *Found while consolidating the docs (0.5.0 PR7a):*
 
-- **`--non-interactive` does not stop the REPL.** It only feeds
-  `_entering_repl`; `axon --ingest DIR --non-interactive` still opens the REPL
-  afterwards.
-- **`--model` overrides `--provider`.** A bare `--model` name re-infers the
-  provider (`gemini-*`, `gpt-*`/`o*`, else `ollama`), and the `provider/model`
-  prefix list in `cli.py` omits `grok` and `copilot`; the REPL's `/model` list
-  also omits `local`.
+- **A bare `--model` name still re-infers the provider** (`gemini-*`,
+  `gpt-*`/`o*`, else `ollama`) when `--provider` is not given, in both the CLI
+  and the REPL's `/model` (`_infer_provider`). An explicit `--provider` is now
+  honoured literally.
 - **Registry overclaims REPL/CLI ingest.** `surface_contract.py` lists REPL and
   CLI for `ingest_url` and `ingest_text`, but `/ingest` and `--ingest` only
   accept paths (a URL matches no loader and is skipped).
@@ -108,15 +105,6 @@ they aren't lost; fixing them is a separate decision from this doc.
   (advisory warnings only).
 - **`--migrate-vectors` migrates Chroma to LanceDB only**, not to the default
   TurboQuantDB; `--optimize-index` does real work only on LanceDB.
-- **REPL command metadata drift.** `_SLASH_CMD_DESC` describes `/keys` as
-  "Show keyboard shortcuts", `/pull` as "Fetch and ingest from a URL", `/search`
-  as "Toggle semantic search mode" and `/context` as "Show or clear attached
-  context files"; `/passphrase` works but is missing from `_SLASH_COMMANDS`
-  (no Tab completion); `/help rag` says `topk` 1–20 where the handler allows 1–50.
-- **`.env.example` is stale.** It sets `AXON_PORT=8000` (the default is 8420),
-  keeps Streamlit settings, and lists `OLLAMA_MODEL`, `OLLAMA_EMBED_MODEL`,
-  `CHROMA_DATA_PATH`, `BM25_INDEX_PATH` and `LOG_LEVEL`, none of which Axon
-  reads.
 
 *Resolved since the 2026-08-28 audit:* `self.llm.generate()` didn't exist, so
 LLM route classification and contextual retrieval silently did nothing — both

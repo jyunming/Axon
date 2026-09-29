@@ -696,7 +696,7 @@ see [Sharing](SHARING.md#owner-1).
 | `--config PATH` | Use another config file |
 | `--config-validate`, `--config-reset` | See [section 3](#3-configuration) |
 | `--quiet` / `-q` | No spinners (automatic when stdin is not a terminal) |
-| `--non-interactive` | Skip the first-run wizard and start-up animation |
+| `--non-interactive` | Skip the first-run wizard and start-up animation, and exit after the one-shot action instead of opening the REPL |
 | `--version` | Print the version |
 | `axon update [-y]` | Upgrade (a subcommand, not a flag — see [section 1](#upgrading)) |
 

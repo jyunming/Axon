@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
 
 from axon.cli import _print_project_tree, _print_shares_listing  # noqa: E402
+from axon.config import llm_provider_choices  # noqa: E402
 from axon.embeddings import OpenEmbedding  # noqa: E402
 from axon.llm import OpenLLM, _copilot_device_flow, _fetch_copilot_models  # noqa: E402
 from axon.rerank import OpenReranker  # noqa: E402
@@ -55,6 +56,7 @@ _SLASH_COMMANDS = [
     "/local-url ",
     "/model ",
     "/mount-refresh",
+    "/passphrase ",
     "/project ",
     "/pull ",
     "/quit",
@@ -77,7 +79,7 @@ _SLASH_CMD_DESC: dict[str, str] = {
     "/clear": "Wipe the current project's knowledge base (asks to confirm)",
     "/compact": "Summarize and compact chat history",
     "/config": "Show current configuration",
-    "/context": "Show or clear attached context files",
+    "/context": "Show the context window: token usage, settings, history, sources",
     "/debug": "Toggle verbose debug logging on/off",
     "/discuss": "Toggle discussion fallback mode",
     "/embed": "Switch embedding model",
@@ -86,20 +88,21 @@ _SLASH_CMD_DESC: dict[str, str] = {
     "/graph-viz": "Open graph visualisation in browser",
     "/help": "Show all commands",
     "/ingest": "Ingest a file or directory into the knowledge base",
-    "/keys": "Show keyboard shortcuts",
+    "/keys": "Show or set provider API keys",
     "/list": "List indexed documents",
     "/llm": "Adjust LLM parameters (e.g. temperature)",
     "/local-url": "Set or ping the local OpenAI-compatible LLM endpoint",
     "/model": "Switch LLM model",
     "/mount-refresh": "Refresh a sealed mount from the owner's latest version",
+    "/passphrase": "Generate a Diceware passphrase",
     "/project": "Switch or manage project namespaces",
-    "/pull": "Fetch and ingest from a URL",
+    "/pull": "Pull an Ollama model",
     "/quit": "Exit Axon",
     "/rag": "Toggle RAG flags (hybrid / rerank / hyde / graph)",
     "/refresh": "Re-ingest files that have changed",
     "/resume": "Resume a previous session",
     "/retry": "Retry the last query",
-    "/search": "Toggle semantic search mode",
+    "/search": "Toggle Brave web-search fallback",
     "/sessions": "List saved sessions",
     "/share": "Share a project or manage share keys",
     "/stale": "Show documents not refreshed recently",
@@ -2613,7 +2616,7 @@ def _interactive_repl(
                         "    /llm temperature <0.0–2.0>   set generation temperature\n"
                         "    Lower temperature = more deterministic; higher = more creative.",
                         "rag": "    /rag                         show all RAG settings\n"
-                        "    /rag topk <n>                results to retrieve (1–20)\n"
+                        "    /rag topk <n>                results to retrieve (1–50)\n"
                         "    /rag threshold <0.0–1.0>     min similarity score\n"
                         "    /rag hybrid                  toggle hybrid BM25+vector\n"
                         "    /rag rerank                  toggle cross-encoder reranker\n"
@@ -2748,7 +2751,7 @@ def _interactive_repl(
                         "    /graph [sub]    graph status, finalize, retrieve, fact updates, viz export\n"
                         "    /help [cmd]     show this help or details for a command\n"
                         "    /ingest <path>  ingest a file, directory, or glob\n"
-                        "    /keys           show/set API keys (gemini, openai, brave, ollama_cloud)\n"
+                        "    /keys           show/set API keys (gemini, openai, brave, ollama_cloud, github_copilot)\n"
                         "    /list           list ingested documents\n"
                         "    /llm [opt val]  show or set LLM settings (temperature)\n"
                         "    /model [model]  show or switch LLM model\n"
@@ -2846,14 +2849,7 @@ def _interactive_repl(
                                     skipped += 1
                         print(f"    Done — {ingested} ingested, {skipped} skipped.")
             elif cmd == "/model":
-                _PROVIDERS = (
-                    "ollama",
-                    "gemini",
-                    "openai",
-                    "ollama_cloud",
-                    "vllm",
-                    "github_copilot",
-                )
+                _PROVIDERS = llm_provider_choices()
                 if not arg:
                     print(f"    LLM:       {brain.config.llm_provider}/{brain.config.llm_model}")
                     print(
