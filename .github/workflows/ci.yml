@@ -1,8 +1,10 @@
 name: CI
 
 on:
+  # Every change reaches main through a PR that already ran this suite, so main
+  # itself is not re-tested after the merge (it could not block anything then).
   push:
-    branches: [main, master, develop]
+    branches: [master, develop]
     # Skip CI for pure Markdown/docs-only pushes — they can't break tests.
     # NOTE: index.html is NOT ignored — scripts/audit_packaging.py inspects
     # the landing page version strings, so a website-only version bump
@@ -13,14 +15,40 @@ on:
     paths-ignore:
       - '**.md'
       - 'docs/**'
-  pull_request:  # all PRs, regardless of target branch
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
+  # All PRs, regardless of target branch. No workflow-level paths-ignore here: a
+  # docs-only PR must still report the "CI gate" check (branch protection requires
+  # it), so the docs-only skip is decided inside the `changes` job instead.
+  pull_request:
 
 jobs:
+  changes:
+    name: Detect code changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Same rule as the push trigger's paths-ignore: only *.md and docs/** are skippable.
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only "$BASE_SHA"..."$HEAD_SHA" | grep -qvE '(\.md$|^docs/)'; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+
   test:
     name: Test (${{ matrix.os }}, py${{ matrix.python-version }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -121,6 +149,8 @@ jobs:
           fail_ci_if_error: false
 
   docker:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -139,3 +169,20 @@ jobs:
     - name: Test Docker image
       run: |
         docker run --rm local-axon:test axon --help
+
+  # The single check branch protection requires. Skipped jobs (docs-only PR) count as
+  # passing; a failed or cancelled test/docker job does not.
+  gate:
+    name: CI gate
+    needs: [changes, test, docker]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail if any required job failed or was cancelled
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "job results: $RESULTS"
+          case " $RESULTS " in
+            *" failure "*|*" cancelled "*) exit 1 ;;
+          esac
