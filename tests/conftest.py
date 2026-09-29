@@ -56,9 +56,8 @@ def tmp_path():
 def clear_dry_run_env():
     """Remove AXON_DRY_RUN between tests.
 
-    cli.py sets os.environ["AXON_DRY_RUN"] = "1" unconditionally when --dry-run
-    is passed.  Tests that call the CLI with --dry-run would otherwise poison
-    every subsequent test that checks os.getenv("AXON_DRY_RUN").
+    Guard: the variable makes embeddings return zero vectors, so a test that
+    sets it must not leak it into later tests that check os.getenv("AXON_DRY_RUN").
     """
     original = os.environ.pop("AXON_DRY_RUN", None)
     yield
