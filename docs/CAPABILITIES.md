@@ -66,6 +66,11 @@ they aren't lost; fixing them is a separate decision from this doc.
 - **Plaintext expiry allows 5 minutes of clock skew; sealed expiry is strict.**
   Intentional for now, but the two kinds disagree near the boundary.
 
+- **A half-synced (truncated) `.expiry` sidecar still destroys the grantee key.**
+  `_check_expiry_or_raise` maps `JSONDecodeError` to `ShareExpiredError`, which
+  callers auto-destroy on; only the `OSError` case is retryable. A sidecar that
+  is not valid UTF-8 raises a raw `UnicodeDecodeError` rather than a `SecurityError`.
+
 *Found while consolidating the docs (0.5.0 PR7a):*
 
 - **`--non-interactive` does not stop the REPL.** It only feeds
