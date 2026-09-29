@@ -11,7 +11,7 @@ import time
 from collections.abc import Callable
 from typing import Any, TypeVar
 
-from axon.config import AxonConfig
+from axon.config import AxonConfig, enforce_offline_mode
 
 logger = logging.getLogger("Axon")
 
@@ -178,6 +178,7 @@ class OpenEmbedding:
     """
 
     def __init__(self, config: AxonConfig):
+        enforce_offline_mode(config, only="embedding")
         self.config = config
         self.provider = config.embedding_provider
         self.model: Any = None
