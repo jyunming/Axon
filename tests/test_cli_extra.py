@@ -1298,6 +1298,12 @@ class TestMainListModels:
         assert "gemini" in out
         assert "openai" in out
 
+    def test_list_models_dry_run_skips_ollama(self, capsys):
+        with patch("ollama.list") as _list:
+            run_cli("--list-models", "--dry-run")
+        _list.assert_not_called()
+        assert "dry-run" in capsys.readouterr().out
+
     def test_list_models_returns_early_no_query(self, brain):
         with patch("ollama.list", return_value=MagicMock(models=[])):
             run_cli("--list-models")
@@ -1348,6 +1354,12 @@ class TestMainPull:
         with patch("ollama.pull", return_value=iter([chunk])):
             run_cli("--pull", "gemma:2b")
         assert "ready" in capsys.readouterr().out.lower()
+
+    def test_pull_dry_run_skips_ollama(self, capsys):
+        with patch("ollama.pull") as _pull:
+            run_cli("--pull", "gemma:2b", "--dry-run")
+        _pull.assert_not_called()
+        assert "dry-run" in capsys.readouterr().out
 
     def test_pull_returns_early_no_query(self, brain):
         chunk = MagicMock(status="done", total=0, completed=0)
@@ -1426,6 +1438,14 @@ class TestMainDryRun:
         brain.search_raw.return_value = self._make_result()
         run_cli("--dry-run", "what is axon?")
         brain.search_raw.assert_called_once_with("what is axon?")
+
+    def test_dry_run_does_not_zero_the_query_embedding(self, brain, monkeypatch):
+        monkeypatch.delenv("AXON_DRY_RUN", raising=False)
+        brain.search_raw.return_value = self._make_result()
+        run_cli("--dry-run", "what is axon?")
+        import os
+
+        assert not os.getenv("AXON_DRY_RUN")
 
     def test_dry_run_does_not_call_query(self, brain):
         brain.search_raw.return_value = self._make_result()

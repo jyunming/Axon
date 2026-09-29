@@ -256,6 +256,11 @@ never reaches. Nothing a default install can do was removed.
 
 ### 🐛 Fixes
 
+- **`axon --dry-run` returns ranked chunks again.** The flag also set
+  `AXON_DRY_RUN`, which made the query embed as a zero vector, so every dense
+  score was 0 and the default similarity threshold filtered everything. The
+  query is now embedded normally; only the LLM is skipped.
+
 - **`axon --provider` accepts every provider the config does.** The flag's
   choices had drifted from `AxonConfig.llm_provider` and rejected `copilot`
   and `grok`; they are now derived from it.

@@ -1495,7 +1495,7 @@ def main():
             "(set local_base_url in config or AXON_LOCAL_LLM_BASE_URL env)\n"
         )
         # use module-level os
-        if os.getenv("AXON_DRY_RUN"):
+        if os.getenv("AXON_DRY_RUN") or getattr(args, "dry_run", False):
             print("  (Ollama model listing skipped in dry-run mode)")
         else:
             try:
@@ -1518,7 +1518,7 @@ def main():
         return
     if args.pull:
         # use module-level os
-        if os.getenv("AXON_DRY_RUN"):
+        if os.getenv("AXON_DRY_RUN") or getattr(args, "dry_run", False):
             print(f"\n  Pull '{args.pull}' skipped in dry-run mode.\n")
         else:
             try:
@@ -2219,10 +2219,6 @@ def main():
         # If user requested dry-run, enable retrieval_dry_run in config so subsystems can skip LLM calls where supported
         if getattr(args, "dry_run", False):
             config.retrieval_dry_run = True
-            try:
-                os.environ["AXON_DRY_RUN"] = "1"
-            except Exception:
-                pass
         # Single-instance reuse: for the interactive REPL, reuse a running
         # axon-api server on the same store instead of building a second
         # in-process brain (which would race on the store files and re-load the
