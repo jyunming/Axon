@@ -668,10 +668,10 @@ without a question opens the REPL afterwards.
 | `--store-whoami` | Your store identity and path |
 | `--store-status` | Sealed-store state (initialised, unlocked, cipher suite) |
 | `--store-bootstrap PASSPHRASE` | One-time: create the sealed-store master key. **Losing the passphrase loses every sealed project** |
-| `--store-unlock PASSPHRASE`, `--store-lock` | Unlock / lock the master key **for this process** |
+| `--store-unlock PASSPHRASE`, `--store-lock` | Unlock / lock the master key **for this process** (so useful only inside a long-running process; one-shot sealed commands prompt for the passphrase themselves) |
 | `--store-change-passphrase OLD NEW` | Re-wrap the master key (project keys are untouched) |
 | `--passphrase-generate [--passphrase-words N]` | Print a Diceware passphrase (4–12 words, default 6 ≈ 77 bits) |
-| `--project-seal NAME` | Encrypt a project at rest (needs an unlocked store in the same process — see [Sharing](SHARING.md#sealed-sharing-onedrive--dropbox--google-drive)) |
+| `--project-seal NAME` | Encrypt a project at rest; prompts for the store passphrase (see [Sharing](SHARING.md#sealed-sharing-onedrive--dropbox--google-drive)) |
 | `--keyring-mode MODE`, `--seal-cache-ephemeral`, `--wipe-sealed-cache` | Per-process overrides of the `security:` settings; wipe the plaintext cache |
 | `--share-list` | Shares you issued and received |
 | `--share-generate PROJECT GRANTEE [--share-ttl-days N]` | Issue a read-only share (sealed automatically for sealed projects) |
@@ -681,10 +681,11 @@ without a question opens the REPL afterwards.
 | `--mount-refresh [MOUNT]` | Re-read a mounted share's latest version |
 
 The master key is unlocked per process and every one of these flags runs in its own
-process, so `--project-seal`, `--share-generate` for a sealed project and `--share-rotate`
-fail with *Store … is locked*. Do those steps in one REPL session (`/store unlock`, then
-`/project seal`, `/share generate`, `/share revoke … --rotate`) or against an unlocked
-`axon-api` — see [Sharing](SHARING.md#owner-1).
+process, so `--project-seal`, `--share-generate` for a sealed project and a hard
+`--share-revoke --share-rotate` ask for the store passphrase on the terminal when the store is initialised
+and locked. With no terminal (piped stdin, a script) they cannot prompt and fail with
+*Store … is locked*; use a REPL session (`/store unlock`) or an unlocked `axon-api` there —
+see [Sharing](SHARING.md#owner-1).
 
 ### 6.7 Setup and diagnostics
 

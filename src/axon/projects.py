@@ -490,14 +490,20 @@ def _project_entry(entry: Path, full_name: str, meta: dict) -> dict:
 
 
 def _list_sub_projects(parent_dir: Path, parent_name: str) -> list[dict]:
-    """Recursively list sub-project dicts under a parent directory."""
-    # NOTE: follows symlinked sub-project dirs (no loop guard) — pre-existing
-    # behaviour, tracked as a follow-up.
+    """Recursively list sub-project dicts under a parent directory.
+
+    Symlinked entries are skipped (as in :func:`list_descendants`) and the
+    recursion stops at ``_MAX_DEPTH`` levels, so a symlink or junction loop
+    under ``subs/`` cannot recurse without bound.
+    """
     from axon._dir_scan import iter_json_children
 
+    if parent_name.count("/") + 1 >= _MAX_DEPTH:
+        return []
     result = [
         _project_entry(entry, f"{parent_name}/{entry.name}", meta)
         for entry, meta in iter_json_children(parent_dir / "subs", "meta.json", on_error="empty")
+        if not entry.is_symlink()
     ]
     result.sort(key=lambda p: str(p["created_at"]), reverse=True)
     return result

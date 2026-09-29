@@ -1266,6 +1266,54 @@ class TestListDescendantsV2:
 
 
 class TestListSubProjects:
+    def test_symlink_loop_under_subs_terminates(self, tmp_path):
+        """A subs/ entry that symlinks back to an ancestor is skipped, not recursed."""
+        from axon.projects import _list_sub_projects
+
+        parent = tmp_path / "parent"
+        subs = parent / "subs"
+        real = subs / "real"
+        real.mkdir(parents=True)
+        (real / "meta.json").write_text(json.dumps({}))
+        try:
+            (real / "subs").mkdir()
+            (real / "subs" / "loop").symlink_to(parent, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks not supported here")
+
+        result = _list_sub_projects(parent, "parent")
+
+        assert [p["name"] for p in result] == ["parent/real"]
+        assert result[0]["children"] == []
+
+    def test_symlinked_sub_project_is_skipped(self, tmp_path, monkeypatch):
+        """Runs without symlink privileges: the entry is reported as a symlink."""
+        from pathlib import Path
+
+        from axon.projects import _list_sub_projects
+
+        parent = tmp_path / "parent"
+        for name in ("real", "alias"):
+            (parent / "subs" / name).mkdir(parents=True)
+            (parent / "subs" / name / "meta.json").write_text(json.dumps({}))
+        real_is_symlink = Path.is_symlink
+        monkeypatch.setattr(
+            Path, "is_symlink", lambda self: self.name == "alias" or real_is_symlink(self)
+        )
+
+        assert [p["name"] for p in _list_sub_projects(parent, "parent")] == ["parent/real"]
+
+    def test_recursion_stops_at_max_depth(self, tmp_path):
+        from axon.projects import _MAX_DEPTH, _list_sub_projects
+
+        # A parent already at _MAX_DEPTH segments cannot have listed children.
+        deepest = "/".join(f"p{i}" for i in range(_MAX_DEPTH))
+        sub = tmp_path / "subs" / "too_deep"
+        sub.mkdir(parents=True)
+        (sub / "meta.json").write_text(json.dumps({}))
+
+        assert _list_sub_projects(tmp_path, deepest) == []
+
     def test_non_dir_entries_skipped(self, tmp_path):
         """Non-directory entries in subs/ are skipped (line 362)."""
 

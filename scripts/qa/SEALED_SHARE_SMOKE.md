@@ -62,8 +62,8 @@ axon --store-init "C:\Users\alice\OneDrive"
 axon --store-bootstrap "owner-passphrase-PLEASE-USE-A-REAL-ONE"
 axon --project-new research
 axon --project research --ingest "C:\path\to\some\docs"
-axon --project-seal research
-axon --store-status   # confirm: initialized=True, unlocked=True
+axon --project-seal research     # prompts for the store passphrase
+axon --store-status   # confirm: initialized=True (unlocked=False: the key lives only in the process that unlocked it)
 ```
 
 **Expect:** `Project 'research': sealed (N files)`. Inspect on disk:
@@ -271,7 +271,7 @@ axon --store-init "C:\Users\alice\OneDrive"
 axon --store-bootstrap "choose-a-strong-passphrase"
 axon --project-new research
 axon --project research --ingest "C:\path\to\some\docs"
-axon --project-seal research
+axon --project-seal research     # prompts for the store passphrase
 axon --store-status
 ```
 
