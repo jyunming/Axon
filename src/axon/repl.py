@@ -50,6 +50,7 @@ _SLASH_COMMANDS = [
     "/graph-viz",
     "/help",
     "/ingest ",
+    "/ingest-text ",
     "/keys",
     "/list",
     "/llm ",
@@ -87,7 +88,8 @@ _SLASH_CMD_DESC: dict[str, str] = {
     "/graph": "GraphRAG operations (build / query / export)",
     "/graph-viz": "Open graph visualisation in browser",
     "/help": "Show all commands",
-    "/ingest": "Ingest a file or directory into the knowledge base",
+    "/ingest": "Ingest a file, directory or http(s):// URL into the knowledge base",
+    "/ingest-text": "Ingest raw text as one document",
     "/keys": "Show or set provider API keys",
     "/list": "List indexed documents",
     "/llm": "Adjust LLM parameters (e.g. temperature)",
@@ -2611,7 +2613,9 @@ def _interactive_repl(
                         "    !  Re-ingest after changing embedding model.",
                         "ingest": "    /ingest <path>              ingest a directory\n"
                         "    /ingest ./src/*.py           glob pattern\n"
-                        "    /ingest ./notes/**/*.md      recursive glob",
+                        "    /ingest ./notes/**/*.md      recursive glob\n"
+                        "    /ingest https://example.com  fetch and ingest a web page\n"
+                        "    /ingest-text [--source NAME] <text>  ingest raw text as one document",
                         "llm": "    /llm                         show LLM settings (provider, model, temperature)\n"
                         "    /llm temperature <0.0–2.0>   set generation temperature\n"
                         "    Lower temperature = more deterministic; higher = more creative.",
@@ -2750,7 +2754,8 @@ def _interactive_repl(
                         "    /embed [model]  show or switch embedding model\n"
                         "    /graph [sub]    graph status, finalize, retrieve, fact updates, viz export\n"
                         "    /help [cmd]     show this help or details for a command\n"
-                        "    /ingest <path>  ingest a file, directory, or glob\n"
+                        "    /ingest <path>  ingest a file, directory, glob, or http(s):// URL\n"
+                        "    /ingest-text [--source NAME] <text>  ingest raw text\n"
                         "    /keys           show/set API keys (gemini, openai, brave, ollama_cloud, github_copilot)\n"
                         "    /list           list ingested documents\n"
                         "    /llm [opt val]  show or set LLM settings (temperature)\n"
@@ -2788,9 +2793,25 @@ def _interactive_repl(
                     for d in docs:
                         print(f"    {d['source']:<60} {d['chunks']:>6}")
                     print()
+            elif cmd == "/ingest-text":
+                _text, _source = arg, ""
+                if _text.startswith("--source "):
+                    _parts = _text.split(None, 2)
+                    _source, _text = (_parts[1], _parts[2]) if len(_parts) == 3 else ("", "")
+                if not _text.strip():
+                    print("    Usage: /ingest-text [--source NAME] <text>")
+                else:
+                    from axon.agent import _tool_add_text, print_ingest_result
+
+                    print_ingest_result(
+                        _tool_add_text(brain, {"text": _text, "source": _source}), "    "
+                    )
             elif cmd == "/ingest":
                 if not arg:
-                    print("    Usage: /ingest <path|glob>  e.g. /ingest ./docs  /ingest ./src/*.py")
+                    print(
+                        "    Usage: /ingest <path|glob|url>  "
+                        "e.g. /ingest ./docs  /ingest ./src/*.py  /ingest https://example.com"
+                    )
                 else:
                     from axon.projects import ensure_project
 
@@ -2818,11 +2839,16 @@ def _interactive_repl(
                             print("\n    Cancelled project check.")
                     import glob as _glob
 
-                    from axon.loaders import DirectoryLoader
-
                     # Expand glob pattern; fallback to literal path
-                    matched = sorted(_glob.glob(arg, recursive=True))
-                    if not matched:
+                    from axon.loaders import DirectoryLoader, is_http_url
+
+                    _is_url = is_http_url(arg)
+                    matched = [] if _is_url else sorted(_glob.glob(arg, recursive=True))
+                    if _is_url:
+                        from axon.agent import _tool_ingest_url, print_ingest_result
+
+                        print_ingest_result(_tool_ingest_url(brain, {"url": arg.strip()}), "    ")
+                    elif not matched:
                         # No glob match — try as plain directory
                         if Path(arg).is_dir():
                             matched = [arg]

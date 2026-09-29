@@ -251,6 +251,33 @@ def remote_ingest(
             )
 
 
+def remote_ingest_url(
+    base: str, url: str, headers: dict[str, str], *, project: str | None = None
+) -> dict:
+    """Fetch and ingest *url* through the running server (``POST /ingest_url``)."""
+    body: dict = {"url": url}
+    if project:
+        body["project"] = project
+    return _request("POST", f"{base}/ingest_url", headers, body)
+
+
+def remote_add_text(
+    base: str,
+    text: str,
+    headers: dict[str, str],
+    *,
+    project: str | None = None,
+    source: str | None = None,
+) -> dict:
+    """Ingest raw *text* through the running server (``POST /add_text``)."""
+    body: dict = {"text": text}
+    if source:
+        body["doc_id"] = source
+    if project:
+        body["project"] = project
+    return _request("POST", f"{base}/add_text", headers, body)
+
+
 # --- server store lock (singleton guard) ---------------------------------
 # A per-store lockfile records which axon-api process currently serves a
 # store. A second axon-api on the SAME store (e.g. :8420 and :9100 both

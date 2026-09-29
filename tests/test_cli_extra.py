@@ -1946,3 +1946,121 @@ class TestCliConfigReset:
         assert code == 0
         assert "Config reset to defaults" in capsys.readouterr().out
         assert not list(target.parent.glob(target.name + "*.tmp"))
+
+
+# ---------------------------------------------------------------------------
+# --ingest <url> / --ingest-text
+# ---------------------------------------------------------------------------
+
+
+def _patch_url_loader():
+    # patch.object on the sys.modules entry: on Python 3.10, patch("axon.loaders.X")
+    # resolves via the package attribute, which can be stale after other tests reload it.
+    import importlib
+
+    return patch.object(importlib.import_module("axon.loaders"), "URLLoader")
+
+
+class TestIngestUrlAndText:
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            ("http://a.b", True),
+            ("https://a.b/c?d=1", True),
+            (" HTTPS://A.B", True),
+            ("ftp://a.b", False),
+            ("./docs", False),
+            ("C:\\docs\\http.txt", False),
+            ("", False),
+        ],
+    )
+    def test_is_http_url(self, value, expected):
+        from axon.loaders import is_http_url
+
+        assert is_http_url(value) is expected
+
+    def test_ingest_url_locally_uses_url_loader(self, brain, capsys):
+        doc = {"id": "u", "text": "page", "metadata": {"source": "https://x.test"}}
+        brain.ingest.return_value = 3
+        with _patch_url_loader() as loader:
+            loader.return_value.load.return_value = [doc]
+            code = run_cli("--ingest", "https://x.test", "--local")
+        assert code == 0
+        loader.return_value.load.assert_called_once_with("https://x.test")
+        brain.ingest.assert_called_once_with([doc])
+
+    def test_ingest_text_locally(self, brain):
+        brain.ingest.return_value = 1
+        code = run_cli("--ingest-text", "hello world", "--text-source", "note1", "--local")
+        assert code == 0
+        (docs,), _ = brain.ingest.call_args
+        assert docs and "hello world" in docs[0]["text"]
+        assert docs[0]["metadata"]["source"] == "note1"
+
+    def test_ingest_text_reads_stdin(self, brain):
+        brain.ingest.return_value = 1
+        with patch("sys.stdin", io.StringIO("from stdin")):
+            run_cli("--ingest-text", "-", "--local")
+        (docs,), _ = brain.ingest.call_args
+        assert "from stdin" in docs[0]["text"]
+
+    def test_ingest_text_empty_is_an_error(self, brain):
+        code = run_cli("--ingest-text", "   ", "--local")
+        assert code == 1
+        brain.ingest.assert_not_called()
+
+    def test_server_routes_url_to_ingest_url(self, brain):
+        server = {"project": "alpha", "_api_base": "http://127.0.0.1:8420"}
+        with patch("axon.server_client.detect_server", return_value=server):
+            with patch("axon.server_client.remote_project_switch"):
+                with patch(
+                    "axon.server_client.remote_ingest_url", return_value={"status": "ingested"}
+                ) as ru:
+                    with patch("axon.server_client.remote_ingest") as rp:
+                        run_cli("--ingest", "https://x.test/p", "--project", "research")
+        ru.assert_called_once()
+        assert ru.call_args.args[1] == "https://x.test/p"
+        rp.assert_not_called()
+        brain.ingest.assert_not_called()
+
+    def test_server_routes_text_to_add_text(self, brain):
+        server = {"project": "alpha", "_api_base": "http://127.0.0.1:8420"}
+        with patch("axon.server_client.detect_server", return_value=server):
+            with patch("axon.server_client.remote_project_switch"):
+                with patch(
+                    "axon.server_client.remote_add_text", return_value={"status": "skipped"}
+                ) as rt:
+                    run_cli("--ingest-text", "note", "--text-source", "n1", "--project", "research")
+        assert rt.call_args.args[1] == "note"
+        assert rt.call_args.kwargs["source"] == "n1"
+        brain.ingest.assert_not_called()
+
+    def test_server_client_request_bodies(self):
+        from axon import server_client as sc
+
+        with patch("axon.server_client._request", return_value={}) as req:
+            sc.remote_ingest_url("http://h", "https://x.test", {}, project="p")
+            sc.remote_add_text("http://h", "t", {}, project="p", source="s")
+        (m1, u1, _h1, b1), _ = req.call_args_list[0]
+        (m2, u2, _h2, b2), _ = req.call_args_list[1]
+        assert (m1, u1) == ("POST", "http://h/ingest_url")
+        assert b1["url"] == "https://x.test" and b1["project"] == "p"
+        assert (m2, u2) == ("POST", "http://h/add_text")
+        assert b2["text"] == "t" and b2["doc_id"] == "s" and b2["project"] == "p"
+
+
+class TestIngestTextValidatedUpFront:
+    @pytest.mark.parametrize("text", ["", "   "])
+    def test_blank_text_fails_before_clear(self, brain, text):
+        code = run_cli("--clear", "--yes", "--ingest-text", text, "--local")
+        assert code == 1
+        brain.clear.assert_not_called()
+        brain.ingest.assert_not_called()
+
+    def test_text_is_stripped_before_the_server_call(self, brain):
+        server = {"project": "alpha", "_api_base": "http://127.0.0.1:8420"}
+        with patch("axon.server_client.detect_server", return_value=server):
+            with patch("axon.server_client.remote_project_switch"):
+                with patch("axon.server_client.remote_add_text", return_value={}) as rt:
+                    run_cli("--ingest-text", "  padded  ")
+        assert rt.call_args.args[1] == "padded"
