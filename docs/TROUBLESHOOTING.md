@@ -426,7 +426,7 @@ The REPL needs `switch`: `/project switch mounts/owner_research`. On the CLI it 
 ### Sealing or a sealed share fails with "Store … is locked"
 
 The master key is unlocked per process, and each `axon --…` command is its own process.
-From a terminal, `axon --project-seal`, `--share-generate` and a sealed `--share-revoke`
+From a terminal, `axon --project-seal`, `--share-generate` and `--share-revoke --share-rotate`
 ask for the passphrase themselves. With no terminal (piped stdin, a script), unlock and seal /
 share in one REPL session (`/store unlock <passphrase>`, then `/project seal …`,
 `/share generate …`), or unlock a running `axon-api` with `POST /security/unlock`.

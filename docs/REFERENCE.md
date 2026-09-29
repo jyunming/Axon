@@ -681,8 +681,8 @@ without a question opens the REPL afterwards.
 | `--mount-refresh [MOUNT]` | Re-read a mounted share's latest version |
 
 The master key is unlocked per process and every one of these flags runs in its own
-process, so `--project-seal`, `--share-generate` for a sealed project and a sealed
-`--share-revoke` ask for the store passphrase on the terminal when the store is initialised
+process, so `--project-seal`, `--share-generate` for a sealed project and a hard
+`--share-revoke --share-rotate` ask for the store passphrase on the terminal when the store is initialised
 and locked. With no terminal (piped stdin, a script) they cannot prompt and fail with
 *Store … is locked*; use a REPL session (`/store unlock`) or an unlocked `axon-api` there —
 see [Sharing](SHARING.md#owner-1).

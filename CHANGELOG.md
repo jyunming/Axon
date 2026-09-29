@@ -5,7 +5,7 @@
 ### Fixed
 
 - **One-shot sealed CLI commands work.** `axon --project-seal`, `--share-generate`
-  on a sealed project and a sealed `--share-revoke` now prompt for the store
+  on a sealed project and a hard `--share-revoke --share-rotate` now prompt for the store
   passphrase on the terminal instead of failing with "Store … is locked" (the
   master key lives only in the process that unlocked it). Without a terminal they
   still fail with the locked error.

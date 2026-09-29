@@ -103,7 +103,7 @@ class TestCliCallsUnlock:
         assert code == 0
         assert order == ["unlock", "seal"]
 
-    def test_sealed_share_revoke_unlocks_first(self):
+    def test_sealed_hard_revoke_unlocks_first(self):
         from tests.test_cli_extra import run_cli
 
         order: list[str] = []
@@ -114,6 +114,32 @@ class TestCliCallsUnlock:
                 side_effect=lambda **k: order.append("revoke") or {},
             ),
         ):
-            code = run_cli("--share-revoke", "ssk_abc", "--share-project", "research")
+            code = run_cli(
+                "--share-revoke", "ssk_abc", "--share-project", "research", "--share-rotate"
+            )
         assert code == 0
         assert order == ["unlock", "revoke"]
+
+    def test_sealed_soft_revoke_does_not_prompt(self):
+        from tests.test_cli_extra import run_cli
+
+        with (
+            patch("axon.cli._ensure_store_unlocked") as unlock,
+            patch("axon.security.revoke_sealed_share", return_value={}),
+        ):
+            code = run_cli("--share-revoke", "ssk_abc", "--share-project", "research")
+        assert code == 0
+        unlock.assert_not_called()
+
+
+def test_ctrl_c_at_prompt_exits_cleanly(store, monkeypatch, capsys):
+    _tty(monkeypatch)
+
+    def _interrupt(prompt=""):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(getpass, "getpass", _interrupt)
+    with pytest.raises(SystemExit) as exc:
+        _ensure_store_unlocked(store)
+    assert exc.value.code == 1
+    assert "Cancelled" in capsys.readouterr().out

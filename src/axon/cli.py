@@ -79,7 +79,11 @@ def _ensure_store_unlocked(user_dir: Path) -> None:
         return
     import getpass as _gp
 
-    passphrase = _gp.getpass("  Sealed-store passphrase: ")
+    try:
+        passphrase = _gp.getpass("  Sealed-store passphrase: ")
+    except (EOFError, KeyboardInterrupt):
+        print("\n  Cancelled.")
+        sys.exit(1)
     try:
         _security.unlock_store(user_dir, passphrase)
     except _security.SecurityError as exc:
@@ -2134,7 +2138,8 @@ def main():
                     )
                     sys.exit(2)
                 rotate = bool(getattr(args, "share_rotate", False))
-                _ensure_store_unlocked(user_dir)
+                if rotate:
+                    _ensure_store_unlocked(user_dir)
                 try:
                     result = _security.revoke_sealed_share(
                         owner_user_dir=user_dir,
@@ -2758,7 +2763,8 @@ def main():
                 )
                 sys.exit(2)
             rotate = bool(getattr(args, "share_rotate", False))
-            _ensure_store_unlocked(user_dir)
+            if rotate:
+                _ensure_store_unlocked(user_dir)
             try:
                 result = _security.revoke_sealed_share(
                     owner_user_dir=user_dir,

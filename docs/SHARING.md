@@ -130,7 +130,7 @@ wrapped under your passphrase with scrypt. The wrapped master is kept in the OS 
 ### Owner
 
 Sealing and sealed share generation need the master key **unlocked in the same process**.
-`axon --project-seal`, `axon --share-generate` (sealed project) and a sealed `axon --share-revoke`
+`axon --project-seal`, `axon --share-generate` (sealed project) and `axon --share-revoke --share-rotate`
 prompt for the store passphrase on the terminal. `axon --store-unlock` unlocks only the
 process it runs in, so it does not help a later command. Without a terminal, seal in a REPL
 session (with no `axon-api` running), or against a running `axon-api` that you unlock over REST.
