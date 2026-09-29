@@ -12,7 +12,7 @@ account. Part of a three-tier strategy:
   Nextcloud-in-Docker. Covers true two-writer races, real
   ETag-based change detection, and eventual-consistency settle
   behaviour. Auto-skips when Docker is unavailable.
-- **Layer 3 (``docs/SHARE_MOUNT_SEALED_SMOKE.md``):** manual
+- **Layer 3 (``scripts/qa/SEALED_SHARE_SMOKE.md``):** manual
   pre-release smoke recipe on a real two-machine OneDrive setup.
   Covers OneDrive-specific failures (Files-On-Demand placeholder,
   Windows Explorer file lock, Microsoft Graph throttling at scale)

@@ -38,6 +38,102 @@ they aren't lost; fixing them is a separate decision from this doc.
   (some inverting a boolean) in the still-uncollapsed `graph_rag_*` surface.
   Source-documented, not independently re-verified here.
 
+*Dynamic graph and fact writes (0.5.0 PR5 follow-ups):*
+
+- **`upsert_fact` add mode duplicates a conflicted fact.** An identical triple
+  that already exists with status `conflicted` is not matched as "keep", so
+  adding it again creates a second, active copy.
+- **`upsert_fact` "unchanged" leaves the fact row's metadata alone.** The new
+  provenance / description is recorded on the evidence episode, not on the fact.
+- **The dynamic-graph schema migration treats any `user_version >= 1` as
+  migrated.** Safe today (nothing else sets it); a future schema bump must not
+  rely on it.
+- **`/query` does not consult the dynamic graph.** Facts written with
+  `update_fact` / `POST /graph/facts` are visible through `graph_retrieve` and
+  `/graph/retrieve` only (deferred to 1.0).
+- **`--graph-fact` (like `--delete-doc` / `--delete-doc-id`) builds a local
+  brain even when an `axon-api` is serving the store**, instead of routing
+  through it.
+- **CLI / REPL graph status never shows `dynamic_graph` fact-status counts.**
+- **REPL `/graph fact` splits on `|`**, so a subject, object or description
+  cannot contain a literal pipe.
+- **Deleting a document leaves superseded facts it produced in history.** A
+  deliberate choice for now (one `WHERE` clause to change) — a wrong document's
+  facts stay visible to point-in-time queries.
+
+*Share validity (0.5.0 PR6 follow-ups):*
+
+- **`_list_sub_projects` follows symlinks**, so a symlink loop under `subs/`
+  could recurse without bound.
+- **`redeem_sealed_share` accepts a share whose expiry has already passed.**
+  It fails on first use instead of at redeem.
+- **Plaintext expiry allows 5 minutes of clock skew; sealed expiry is strict.**
+  Intentional for now, but the two kinds disagree near the boundary.
+- **`get_grantee_dek` can auto-destroy on a transient read error.**
+  `share._check_expiry_or_raise` maps an `OSError` reading the `.expiry` sidecar
+  to `ShareExpiredError`, and callers auto-destroy on that. `share_status`
+  treats the same `OSError` as `unverifiable` — but a read that fails only on
+  the later `get_grantee_dek` call (cloud placeholder, sync in flight) still
+  wipes the grantee's key.
+
+*Found while consolidating the docs (0.5.0 PR7a):*
+
+- **`axon --dry-run` returns no chunks by default.** The CLI sets
+  `AXON_DRY_RUN=1`, which makes `OpenEmbedding.embed()` return zero vectors, so
+  every dense score is 0 and the default `similarity_threshold` (compared
+  against `vector_score`) filters everything; with `--threshold 0` the ranking
+  is BM25-only. `POST /query {"dry_run": true}` and `/search` embed normally.
+- **The CLI's sealed-store flags can't complete a sealed workflow.** The master
+  key is cached per process (`master._unlocked_masters`) and each `--store-*`
+  flag exits, so `--project-seal`, `--share-generate` on a sealed project and
+  `--share-rotate` always fail with "Store … is locked". The guides use the REPL
+  or an unlocked `axon-api`; `scripts/qa/SEALED_SHARE_SMOKE.md` step 1 still
+  uses the CLI flow.
+- **`--non-interactive` does not stop the REPL.** It only feeds
+  `_entering_repl`; `axon --ingest DIR --non-interactive` still opens the REPL
+  afterwards.
+- **`--model` overrides `--provider`.** A bare `--model` name re-infers the
+  provider (`gemini-*`, `gpt-*`/`o*`, else `ollama`), and the `provider/model`
+  prefix list in `cli.py` omits `grok` and `copilot`; the REPL's `/model` list
+  also omits `local`.
+- **Registry overclaims REPL/CLI ingest.** `surface_contract.py` lists REPL and
+  CLI for `ingest_url` and `ingest_text`, but `/ingest` and `--ingest` only
+  accept paths (a URL matches no loader and is skipped).
+- **YAML keys accepted by validation but never loaded:** `vector_store.qdrant_url`,
+  `vector_store.qdrant_api_key`, `vector_store.qdrant_collection`,
+  `vector_store.lancedb_path` and `web_search.safe_search` are in
+  `_KNOWN_YAML_KEYS`, but `load()` does not map them (only top-level
+  `qdrant_url` / `qdrant_api_key` work; the other two have no field).
+- **`api.key` loads into the legacy OpenAI-key alias `api_key`**, not REST
+  authentication (`RAG_API_KEY` env var), and `save()` writes that alias back
+  under `api.key`.
+- **`AXON_CACHE_DIR` is documented in `security/cache.py` but not read.** The
+  sealed cache uses `tempfile.gettempdir()` (`TEMP` / `TMPDIR`).
+- **`AXON_PROJECTS_ROOT` is effectively ignored**: `load()` and `projects.py`
+  read it, but `AxonConfig.__post_init__` and `AxonBrain` reset the projects
+  root to the AxonStore layout.
+- **Project fast path can use the legacy root.** Observed (not root-caused):
+  `axon --config <file with a custom store.base> --project-new N --local`, with
+  `AXON_STORE_BASE` set, created `~/.axon/projects/N` — the no-brain fast path
+  calls `projects.ensure_project` without `set_projects_root()`.
+- **`offline.enabled` doesn't restrict providers.** It locks HuggingFace
+  downloads and turns off web search, RAPTOR and GraphRAG, but a cloud
+  `llm.provider` or `embedding.provider: openai` still calls out; no validation
+  warning.
+- **`axon --doctor` checks Ollama even when the provider is a cloud one**
+  (advisory warnings only).
+- **`--migrate-vectors` migrates Chroma to LanceDB only**, not to the default
+  TurboQuantDB; `--optimize-index` does real work only on LanceDB.
+- **REPL command metadata drift.** `_SLASH_CMD_DESC` describes `/keys` as
+  "Show keyboard shortcuts", `/pull` as "Fetch and ingest from a URL", `/search`
+  as "Toggle semantic search mode" and `/context` as "Show or clear attached
+  context files"; `/passphrase` works but is missing from `_SLASH_COMMANDS`
+  (no Tab completion); `/help rag` says `topk` 1–20 where the handler allows 1–50.
+- **`.env.example` is stale.** It sets `AXON_PORT=8000` (the default is 8420),
+  keeps Streamlit settings, and lists `OLLAMA_MODEL`, `OLLAMA_EMBED_MODEL`,
+  `CHROMA_DATA_PATH`, `BM25_INDEX_PATH` and `LOG_LEVEL`, none of which Axon
+  reads.
+
 *Resolved since the 2026-08-28 audit:* `self.llm.generate()` didn't exist, so
 LLM route classification and contextual retrieval silently did nothing — both
 call sites now use `self.llm.complete()` (#156, `532ab0a`). `RemoteBrain.ingest()`

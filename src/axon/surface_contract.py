@@ -102,7 +102,7 @@ REGISTRY: list[Capability] = [
         description="Answer a question grounded in the current project knowledge base.",
         supported_surfaces=ALL_SURFACES,
         api_route="/query",
-        docs_targets=("API_REFERENCE.md", "QUICKREF.md"),
+        docs_targets=("REFERENCE.md",),
         test_targets=(
             "tests/test_api.py",
             "tests/test_repl_commands.py",

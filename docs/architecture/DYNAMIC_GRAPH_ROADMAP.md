@@ -32,7 +32,7 @@ backend — **Dynamic Graph** — for projects with evolving, timestamped knowle
 > when set, always wins over whatever backend the active project has stored.
 > It is never written to a project's `meta.json` and is explicitly rejected
 > by every project-creation surface. See `rag.graph_backend` in
-> `docs/ADMIN_REFERENCE.md` §6.8 for the full precedence rules.
+> `docs/REFERENCE.md` (config section) for the full precedence rules.
 
 ### Explicitly out of scope for v1
 
@@ -261,7 +261,7 @@ access of `_entity_graph` / `_relation_graph` / `_community_summaries` /
 - `/project/new`, `/project/list`, `/project/switch` return `graph_backend`
 - `DynamicGraphBackend` stub exists — returns empty status safely, no 500s
 - MCP tools `create_project`, `list_projects` updated with `graph_backend` field
-- Docs updated: `ADMIN_REFERENCE.md`, `API_REFERENCE.md`, `MCP_TOOLS.md`
+- Docs updated: `REFERENCE.md` (then `ADMIN_REFERENCE.md`, `API_REFERENCE.md`, `MCP_TOOLS.md`, since merged)
 
 **Tests:**
 - `meta.json` round-trip with and without `graph_backend`

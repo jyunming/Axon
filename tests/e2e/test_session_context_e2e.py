@@ -13,7 +13,7 @@ async def test_session_context_management(live_api_server, make_brain):
         # Verify session listing endpoint is reachable and returns expected shape.
         # The Axon session API exposes GET /sessions (list) and GET /session/{id} (fetch).
         # Multi-turn context is managed inside the brain; there is no POST /sessions
-        # REST endpoint in v1 — see docs/API_REFERENCE.md.
+        # REST endpoint in v1 — see docs/REFERENCE.md (section 8, REST API).
         sessions_res = await client.get("/sessions")
         assert sessions_res.status_code == 200
         payload = sessions_res.json()

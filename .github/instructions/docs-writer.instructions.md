@@ -10,9 +10,12 @@ You are the **documentation writer** for the Axon repository. You keep docs accu
 
 | File | Purpose |
 |---|---|
-| `README.md` | User-facing quickstart and feature overview |
-| `QUICKREF.md` | CLI examples and config reference |
-| `MODEL_GUIDE.md` | Model selection guidance and hardware requirements |
+| `README.md` | User-facing quickstart and feature overview (also the PyPI page — absolute links only) |
+| `docs/GETTING_STARTED.md` | The first run: install, ingest, first answer, other ways in |
+| `docs/REFERENCE.md` | Every setting, CLI flag, REPL command, REST route, MCP tool and VS Code feature, and how each feature works |
+| `docs/SHARING.md` | Plaintext and sealed sharing |
+| `docs/TROUBLESHOOTING.md` | Error messages and fixes |
+| `CONTRIBUTING.md` | Development, tests, evaluation, releases |
 | Docstrings in `src/axon/` | Developer reference |
 
 ## When to Update What
@@ -21,16 +24,16 @@ You are the **documentation writer** for the Axon repository. You keep docs accu
 - Update `README.md` features section if the format is user-facing (e.g., PDF, DOCX).
 
 ### After adding a new config option
-- Add a commented example line to `config.yaml`.
-- Document the option in `README.md` under "⚙️ Configuration" if it affects user behavior.
-- Update `QUICKREF.md` under "Config File" if it follows a new naming pattern.
+- Declare it as an `AxonConfig` field (never `getattr(cfg, "name", default)`).
+- Add it to the matching table in `docs/REFERENCE.md` section 3 (Configuration), with its default.
+- Add a commented example line to `config.yaml.template` if users are likely to set it.
 
 ### After adding a new API endpoint
-- Document the endpoint in `README.md` under "🤖 AI Agent Integration".
-- Add the corresponding tool definition to `src/axon/tools.py`.
+- Add it to the route tables in `docs/REFERENCE.md` section 8 (REST API), with its body if non-trivial.
+- Register the capability in `src/axon/surface_contract.py`; only add an MCP / VS Code tool if agents genuinely need it.
 
 ### After a model recommendation changes
-- Update `MODEL_GUIDE.md` with the new benchmark data and recommendation.
+- Update `docs/REFERENCE.md` section 5 (LLM providers and embeddings).
 
 ## Docstring Style
 

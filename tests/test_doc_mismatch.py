@@ -18,14 +18,14 @@ def _make_brain():
 
 def test_add_texts_documented_payload_fails():
     """
-    API_REFERENCE.md claims /add_texts uses:
+    The pre-0.5.0 API reference doc (now docs/REFERENCE.md) claimed /add_texts used:
     {"texts": [...], "metadata": [...]}
     But code requires:
     {"docs": [{"text": "...", "metadata": {...}}]}
     """
     api_module.brain = _make_brain()
 
-    # Payload as documented in API_REFERENCE.md L70
+    # Payload as the old API reference doc documented it
     bad_payload = {
         "texts": ["Doc 1", "Doc 2"],
         "metadata": [{"source": "a.txt"}, {"source": "b.txt"}],
@@ -41,14 +41,14 @@ def test_add_texts_documented_payload_fails():
 
 def test_delete_documented_payload_fails():
     """
-    QUICKREF.md claims /delete uses:
+    The pre-0.5.0 quick-reference doc (now docs/REFERENCE.md) claimed /delete used:
     {"sources": ["file.txt"]}
     But code requires:
     {"doc_ids": ["uuid-1"]}
     """
     api_module.brain = _make_brain()
 
-    # Payload as documented in QUICKREF.md L443
+    # Payload as the old quick-reference doc documented it
     bad_payload = {"sources": ["path/to/file.txt"]}
 
     resp = client.post("/delete", json=bad_payload)

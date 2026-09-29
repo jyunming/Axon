@@ -201,7 +201,7 @@ to avoid burning the context window.
 
 The MCP server (`axon-mcp`, agent mode) and the VS Code extension's Copilot LM tools
 expose the **same 18 tools with the same names and parameters**; VS Code adds
-`show_graph` and `ingest_image`. Full parameter tables: `docs/MCP_TOOLS.md`.
+`show_graph` and `ingest_image`. Full parameter tables: `docs/REFERENCE.md` (section 9, MCP server).
 
 | Tool | Does |
 |---|---|
@@ -286,10 +286,10 @@ aborted with a `RuntimeError` if any active model is `[remote]` or `[MISSING]`.
 
 - Package name on PyPI: `axon-rag` — install with `pip install axon-rag`
 - Publishing is tag-triggered, NOT merge-triggered — merging to main does nothing to PyPI
-- Full release sequence: bump `pyproject.toml` version → bump `integrations/vscode-axon/package.json` → rebuild VSIX (`npm run package`) → commit → PR → merge → `git tag vX.Y.Z && git push origin vX.Y.Z`
+- Full release sequence: `python scripts/bump_version.py X.Y.Z` (Cargo.toml — the single version source — plus the VS Code package.json, index.html, the rebuilt VSIX and Cargo.lock) → `python scripts/audit_packaging.py --expected-version X.Y.Z` → commit → PR → merge → `git tag vX.Y.Z && git push origin vX.Y.Z`
 - NEVER bump version without a functional reason — packaging/doc/readme fixes alone do not justify a bump
-- PyPI releases are immutable — description cannot be updated after upload; always verify `PYPI_README.md` renders correctly before tagging
-- `PYPI_README.md` is the PyPI description (NOT `README.md`) — uses absolute URLs (`https://raw.githubusercontent.com/jyunming/Axon/main/...`) because PyPI cannot resolve relative paths or repo-relative images
+- PyPI releases are immutable — description cannot be updated after upload; always verify `README.md` renders correctly before tagging
+- `README.md` is the PyPI description (`readme = "README.md"` in `pyproject.toml`) — it uses absolute URLs (`https://raw.githubusercontent.com/jyunming/Axon/main/...` for images, `https://github.com/jyunming/Axon/blob/main/...` for docs) because PyPI cannot resolve relative paths or repo-relative images
 - GitHub release notes use `generate_notes: true` in `release.yml` — do NOT replace with custom git-log scripts (they dump entire history on first tag and misattribute authorship)
 
 ---
