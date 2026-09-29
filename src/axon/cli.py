@@ -219,15 +219,6 @@ def _run_via_server(server: dict, args, config) -> str:
     return active
 
 
-def _llm_provider_choices() -> list[str]:
-    """Every provider ``AxonConfig.llm_provider`` accepts (its Literal)."""
-    import typing
-
-    from axon.config import AxonConfig
-
-    return list(typing.get_args(AxonConfig.__dataclass_fields__["llm_provider"].type))
-
-
 def _run_cli_query(brain, args) -> None:
     """Answer the positional ``query`` with *brain* (local AxonBrain or RemoteBrain)."""
     if getattr(args, "dry_run", False):
@@ -528,7 +519,7 @@ def main():
 
     import argparse
 
-    from axon.config import AxonConfig
+    from axon.config import AxonConfig, llm_provider_choices
     from axon.logging_setup import configure_logging
     from axon.main import AxonBrain
     from axon.repl import _infer_provider, _InitDisplay, _interactive_repl
@@ -605,7 +596,7 @@ def main():
         "--provider",
         # Derived from AxonConfig.llm_provider so the flag can't drift from the
         # providers config accepts (it had silently omitted copilot and grok).
-        choices=_llm_provider_choices(),
+        choices=llm_provider_choices(),
         help="LLM provider to use (overrides config)",
     )
     parser.add_argument(
@@ -1414,18 +1405,13 @@ def main():
     if args.provider:
         config.llm_provider = args.provider
     if args.model:
-        _PROVIDERS = (
-            "ollama",
-            "gemini",
-            "openai",
-            "ollama_cloud",
-            "vllm",
-            "local",
-            "github_copilot",
-        )
-        if isinstance(args.model, str) and "/" in args.model:
+        if args.provider:
+            # An explicit --provider wins; the model string is taken literally
+            # (it may itself contain a slash, e.g. a vLLM "org/model" name).
+            config.llm_model = args.model
+        elif isinstance(args.model, str) and "/" in args.model:
             _prov, _mdl = args.model.split("/", 1)
-            if _prov in _PROVIDERS:
+            if _prov in llm_provider_choices():
                 config.llm_provider = _prov
                 config.llm_model = _mdl
             else:
@@ -2819,6 +2805,8 @@ def main():
         return
     if args.query:
         _run_cli_query(brain, args)
+        return
+    if getattr(args, "non_interactive", False):
         return
     # No query supplied — enter interactive REPL (streaming on by default)
     _quiet = args.quiet or not sys.stdin.isatty()

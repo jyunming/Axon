@@ -1191,12 +1191,11 @@ class TestMainProvider:
     def test_choices_match_config(self):
         import typing
 
-        from axon.cli import _llm_provider_choices
-        from axon.config import AxonConfig
+        from axon.config import AxonConfig, llm_provider_choices
 
         expected = typing.get_args(AxonConfig.__dataclass_fields__["llm_provider"].type)
-        assert sorted(_llm_provider_choices()) == sorted(expected)
-        assert {"copilot", "grok"} <= set(_llm_provider_choices())
+        assert sorted(llm_provider_choices()) == sorted(expected)
+        assert {"copilot", "grok"} <= set(llm_provider_choices())
 
 
 # ---------------------------------------------------------------------------
@@ -1248,6 +1247,65 @@ class TestMainModelSlashSplit:
             run_cli("--model", "custom/mymodel", "test query")
         _inf.assert_called_once_with("custom/mymodel")
         assert cfg.llm_model == "custom/mymodel"
+
+    @pytest.mark.parametrize("provider", ["copilot", "grok", "local", "github_copilot"])
+    def test_prefix_accepts_every_config_provider(self, cfg, provider):
+        run_cli("--model", f"{provider}/some-model", "test query")
+        assert cfg.llm_provider == provider
+        assert cfg.llm_model == "some-model"
+
+    def test_explicit_provider_wins_over_model_inference(self, cfg):
+        with patch("axon.repl._infer_provider", return_value="gemini") as _inf:
+            run_cli("--provider", "vllm", "--model", "gemini-1.5-flash", "test query")
+        _inf.assert_not_called()
+        assert cfg.llm_provider == "vllm"
+        assert cfg.llm_model == "gemini-1.5-flash"
+
+    def test_explicit_provider_keeps_slash_in_model(self, cfg):
+        run_cli("--provider", "vllm", "--model", "meta-llama/Llama-3-8B", "test query")
+        assert cfg.llm_provider == "vllm"
+        assert cfg.llm_model == "meta-llama/Llama-3-8B"
+
+
+# ---------------------------------------------------------------------------
+# --non-interactive
+# ---------------------------------------------------------------------------
+
+
+class TestNonInteractiveDoesNotEnterRepl:
+    def test_ingest_with_non_interactive_skips_repl(self, brain, tmp_path, _patch_all):
+        with patch("os.path.isdir", return_value=True), patch("asyncio.run"):
+            run_cli("--ingest", str(tmp_path), "--non-interactive")
+        _patch_all.assert_not_called()
+
+    def test_ingest_without_flag_still_enters_repl(self, brain, tmp_path, _patch_all):
+        with patch("os.path.isdir", return_value=True), patch("asyncio.run"):
+            run_cli("--ingest", str(tmp_path))
+        _patch_all.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# REPL command metadata
+# ---------------------------------------------------------------------------
+
+
+class TestReplCommandMetadata:
+    def test_every_completable_command_has_a_description(self):
+        from axon.repl import _SLASH_CMD_DESC, _SLASH_COMMANDS
+
+        missing = [c for c in _SLASH_COMMANDS if c.strip() not in _SLASH_CMD_DESC]
+        assert missing == []
+
+    def test_passphrase_is_completable(self):
+        from axon.repl import _SLASH_COMMANDS
+
+        assert "/passphrase " in _SLASH_COMMANDS
+
+    def test_keys_description_is_about_api_keys(self):
+        from axon.repl import _SLASH_CMD_DESC
+
+        assert "key" in _SLASH_CMD_DESC["/keys"].lower()
+        assert "shortcut" not in _SLASH_CMD_DESC["/keys"].lower()
 
 
 # ---------------------------------------------------------------------------

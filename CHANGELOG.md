@@ -16,6 +16,16 @@
 - **A transient error reading a share's expiry file no longer destroys the
   grantee's key.** It now raises a retryable error; only a genuinely expired or
   tampered share is auto-destroyed.
+- **`axon --ingest DIR --non-interactive` no longer opens the REPL afterwards.**
+- **`--model` no longer overrides `--provider`.** With an explicit `--provider`,
+  `--model` is taken literally. The `provider/model` prefix now accepts every
+  provider the config does (`grok`, `copilot`, `local`, ...), and the REPL's
+  `/model` provider list matches.
+- **REPL command help matches what the commands do**: `/keys`, `/pull`,
+  `/search` and `/context` descriptions were wrong, `/passphrase` now
+  tab-completes, and `/help rag` gives the real `topk` range (1-50).
+- **`.env.example` lists only variables Axon reads**, with the right default port
+  (8420).
 
 ## [0.5.0] - 2026-09-29
 
