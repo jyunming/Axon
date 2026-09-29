@@ -622,10 +622,11 @@ def offline_violations(
     """Messages for every cloud provider that offline mode forbids (empty when fine).
 
     ``llm_provider`` / ``embedding_provider`` test a provider about to be switched
-    to, without mutating *cfg*; ``only`` restricts the check to one side. Only a real ``offline_mode is True`` counts, so a
-    duck-typed config never trips it.
+    to, without mutating *cfg*; ``only`` restricts the check to one side. Only a real bool/int/str ``offline_mode`` counts (matching the
+    truthiness ``AxonBrain`` applies), so a duck-typed config never trips it.
     """
-    if getattr(cfg, "offline_mode", False) is not True:
+    _off = getattr(cfg, "offline_mode", False)
+    if not isinstance(_off, bool | int | str) or not _off:
         return []
     problems: list[str] = []
     llm = llm_provider or cfg.llm_provider

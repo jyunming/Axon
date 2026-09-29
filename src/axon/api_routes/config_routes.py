@@ -204,6 +204,10 @@ class ConfigSetRequest(BaseModel):
 
 def _reinitialize_runtime_components(brain, changed_keys: set[str]) -> None:
     """Apply runtime side effects for config changes that affect live services."""
+    if "offline_mode" in changed_keys:
+        from axon.config import enforce_offline_mode
+
+        enforce_offline_mode(brain.config)
     if changed_keys & {"llm_provider", "llm_model"}:
         from axon.llm import OpenLLM
 

@@ -2251,7 +2251,15 @@ def main():
 
             brain = get_brain(config, allow_remote=True)
         else:
-            brain = AxonBrain(config)
+            from axon.config import OfflineModeError
+
+            try:
+                brain = AxonBrain(config)
+            except OfflineModeError as _exc:
+                if _init_display:
+                    _init_display.stop()
+                print(f"Error: {_exc}", file=sys.stderr)
+                sys.exit(1)
         if _init_display:
             _init_display.stop()
             for _n in _INIT_LOGGER_NAMES:
